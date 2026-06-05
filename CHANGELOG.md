@@ -6,6 +6,29 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ---
 
+## [0.1.3](https://github.com/jerrywu001/cc-sessions-viewer/compare/v0.1.2...v0.1.3) (2026-06-05)
+
+
+### Added
+
+* auto-linkify URLs and open in external browser ([34c6de5](https://github.com/jerrywu001/cc-sessions-viewer/commit/34c6de5621719f6512ca33f8f29e67bb0d5a2edf))
+* Codex session filtering and theme expansion ([65b79c2](https://github.com/jerrywu001/cc-sessions-viewer/commit/65b79c2fdb50a9e95c8579b2fda2a9ea11bd9c38))
+* dynamic pricing, syntax highlighting, mermaid rendering, and UI refinements ([984ec28](https://github.com/jerrywu001/cc-sessions-viewer/commit/984ec28edabb257ace222229bec0668b76c6f7c2))
+* embed CLI conversations in-window via xterm.js + PTY tabs ([8414b29](https://github.com/jerrywu001/cc-sessions-viewer/commit/8414b29a9d30f69519e816c028567c3d945d06be))
+* merge main, settings redesign, external terminal toggle ([5f90523](https://github.com/jerrywu001/cc-sessions-viewer/commit/5f905239f4e16e282324d5be540250d99fe6241c))
+* window tray, export history, JSON export, and pricing accuracy ([4bfefae](https://github.com/jerrywu001/cc-sessions-viewer/commit/4bfefae7840b5ed3dd2ed0a6bd4fde6139b05884))
+
+
+### Fixed
+
+* add missing list_projects params in test ([ad4dcc3](https://github.com/jerrywu001/cc-sessions-viewer/commit/ad4dcc36cf39b00cfcebd87b44df6e7c3f93f1c5))
+* resolve clippy warnings in pricing.rs ([6100d58](https://github.com/jerrywu001/cc-sessions-viewer/commit/6100d58de5bc12170210361cda40e7352152e221))
+
+
+### Docs
+
+* Add friend link to README ([de4a394](https://github.com/jerrywu001/cc-sessions-viewer/commit/de4a39475d0e34649d319e4173a499fe2d6f3898))
+
 ## [Unreleased]
 
 ### Added
