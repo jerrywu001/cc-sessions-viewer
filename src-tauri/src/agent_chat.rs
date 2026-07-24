@@ -824,7 +824,7 @@ fn start_codex_app_server(
     ephemeral: bool,
 ) -> Result<Arc<ChatHandle>, String> {
     ensure_codex_cli_available(&cwd)?;
-    let command = AgentCommand::new("codex").arg("app-server").arg("--stdio");
+    let command = AgentCommand::new("codex").arg("app-server");
     let mut cmd = build_piped_command(&cwd, &command, false);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
