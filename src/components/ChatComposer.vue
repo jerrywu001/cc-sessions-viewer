@@ -167,6 +167,11 @@ onMounted(() => {
         runtimeLoaded.value = true
       })
   }
+  const initialDraft = takeInitialDraft()
+  if (initialDraft) {
+    exitHistory()
+    applyHistoryEntry(initialDraft)
+  }
   focusInput()
 })
 onBeforeUnmount(() => {
@@ -179,6 +184,7 @@ onBeforeUnmount(() => {
 const text = ref('')
 const images = ref<ChatImageAttachment[]>([])
 const files = ref<ChatFileAttachment[]>([]) // 非图片附件（文件/文件夹）→ 发送时 @path
+const drafts = new Map<number, ChatHistoryEntry>()
 
 // ↑/↓ 历史回填（参考 Claude 客户端）：把本会话用户发过的消息抽成可翻列表。
 const promptHistory = computed<ChatHistoryEntry[]>(() => buildChatHistory(props.session.msgs))
@@ -191,11 +197,17 @@ const historyHint = computed(() =>
     ? ''
     : t('chat.composer.history', { n: histPos.value + 1, total: promptHistory.value.length }),
 )
-// 切到别的会话时清空输入框 + 退出历史浏览（草稿快照属于上一个会话，不能带过去），并自动聚焦新会话输入框。
-watch(() => props.session.uiId, () => {
-  text.value = ''
-  images.value = []
-  files.value = []
+// 切换会话时按 uiId 保存并恢复草稿；各会话的文字和附件互不串用。
+watch(() => props.session.uiId, (uiId, previousUiId) => {
+  drafts.set(previousUiId, {
+    text: text.value,
+    images: images.value.map((image) => ({ ...image })),
+    files: files.value.map((file) => ({ ...file })),
+  })
+  const draft = drafts.get(uiId) ?? takeInitialDraft()
+  text.value = draft?.text ?? ''
+  images.value = draft?.images.map((image) => ({ ...image })) ?? []
+  files.value = draft?.files.map((file) => ({ ...file })) ?? []
   exitHistory()
   stash.value = null
   nextTick(autosize)
@@ -437,7 +449,11 @@ window.addEventListener('keydown', onPreviewKey)
 onBeforeUnmount(() => window.removeEventListener('keydown', onPreviewKey))
 
 // ---------- 自适应高度 ----------
+// 新版 WebView2 原生支持 textarea 按内容伸缩；支持时避免每次输入都走
+// `height = auto -> scrollHeight` 这条同步布局路径。旧运行时保留 JS fallback。
+const nativeFieldSizing = typeof CSS !== 'undefined' && CSS.supports?.('field-sizing', 'content') === true
 function autosize() {
+  if (nativeFieldSizing) return
   const el = taEl.value
   if (!el) return
   el.style.height = 'auto'
@@ -604,6 +620,9 @@ function onCompositionStart() {
 }
 function onCompositionEnd() {
   composing.value = false
+  // Vue 的 v-model 会在 compositionend 附近补发一次 input；统一进同一个 nextTick
+  // 调度器，既确保最终值已经同步，又避免 compositionend + input 重复做布局和浮层检测。
+  scheduleInputWork()
 }
 // 文本超 max-height 滚动时，镜像层跟随 textarea 一起滚，保持对齐。
 function syncHlScroll() {
@@ -691,7 +710,7 @@ function pickSlash(item: SlashItem) {
 
 // ---------- @ 浮层（引用项目文件 / 目录）----------
 // 输入框**任意位置**键入 `@`（前面是行首或空白）即触发：浮层列出会话 cwd 下的目录/文件
-// （空 query→顶层；有 query→递归子串匹配）。↑/↓ 选择；↵/点击=「引用」加成 chip；
+// （空 query→顶层；裸 query→全工作区模糊搜索；带路径 query→逐级浏览）。↑/↓ 选择；↵/点击=「引用」加成 chip；
 // →/chevron=「展开」目录继续下钻；Esc 关。chip 走与系统选择器附件同一条 `@"path"` 通道。
 type FileMentionItem = ProjectFileEntry & { kind?: 'file' }
 type MentionItem = FileMentionItem
@@ -816,14 +835,16 @@ async function fetchMentions(q: string) {
   try {
     const projectItems = await api.listProjectFiles(props.session.cwd, q, 200)
     if (seq !== mentionSeq) return // 过期请求丢弃
-    if (!activeMention()) {
+    const active = activeMention()
+    if (!active) {
       closeMention()
       return
     }
+    if (active.query !== q) return
     mentionFetched = q
     const items: MentionItem[] = projectItems.map((item) => ({ ...item, kind: 'file' as const }))
     mentionItems.value = items
-    mentionOpen.value = items.length > 0
+    mentionOpen.value = true
     if (mentionIdx.value >= items.length || q !== mentionQuery.value) mentionIdx.value = 0
   } catch {
     closeMention()
@@ -936,7 +957,13 @@ function caretAtMentionEnd(): boolean {
 }
 
 // 光标移动（方向键松开 / 点击）后重新探测，让 `@` / `/` 浮层在任意位置都能跟随光标。
-function onCaretMove() {
+const CARET_MOVE_KEYS = new Set([
+  'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+  'Home', 'End', 'PageUp', 'PageDown',
+])
+function onCaretMove(e?: KeyboardEvent | MouseEvent) {
+  // 普通文字输入后还会收到 keyup；input 已经处理过，不再重复测量 @ 坐标和过滤 / 列表。
+  if (e?.type === 'keyup' && !CARET_MOVE_KEYS.has((e as KeyboardEvent).key)) return
   // 浏览历史回填态下不自动弹 `/` / `@` 浮层：回填进来的 `/context`、`@file` 等会让浮层张开，
   // 而浮层一开，↑/↓ 就被它抢去选菜单，历史从此翻不动（用户报的「走到 /context 上下键失效」）。
   // 用户真正动手编辑（onInput → exitHistory）即恢复检测。
@@ -954,11 +981,31 @@ function onMentionBlur() {
   }, 120)
 }
 
-function onInput() {
-  exitHistory() // 用户一旦手动编辑就退出历史浏览，下次 ↑ 重新从最新一条开始
+let inputWorkPending = false
+function runInputWork() {
   autosize()
   detectSlash()
   detectMention()
+}
+
+function scheduleInputWork() {
+  if (inputWorkPending) return
+  inputWorkPending = true
+  nextTick(() => {
+    inputWorkPending = false
+    if (composing.value) return
+    runInputWork()
+  })
+}
+
+function onInput(e: InputEvent) {
+  exitHistory() // 用户一旦手动编辑就退出历史浏览，下次 ↑ 重新从最新一条开始
+  // 中文 / 日文 IME 合成期间会连续派发 input；半成品不需要自动高度、命令或文件检测。
+  if (e.isComposing || composing.value) return
+  // compositionend 已经安排了最终值处理时，忽略 Vue 紧邻补发的 input；普通输入保持
+  // 原有同步语义，避免改变 slash 命令与紧随其后的 Enter 之间的事件顺序。
+  if (inputWorkPending) return
+  runInputWork()
 }
 
 // ---------- ↑/↓ 历史回填 ----------
@@ -980,6 +1027,18 @@ function applyHistoryEntry(e: ChatHistoryEntry) {
       el.setSelectionRange(end, end)
     }
   })
+}
+
+/** 取走新分支携带的一次性草稿，避免之后切回该会话时覆盖用户已编辑的内容。 */
+function takeInitialDraft(): ChatHistoryEntry | null {
+  const draft = props.session.initialDraft
+  if (!draft) return null
+  props.session.initialDraft = undefined
+  return {
+    text: draft.text,
+    images: draft.images.map((image) => ({ ...image })),
+    files: draft.files.map((file) => ({ ...file })),
+  }
 }
 /** 光标在首行（之前没有换行）—— ↑ 才接管为「上一条历史」，否则放行让光标正常上移。 */
 function caretOnFirstLine(): boolean {
@@ -1525,6 +1584,7 @@ function queuedLabel(q: QueuedMessage): string {
               <component :is="mentionIconFor(it)" class="cc-mention-ic" />
               <span class="cc-mention-main">
                 <span class="cc-mention-nm">{{ it.isDir ? it.name + '/' : it.name }}</span>
+                <span v-if="!mentionDrilled && it.relPath !== it.name" class="cc-mention-rel">{{ it.relPath }}</span>
               </span>
               <button
                 v-if="canDrill(it)"
@@ -1537,8 +1597,11 @@ function queuedLabel(q: QueuedMessage): string {
               </button>
             </div>
           </div>
+          <div v-if="!mentionItems.length" class="cc-mention-empty">
+            {{ t('chat.composer.mention.empty') }}
+          </div>
         </div>
-        <div class="cc-mention-hint">
+        <div v-if="mentionItems.length" class="cc-mention-hint">
           <kbd>↵</kbd>{{ t('chat.composer.mention.attach') }}
           <template v-if="activeMentionItem && canDrill(activeMentionItem)"><kbd>→</kbd>{{ t('chat.composer.mention.open') }}</template>
           <template v-if="mentionDrilled"><kbd>←</kbd>{{ t('chat.composer.mention.back') }}</template>
@@ -2036,6 +2099,7 @@ function queuedLabel(q: QueuedMessage): string {
   font-size: 14px;
   line-height: 1.5;
   max-height: 220px;
+  field-sizing: content;
   padding: 2px 0;
   overflow-x: hidden;
 }
@@ -2258,16 +2322,32 @@ function queuedLabel(q: QueuedMessage): string {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
 }
 .cc-mention-nm {
-  flex: 1;
+  width: 100%;
   min-width: 0;
   font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.cc-mention-rel {
+  width: 100%;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cc-mention-empty {
+  padding: 18px 12px;
+  color: var(--text-mute);
+  font-size: 12px;
+  text-align: center;
 }
 .cc-mention-open {
   flex: none;

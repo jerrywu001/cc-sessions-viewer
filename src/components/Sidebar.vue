@@ -43,8 +43,8 @@ function projStateOf(p: ProjectInfo): ProjState | undefined {
   return props.projPrefs[prefKey(p)]
 }
 
-function projectRank(p: ProjectInfo) {
-  return projStateOf(p) === 'pinned' ? 0 : p.bookmarked && !p.sessionCount ? 1 : projStateOf(p) === 'sunk' ? 3 : 2
+function projectGroupRank(p: ProjectInfo) {
+  return projStateOf(p) === 'pinned' ? 0 : projStateOf(p) === 'sunk' ? 2 : 1
 }
 
 function orderKey(p: ProjectInfo) {
@@ -56,10 +56,14 @@ const sortedProjects = computed(() => {
   const orderIndex = new Map((props.projectOrder ?? []).map((dirName, index) => [dirName, index]))
   const indexOf = (project: ProjectInfo) => orderIndex.get(orderKey(project)) ?? Number.MAX_SAFE_INTEGER
   return [...props.projects].sort((a, b) => {
-    const rankDiff = projectRank(a) - projectRank(b)
+    const rankDiff = projectGroupRank(a) - projectGroupRank(b)
     if (rankDiff) return rankDiff
     const orderDiff = indexOf(a) - indexOf(b)
     if (orderDiff) return orderDiff
+    if (projectGroupRank(a) === 1) {
+      const bookmarkDiff = Number(!(a.bookmarked && !a.sessionCount)) - Number(!(b.bookmarked && !b.sessionCount))
+      if (bookmarkDiff) return bookmarkDiff
+    }
     return (inputIndex.get(a.dirName) ?? 0) - (inputIndex.get(b.dirName) ?? 0)
   })
 })
@@ -256,8 +260,30 @@ function doBatchDelete() {
 const draggingProject = ref<string | null>(null)
 const dropTarget = ref<{ dirName: string; after: boolean } | null>(null)
 const hoveredProject = ref<string | null>(null)
-let pendingProjectDrag: { source: string; startX: number; startY: number; active: boolean } | null = null
+type ProjectDragPreview = {
+  entry: SidebarEntry
+  x: number
+  y: number
+  width: number
+  offsetX: number
+  offsetY: number
+}
+const projectDragPreview = ref<ProjectDragPreview | null>(null)
+let projectDragZoom = 1
+let pendingProjectDrag: {
+  source: string
+  sourceEl: HTMLElement
+  entry: SidebarEntry
+  startX: number
+  startY: number
+  active: boolean
+} | null = null
 let suppressProjectClick = false
+
+function currentProjectDragZoom() {
+  const zoom = parseFloat(getComputedStyle(document.body).zoom || '1')
+  return Number.isFinite(zoom) && zoom > 0 ? zoom : 1
+}
 
 function canDragProject(entry: SidebarEntry) {
   return !selecting.value && entry.kind !== 'child'
@@ -267,6 +293,7 @@ function clearProjectDragState() {
   pendingProjectDrag = null
   draggingProject.value = null
   dropTarget.value = null
+  projectDragPreview.value = null
   document.body.classList.remove('is-project-reordering')
   window.removeEventListener('pointermove', onProjectPointerMove)
   window.removeEventListener('pointerup', onProjectPointerUp)
@@ -275,9 +302,13 @@ function clearProjectDragState() {
 
 function onProjectPointerDown(event: PointerEvent, entry: SidebarEntry) {
   if (event.button !== 0 || !canDragProject(entry)) return
+  const sourceEl = (event.currentTarget as HTMLElement | null)?.closest<HTMLElement>('.proj-item')
+  if (!sourceEl) return
   event.preventDefault()
   pendingProjectDrag = {
     source: entry.project.dirName,
+    sourceEl,
+    entry,
     startX: event.clientX,
     startY: event.clientY,
     active: false,
@@ -294,7 +325,7 @@ function updateProjectDropTargetFromPoint(x: number, y: number) {
   const dragged = source ? props.projects.find((project) => project.dirName === source) : undefined
   const target = targetDir ? props.projects.find((project) => project.dirName === targetDir) : undefined
   if (!row || !source || !targetDir || !target || source === targetDir || row.dataset.projectDraggable !== 'true'
-    || !dragged || projectRank(dragged) !== projectRank(target)) {
+    || !dragged || projectGroupRank(dragged) !== projectGroupRank(target)) {
     dropTarget.value = null
     return
   }
@@ -334,9 +365,23 @@ function onProjectPointerMove(event: PointerEvent) {
     if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 4) return
     drag.active = true
     draggingProject.value = drag.source
+    const bounds = drag.sourceEl.getBoundingClientRect()
+    projectDragZoom = currentProjectDragZoom()
+    projectDragPreview.value = {
+      entry: drag.entry,
+      x: bounds.left / projectDragZoom,
+      y: bounds.top / projectDragZoom,
+      width: bounds.width / projectDragZoom,
+      offsetX: drag.startX - bounds.left,
+      offsetY: drag.startY - bounds.top,
+    }
     document.body.classList.add('is-project-reordering')
   }
   event.preventDefault()
+  if (projectDragPreview.value) {
+    projectDragPreview.value.x = (event.clientX - projectDragPreview.value.offsetX) / projectDragZoom
+    projectDragPreview.value.y = (event.clientY - projectDragPreview.value.offsetY) / projectDragZoom
+  }
   updateProjectDropTargetFromPoint(event.clientX, event.clientY)
 }
 
@@ -542,5 +587,41 @@ defineExpose({ exitSelect })
         <span v-if="updateAvailable" class="update-dot" aria-hidden="true" />
       </button>
     </div>
+
+    <Teleport to="body">
+      <div
+        v-if="projectDragPreview"
+        class="proj-item proj-item-drag-preview"
+        :class="{
+          active: activeDir === projectDragPreview.entry.project.dirName && !showTrash,
+          missing: !projectDragPreview.entry.project.exists,
+          pinned: projStateOf(projectDragPreview.entry.project) === 'pinned',
+          sunk: projStateOf(projectDragPreview.entry.project) === 'sunk',
+        }"
+        :style="{
+          left: projectDragPreview.x + 'px',
+          top: projectDragPreview.y + 'px',
+          width: projectDragPreview.width + 'px',
+        }"
+      >
+        <span class="proj-drag-handle" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M8 5a1 1 0 1 0 2 0a1 1 0 1 0-2 0m0 7a1 1 0 1 0 2 0a1 1 0 1 0-2 0m0 7a1 1 0 1 0 2 0a1 1 0 1 0-2 0m6-14a1 1 0 1 0 2 0a1 1 0 1 0-2 0m0 7a1 1 0 1 0 2 0a1 1 0 1 0-2 0m0 7a1 1 0 1 0 2 0a1 1 0 1 0-2 0" />
+          </svg>
+        </span>
+        <span
+          v-if="projStateOf(projectDragPreview.entry.project) === 'pinned'"
+          class="pin-dot"
+          :style="{ background: pinColor(projectDragPreview.entry.project) }"
+        />
+        <span v-if="projectDragPreview.entry.kind === 'parent'" class="wt-toggle">
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+            <path d="M5.5 3.5L10.5 8 5.5 12.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <span class="proj-name">{{ shortName(projectDragPreview.entry.project.displayPath) }}</span>
+        <span class="proj-count">{{ projectDragPreview.entry.project.sessionCount }}</span>
+      </div>
+    </Teleport>
   </aside>
 </template>

@@ -46,6 +46,22 @@ function entryFromBlocks(blocks: Block[]): ChatHistoryEntry | null {
   return { text, images, files }
 }
 
+/** 把一条真正的用户消息还原成可编辑输入；系统记录、侧链消息等返回 null。 */
+export function chatHistoryEntryFromMsg(m: Msg): ChatHistoryEntry | null {
+  if (m.role !== 'user' || m.sidechain || m.metaKind) return null
+  if (isCaveatOnlyMsg(m) || parseSystemEvent(m)) return null
+  return entryFromBlocks(m.blocks)
+}
+
+/** 统计指定消息之前可编辑的真实用户输入数量，供“编辑并分叉”确定后端截断边界。 */
+export function countChatHistoryEntriesBefore(msgs: Msg[], index: number): number {
+  let count = 0
+  for (let i = 0; i < Math.min(index, msgs.length); i += 1) {
+    if (chatHistoryEntryFromMsg(msgs[i])) count += 1
+  }
+  return count
+}
+
 /**
  * 把会话消息抽成历史输入列表（旧 → 新）。只取真正的「Me」气泡内容：
  * role==='user'、非 sidechain、非系统注入记录（metaKind）、非 local-command 提示、
@@ -54,9 +70,7 @@ function entryFromBlocks(blocks: Block[]): ChatHistoryEntry | null {
 export function buildChatHistory(msgs: Msg[]): ChatHistoryEntry[] {
   const out: ChatHistoryEntry[] = []
   for (const m of msgs) {
-    if (m.role !== 'user' || m.sidechain || m.metaKind) continue
-    if (isCaveatOnlyMsg(m) || parseSystemEvent(m)) continue
-    const entry = entryFromBlocks(m.blocks)
+    const entry = chatHistoryEntryFromMsg(m)
     if (entry) out.push(entry)
   }
   return out

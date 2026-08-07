@@ -211,6 +211,17 @@ pub trait SessionSource: Send + Sync {
         Err("此 agent 不支持 fork 会话".into())
     }
 
+    /// 复制目标用户提问之前的 transcript；`keep_user_turns` 是要保留的真实用户输入数。
+    fn fork_session_before_user_turn(
+        &self,
+        _project_key: &str,
+        _source_id: &str,
+        _title: &str,
+        _keep_user_turns: usize,
+    ) -> Result<String, String> {
+        Err("此 agent 不支持按用户轮次 fork 会话".into())
+    }
+
     /// 回收站标题：用 agent 自己的解析逻辑提取展示名。
     fn trash_title(&self, path: &Path) -> String;
 

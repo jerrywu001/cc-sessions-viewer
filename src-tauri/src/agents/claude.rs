@@ -235,6 +235,16 @@ impl SessionSource for ClaudeSource {
         fork_session(project_key, source_id, title)
     }
 
+    fn fork_session_before_user_turn(
+        &self,
+        project_key: &str,
+        source_id: &str,
+        title: &str,
+        keep_user_turns: usize,
+    ) -> Result<String, String> {
+        fork_session_before_user_turn(project_key, source_id, title, keep_user_turns)
+    }
+
     fn trash_title(&self, path: &Path) -> String {
         scan(path).title
     }
@@ -953,6 +963,103 @@ fn fork_session(project_key: &str, source_id: &str, title: &str) -> Result<Strin
     let dst = dir.join(format!("{new_id}.jsonl"));
     fs::write(&dst, out).map_err(|e| format!("写入 fork 会话失败: {e}"))?;
     Ok(new_id)
+}
+
+/// 只克隆目标用户提问之前的 transcript。目标提问及它之后的部分回答、中断标记均不进入新会话。
+fn fork_session_before_user_turn(
+    project_key: &str,
+    source_id: &str,
+    title: &str,
+    keep_user_turns: usize,
+) -> Result<String, String> {
+    let dir = projects_dir().join(project_key);
+    let src = dir.join(format!("{source_id}.jsonl"));
+    if !src.is_file() {
+        return Err("源会话文件不存在，无法 fork".into());
+    }
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let content = fs::read_to_string(&src).map_err(|e| format!("读取源会话失败: {e}"))?;
+    let out = fork_jsonl_before_user_turn(&content, &new_id, title, keep_user_turns)?;
+    let dst = dir.join(format!("{new_id}.jsonl"));
+    fs::write(&dst, out).map_err(|e| format!("写入 fork 会话失败: {e}"))?;
+    Ok(new_id)
+}
+
+fn is_editable_user_prompt_record(v: &Value) -> bool {
+    let Some(msg) = record_to_msg(v) else {
+        return false;
+    };
+    if msg.role != "user" || msg.sidechain || msg.meta_kind.is_some() {
+        return false;
+    }
+    if msg.blocks.iter().all(|block| {
+        block.kind == "text"
+            && block.text.as_deref().is_some_and(|text| {
+                let text = text.trim();
+                text.starts_with("<local-command-caveat>")
+                    && text.ends_with("</local-command-caveat>")
+            })
+    }) {
+        return false;
+    }
+    if msg.blocks.len() == 1 && msg.blocks[0].kind == "text" {
+        let text = msg.blocks[0].text.as_deref().unwrap_or("").trim();
+        if matches!(
+            text,
+            "[Request interrupted by user]" | "[Request interrupted by user for tool use]"
+        ) || (text.starts_with("<system-reminder>")
+            && text.ends_with("</system-reminder>")
+            && text.contains("The user named this session"))
+        {
+            return false;
+        }
+    }
+    msg.blocks.iter().any(|block| match block.kind.as_str() {
+        "text" => block
+            .text
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty()),
+        "image" => block
+            .image_src
+            .as_deref()
+            .is_some_and(|src| src.starts_with("data:")),
+        "file" => block
+            .file_path
+            .as_deref()
+            .is_some_and(|path| !path.is_empty()),
+        _ => false,
+    })
+}
+
+fn fork_jsonl_before_user_turn(
+    content: &str,
+    new_id: &str,
+    title: &str,
+    keep_user_turns: usize,
+) -> Result<String, String> {
+    let mut prefix = String::new();
+    let mut seen_user_turns = 0usize;
+    let mut found_boundary = false;
+    for line in content.lines() {
+        let is_user_prompt = serde_json::from_str::<Value>(line)
+            .ok()
+            .is_some_and(|value| is_editable_user_prompt_record(&value));
+        if is_user_prompt {
+            if seen_user_turns == keep_user_turns {
+                found_boundary = true;
+                break;
+            }
+            seen_user_turns += 1;
+        }
+        if !line.trim().is_empty() {
+            prefix.push_str(line);
+            prefix.push('\n');
+        }
+    }
+    if !found_boundary {
+        return Err("源会话中找不到要编辑的用户提问".into());
+    }
+    Ok(fork_jsonl(&prefix, new_id, title))
 }
 
 /// 纯转换：把一份 transcript 重写成「克隆」版本 —— `sessionId` 全改成 `new_id`，每条记录的
@@ -2363,6 +2470,84 @@ mod tests {
         assert_eq!(rows[2]["customTitle"], json!("Chat fork"));
         assert_eq!(rows[3]["type"], json!("agent-name"));
         assert_eq!(rows[3]["agentName"], json!("Chat fork"));
+    }
+
+    #[test]
+    fn fork_jsonl_before_user_turn_drops_edited_prompt_and_partial_answer() {
+        let content = [
+            r#"{"type":"user","sessionId":"old","uuid":"u1","parentUuid":null,"message":{"role":"user","content":"first"}}"#,
+            r#"{"type":"assistant","sessionId":"old","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":"first answer"}}"#,
+            r#"{"type":"user","sessionId":"old","uuid":"tool","parentUuid":"a1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#,
+            r#"{"type":"user","sessionId":"old","uuid":"meta","parentUuid":"tool","isMeta":true,"message":{"role":"user","content":"injected"}}"#,
+            r#"{"type":"user","sessionId":"old","uuid":"u2","parentUuid":"meta","message":{"role":"user","content":"edit me"}}"#,
+            r#"{"type":"assistant","sessionId":"old","uuid":"a2","parentUuid":"u2","message":{"role":"assistant","content":"partial answer"}}"#,
+            r#"{"type":"user","sessionId":"old","uuid":"stop","parentUuid":"a2","message":{"role":"user","content":"[Request interrupted by user]"}}"#,
+        ]
+        .join("\n");
+
+        let out = fork_jsonl_before_user_turn(&content, "new", "Edited fork", 1)
+            .expect("fork before second prompt");
+        let rows: Vec<Value> = out
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("valid json"))
+            .collect();
+
+        assert_eq!(rows.len(), 6, "4 prefix rows plus two title rows");
+        assert!(out.contains("first answer"));
+        assert!(out.contains("injected"));
+        assert!(!out.contains("edit me"));
+        assert!(!out.contains("partial answer"));
+        assert!(!out.contains("Request interrupted"));
+        assert!(rows.iter().all(|row| row["sessionId"] == json!("new")));
+        let first_uuid = rows[0]["uuid"].as_str().unwrap();
+        assert_eq!(rows[1]["parentUuid"], json!(first_uuid));
+    }
+
+    #[test]
+    fn fork_jsonl_before_user_turn_requires_the_target_prompt() {
+        let content = r#"{"type":"user","message":{"content":"only one"}}"#;
+        let err = fork_jsonl_before_user_turn(content, "new", "fork", 1).unwrap_err();
+        assert!(err.contains("找不到"));
+    }
+
+    #[test]
+    fn fork_prompt_detection_matches_editable_user_messages() {
+        assert!(is_editable_user_prompt_record(&json!({
+            "type": "user",
+            "message": { "content": "typed prompt" },
+        })));
+        assert!(is_editable_user_prompt_record(&json!({
+            "type": "attachment",
+            "attachment": { "type": "queued_command", "prompt": "queued prompt" },
+        })));
+        for record in [
+            json!({
+                "type": "user",
+                "message": { "content": "[Request interrupted by user]" },
+            }),
+            json!({
+                "type": "user",
+                "message": { "content": "<local-command-caveat>internal</local-command-caveat>" },
+            }),
+            json!({
+                "type": "user",
+                "message": { "content": [{
+                    "type": "tool_result", "tool_use_id": "t1", "content": "ok"
+                }] },
+            }),
+            json!({
+                "type": "user",
+                "isMeta": true,
+                "message": { "content": "injected" },
+            }),
+            json!({
+                "type": "user",
+                "isSidechain": true,
+                "message": { "content": "subagent prompt" },
+            }),
+        ] {
+            assert!(!is_editable_user_prompt_record(&record), "{record}");
+        }
     }
 
     #[test]

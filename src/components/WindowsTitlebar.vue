@@ -228,6 +228,9 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--border);
   -webkit-app-region: no-drag;
 }
+:global(:root.has-custom-background .window-titlebar) {
+  background: transparent;
+}
 .window-app-id {
   min-width: 0;
   display: inline-flex;

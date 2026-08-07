@@ -129,6 +129,7 @@ import {
   removeViewEverywhere,
 } from './viewHistory'
 import { startChat, closeChat, reconnectChats, lastAssistantModel, migrateChatSessionsProjectKey, chatSessions, type ChatSession } from './chatSessions'
+import type { ChatHistoryEntry } from './chatInputHistory'
 import { sideChat, openSideChat, closeSideChat, closeAllSideChats, activeBtwSessionIds } from './sideChat'
 import {
   activeCodexSideSessionIds,
@@ -2919,6 +2920,62 @@ async function forkLiveChat() {
   }
 }
 
+/** 取消后编辑原提问：旧 tab 保留，新 tab 只继承该提问之前的上下文并回填原输入。 */
+async function editCancelledPrompt(
+  entry: ChatHistoryEntry,
+  messageIndex: number,
+  priorUserTurns: number,
+) {
+  const c = liveChat.value
+  const sourceTab = activeViewTab.value
+  if (!c || !sourceTab || sourceTab.type !== 'chat' || !c.cwd) return
+
+  const title = `${c.title} fork`
+  let sessionId: string | undefined
+  try {
+    if (priorUserTurns > 0) {
+      if (!c.sessionId || c.chatId === null) throw new Error(t('toast.forkUnavailable'))
+      sessionId = c.agent === 'codex'
+        ? await api.agentChatForkBeforeLastTurn(c.chatId)
+        : await api.forkSessionBeforeUserTurn(
+            c.agent,
+            c.projectKey,
+            c.sessionId,
+            title,
+            priorUserTurns,
+          )
+    }
+
+    await startChat({
+      agent: c.agent,
+      projectKey: c.projectKey,
+      cwd: c.cwd,
+      sessionId,
+      title,
+      created: c.createdAt,
+      preloadMsgs: c.msgs.slice(0, messageIndex),
+      initialDraft: entry,
+      permissionMode: c.permissionMode,
+      model: c.model,
+      effort: c.effort,
+      onReady: (session) => {
+        createViewTab({
+          type: 'chat',
+          agent: c.agent,
+          projectKey: c.projectKey,
+          paneId: sourceTab.paneId,
+          title,
+          chatSession: session,
+          sourceSession: null,
+        })
+      },
+    })
+    void loadProjects()
+  } catch (e) {
+    notify(`${e}`, true)
+  }
+}
+
 async function archiveLiveChat() {
   const c = liveChat.value
   if (!c || c.agent !== 'codex' || !c.sessionId) {
@@ -4060,6 +4117,7 @@ provide<PaneActions>(PaneActionsKey, {
   closeLiveChat,
   openRenameLiveChat,
   forkLiveChat,
+  editCancelledPrompt,
   archiveLiveChat,
   switchLiveChatToRead,
   openLiveChatStats,

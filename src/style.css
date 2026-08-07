@@ -458,6 +458,15 @@ button {
   background: color-mix(in srgb, var(--code-bg) 74%, transparent) !important;
   border-color: var(--border);
 }
+:root.has-custom-background .codex-patch-file {
+  background: color-mix(in srgb, var(--code-bg) 74%, transparent);
+}
+:root.has-custom-background .codex-patch-head {
+  background: color-mix(in srgb, var(--surface) 74%, transparent);
+}
+:root.has-custom-background .tool-chip {
+  background: color-mix(in srgb, var(--surface-2) 64%, transparent);
+}
 .app-body {
   flex: 1;
   display: flex;
@@ -1094,7 +1103,15 @@ body.is-sidebar-resizing {
   transition: background 0.12s, color 0.12s;
   font-size: 13px;
 }
-.proj-item.dragging { opacity: 0.45; }
+body.is-project-reordering .proj-item.dragging {
+  opacity: 0.34;
+  pointer-events: none;
+  background: transparent;
+  outline: 1px dashed var(--border-strong);
+  outline-offset: -1px;
+  box-shadow: none;
+}
+body.is-project-reordering .proj-item.dragging > * { opacity: 0; }
 .proj-item.drop-before::before,
 .proj-item.drop-after::after {
   content: '';
@@ -1102,10 +1119,12 @@ body.is-sidebar-resizing {
   z-index: 6;
   left: 8px;
   right: 8px;
-  height: 2px;
+  height: 3px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--brand) 52%, var(--border-strong));
-  box-shadow: 0 0 4px color-mix(in srgb, var(--brand) 20%, transparent);
+  background: var(--brand);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--brand) 35%, transparent),
+    0 0 6px color-mix(in srgb, var(--brand) 55%, transparent);
   pointer-events: none;
 }
 .proj-item.drop-before::before { top: 0; }
@@ -1135,6 +1154,22 @@ body.is-project-reordering,
 body.is-project-reordering * {
   cursor: grabbing !important;
   user-select: none !important;
+}
+.proj-item-drag-preview {
+  position: fixed;
+  z-index: 1000;
+  margin: 0;
+  pointer-events: none;
+  opacity: 0.96;
+  transform: scale(1.025) rotate(-0.5deg);
+  transform-origin: center;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  box-shadow:
+    0 10px 24px rgba(0, 0, 0, 0.18),
+    0 2px 6px rgba(0, 0, 0, 0.12);
+  transition: none;
 }
 /* 置顶项目前面那颗小圆点：纯背景色实心圆，颜色由 pinColor(p) 内联设置 */
 .pin-dot {

@@ -28,7 +28,7 @@ impl AgentCommand {
         &self.args
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", test))]
     pub fn to_posix_shell(&self) -> String {
         let mut parts =
             Vec::with_capacity(1 + self.args.len() + usize::from(!self.extra_args.is_empty()));
@@ -62,7 +62,7 @@ impl AgentCommand {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
 pub fn posix_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

@@ -98,6 +98,29 @@ describe('Sidebar', () => {
     expect(wrapper.findAll('.proj-name').map((node) => node.text())).toEqual(['pinned', 'second', 'first'])
   })
 
+  it('keeps empty bookmarks first until a manual order is saved', () => {
+    const wrapper = factory({
+      projects: [
+        project({ dirName: 'project' }),
+        project({ dirName: 'bookmark', bookmarked: true, sessionCount: 0 }),
+      ],
+    })
+
+    expect(wrapper.findAll('.proj-name').map((node) => node.text())).toEqual(['bookmark', 'project'])
+  })
+
+  it('lets persisted order place a project before an empty bookmark', () => {
+    const wrapper = factory({
+      projects: [
+        project({ dirName: 'bookmark', bookmarked: true, sessionCount: 0 }),
+        project({ dirName: 'project' }),
+      ],
+      projectOrder: ['project', 'bookmark'],
+    })
+
+    expect(wrapper.findAll('.proj-name').map((node) => node.text())).toEqual(['project', 'bookmark'])
+  })
+
   it('emits the reordered root projects after a drag and drop', async () => {
     const wrapper = factory({
       projects: [project({ dirName: 'first' }), project({ dirName: 'second' })],
@@ -121,6 +144,72 @@ describe('Sidebar', () => {
     window.dispatchEvent(new MouseEvent('pointerup', { clientX: 8, clientY: 18, bubbles: true, cancelable: true }))
 
     expect(wrapper.emitted('reorder-projects')![0]).toEqual([['second', 'first']])
+  })
+
+  it('allows dragging a project above an empty bookmark', async () => {
+    const wrapper = factory({
+      projects: [
+        project({ dirName: 'project' }),
+        project({ dirName: 'bookmark', bookmarked: true, sessionCount: 0 }),
+      ],
+    })
+    const [bookmark, regularProject] = wrapper.findAll('.proj-item')
+    Object.defineProperty(bookmark.element, 'getBoundingClientRect', {
+      value: () => ({ top: 0, height: 20 }),
+    })
+    Object.defineProperty(regularProject.element, 'getBoundingClientRect', {
+      value: () => ({ left: 0, top: 21, width: 240, height: 20 }),
+    })
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: vi.fn(() => bookmark.element),
+    })
+
+    await regularProject.trigger('pointerenter')
+    regularProject.find('.proj-drag-handle').element.dispatchEvent(
+      new MouseEvent('pointerdown', { button: 0, clientX: 8, clientY: 30, bubbles: true, cancelable: true }),
+    )
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 8, clientY: 3, bubbles: true, cancelable: true }))
+    await wrapper.vm.$nextTick()
+
+    expect(bookmark.classes()).toContain('drop-before')
+    window.dispatchEvent(new MouseEvent('pointerup', { clientX: 8, clientY: 3, bubbles: true, cancelable: true }))
+    expect(wrapper.emitted('reorder-projects')![0]).toEqual([['project', 'bookmark']])
+  })
+
+  it('shows a floating project preview while dragging', async () => {
+    const wrapper = factory({
+      projects: [project({ dirName: 'first' }), project({ dirName: 'second' })],
+    })
+    const [first, second] = wrapper.findAll('.proj-item')
+    Object.defineProperty(first.element, 'getBoundingClientRect', {
+      value: () => ({ left: 10, top: 20, width: 240, height: 30 }),
+    })
+    Object.defineProperty(second.element, 'getBoundingClientRect', {
+      value: () => ({ top: 50, height: 30 }),
+    })
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: vi.fn(() => second.element),
+    })
+
+    await first.trigger('pointerenter')
+    first.find('.proj-drag-handle').element.dispatchEvent(
+      new MouseEvent('pointerdown', { button: 0, clientX: 20, clientY: 30, bubbles: true, cancelable: true }),
+    )
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 30, clientY: 60, bubbles: true, cancelable: true }))
+    await wrapper.vm.$nextTick()
+
+    const preview = document.body.querySelector<HTMLElement>('.proj-item-drag-preview')
+    expect(preview?.textContent).toContain('first')
+    expect(preview?.style.left).toBe('20px')
+    expect(preview?.style.top).toBe('50px')
+    expect(preview?.style.width).toBe('240px')
+    expect(first.classes()).toContain('dragging')
+
+    window.dispatchEvent(new MouseEvent('pointerup', { clientX: 30, clientY: 60, bubbles: true, cancelable: true }))
+    await wrapper.vm.$nextTick()
+    expect(document.body.querySelector('.proj-item-drag-preview')).toBeNull()
   })
 
   it('renders the drag handle only while a project row is hovered', async () => {

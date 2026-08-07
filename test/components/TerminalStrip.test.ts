@@ -15,6 +15,8 @@ import {
   type TerminalTab,
 } from '../../src/terminals'
 import { PaneActionsKey, type PaneActions } from '../../src/paneActions'
+import type { ChatSession } from '../../src/chatSessions'
+import type { ViewTab } from '../../src/viewTabs'
 
 beforeEach(() => {
   setLang('en')
@@ -82,7 +84,31 @@ const stubPaneActions: PaneActions = {
   exitPane: () => {},
 } as unknown as PaneActions
 
-function factory() {
+function chatViewTab(chatOver: Partial<ChatSession> = {}): ViewTab {
+  return {
+    uiId: 20,
+    type: 'chat',
+    agent: 'codex',
+    projectKey: 'proj',
+    paneId: PANE_ID,
+    title: 'GUI chat',
+    createdAt: 2_000,
+    chatSession: {
+      status: 'running',
+      turnState: 'idle',
+      turnStartedAt: 100,
+      lastTurnOutcome: null,
+      pendingPermissions: [],
+      pendingQuestions: [],
+      ...chatOver,
+    } as ChatSession,
+    lastViewedChatTurnStartedAt: 0,
+    lastViewedChatErrorKey: null,
+  } as ViewTab
+}
+
+function factory(options: { viewTabs?: ViewTab[]; activeViewTabId?: number | null } = {}) {
+  const activeViewTabId = options.activeViewTabId ?? null
   return mount(TerminalStrip, {
     props: {
       pane: {
@@ -90,14 +116,14 @@ function factory() {
         agent: 'codex' as const,
         projectKey: 'proj',
         activeUiId: null,
-        activeViewTabId: null,
+        activeViewTabId,
       },
       agent: 'codex',
       projectKey: 'proj',
       inProjectBrowse: true,
       hasGit: false,
-      viewTabs: [],
-      activeViewTabId: null,
+      viewTabs: options.viewTabs ?? [],
+      activeViewTabId,
     },
     global: {
       directives: { tooltip: vTooltip },
@@ -216,6 +242,59 @@ describe('TerminalStrip', () => {
     const item = wrapper.findAll('.term-tab').slice(-1)[0]
     expect(item.classes()).toContain('state-working')
     expect(item.findAll('.term-tab-status-working i')).toHaveLength(3)
+  })
+
+  it('renders the same working indicator for a running GUI chat tab', () => {
+    const vt = chatViewTab({ turnState: 'running' })
+    const wrapper = factory({ viewTabs: [vt] })
+
+    const item = wrapper.find(`[data-tab-ui-id="${vt.uiId}"]`)
+    expect(item.classes()).toContain('state-working')
+    expect(item.findAll('.term-tab-status-working i')).toHaveLength(3)
+  })
+
+  it('does not render a working indicator while a new GUI chat is only spawning', () => {
+    const vt = chatViewTab({ status: 'spawning', turnState: 'idle' })
+    const wrapper = factory({ viewTabs: [vt] })
+
+    const item = wrapper.find(`[data-tab-ui-id="${vt.uiId}"]`)
+    expect(item.classes()).not.toContain('state-working')
+    expect(item.find('.term-tab-status').exists()).toBe(false)
+  })
+
+  it('clears a GUI chat done indicator after the tab is viewed', async () => {
+    const vt = chatViewTab({ lastTurnOutcome: 'completed', turnStartedAt: 123 })
+    const wrapper = factory({ viewTabs: [vt] })
+
+    const item = () => wrapper.find(`[data-tab-ui-id="${vt.uiId}"]`)
+    expect(item().classes()).toContain('state-done')
+    expect(wrapper.find('.term-tab-status-done').exists()).toBe(true)
+
+    await wrapper.setProps({ activeViewTabId: vt.uiId })
+    expect(item().classes()).not.toContain('state-done')
+    expect(vt.lastViewedChatTurnStartedAt).toBe(123)
+
+    await wrapper.setProps({ activeViewTabId: null })
+    expect(item().classes()).not.toContain('state-done')
+  })
+
+  it('clears a GUI chat error indicator after the tab is viewed', async () => {
+    const vt = chatViewTab({
+      lastTurnOutcome: 'failed',
+      turnStartedAt: 321,
+      errorMessage: 'request failed',
+    })
+    const wrapper = factory({ viewTabs: [vt] })
+
+    const item = () => wrapper.find(`[data-tab-ui-id="${vt.uiId}"]`)
+    expect(item().classes()).toContain('state-error')
+
+    await wrapper.setProps({ activeViewTabId: vt.uiId })
+    expect(item().classes()).not.toContain('state-error')
+    expect(vt.lastViewedChatErrorKey).not.toBeNull()
+
+    await wrapper.setProps({ activeViewTabId: null })
+    expect(item().classes()).not.toContain('state-error')
   })
 
   it('renders done only after an explicit turn completion signal', () => {

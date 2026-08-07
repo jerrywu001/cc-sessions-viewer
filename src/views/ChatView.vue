@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch, defineAsyncComponent } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import type { Agent, Msg, SessionMeta, Block, ChatQuestionRequest } from '../types'
-import { renderText, formatTime, formatElapsedSeconds, isCaveatOnlyMsg, isAskUserQuestionInstructionOnlyMsg, parseSystemEvent, cleanMetaText, metaKindIsPre, parseMetaFields, parseTeammateMessage, stripImagePlaceholders, parseFileRef } from '../format'
+import { renderText, renderTextUncached, formatTime, formatElapsedSeconds, isCaveatOnlyMsg, isAskUserQuestionInstructionOnlyMsg, parseSystemEvent, cleanMetaText, metaKindIsPre, parseMetaFields, parseTeammateMessage, stripImagePlaceholders, parseFileRef } from '../format'
 import type { MetaField } from '../format'
 import { prettifyAndHighlightJson } from '../jsonHighlight'
 import { renderAllMermaid, resetMermaidForTheme } from '../mermaid'
@@ -80,6 +80,11 @@ import { openPathExternal, agentChatSlashCommands } from '../api'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { showTooltipFor, hideTooltip } from '../tooltip'
 import { chatSupported } from '../chatComposerOptions'
+import {
+  chatHistoryEntryFromMsg,
+  countChatHistoryEntriesBefore,
+  type ChatHistoryEntry,
+} from '../chatInputHistory'
 import GitBranchControl from '../components/GitBranchControl.vue'
 
 const props = defineProps<{
@@ -99,7 +104,7 @@ const props = defineProps<{
   hasReadView?: boolean
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   back: []
   refresh: []
   delete: []
@@ -112,6 +117,8 @@ defineEmits<{
   rename: []
   /** `/fork` 指令：把当前 live chat clone 成独立新会话并切过去（仅 live 模式、Claude）。 */
   fork: []
+  /** 取消后编辑原提问：保留当前分支，另开只继承该提问之前上下文的新分支。 */
+  editCancelled: [entry: ChatHistoryEntry, messageIndex: number, priorUserTurns: number]
   reveal: []
   copyId: []
   exportMd: []
@@ -739,6 +746,34 @@ function toggleHideMsg(m: Msg, idx: number) {
 // 收（用户反馈：hover A 再 hover 别的都不自动隐藏）。改成 mouseenter/leave 维护单一键，
 // 任一时刻只有一行 row-active，互斥且确定性收起。
 const hoveredKey = ref<string | null>(null)
+
+// 最近一轮被取消时，只允许编辑该轮最后一条真实用户输入。中断标记、系统注入记录和
+// assistant/tool 消息都会被 chatHistoryEntryFromMsg 排除；普通完成轮次不显示入口。
+const cancelledPrompt = computed<{ index: number; entry: ChatHistoryEntry } | null>(() => {
+  const session = props.liveSession
+  if (
+    !session ||
+    session.status !== 'running' ||
+    session.turnState !== 'idle' ||
+    session.lastTurnOutcome !== 'cancelled'
+  ) return null
+  for (let index = props.messages.length - 1; index >= 0; index -= 1) {
+    const entry = chatHistoryEntryFromMsg(props.messages[index])
+    if (entry) return { index, entry }
+  }
+  return null
+})
+
+function editCancelledPrompt() {
+  const prompt = cancelledPrompt.value
+  if (!prompt) return
+  emit(
+    'editCancelled',
+    prompt.entry,
+    prompt.index,
+    countChatHistoryEntriesBefore(props.messages, prompt.index),
+  )
+}
 
 // ---- 消息悬停操作：复制原文 ----
 // 复制成功后短暂把对应消息的图标切成对勾（按 msgKey 记一个键，避免影响其它消息）。
@@ -1522,24 +1557,27 @@ watch(
   { flush: 'post' },
 )
 
-// §10.6 流式即时渲染：把正在生成的文本走与定稿气泡同一个 markdown 渲染器（renderText），
-// 逐 delta 重渲染 → 标题 / 粗体 / 列表 / 行内代码即时成型，而非等结束才把 md 语法转成格式
-// （对齐 VSCode 插件）。代码块语法高亮 / mermaid 仍只在权威记录定稿后由 DOM 扫描 watcher
-// 处理（与正常气泡一致）。computed 只在 live.text 变化时重 parse —— `now` 计时每 250ms 的
-// 重渲染命中缓存、不会重复 parse。
+// §10.6 流式即时渲染：delta 已在 chatSessions 以 50ms 合并；这里仍即时形成 Markdown，
+// 但不把每个不断增长的中间前缀写进定稿消息 LRU，避免长回答积累大量一次性 HTML。
 const streamingHtml = computed(() => {
   const lv = props.liveSession?.live
-  return lv ? renderText(lv.text) : ''
+  return lv ? renderTextUncached(lv.text) : ''
 })
 
-// §10.6 流式：delta 逐 token 撑高时跟随贴底。默认 flush 'pre' → 回调先于 DOM 更新跑，
-// 此刻 isNearBottom() 读的是「撑高前」的滚动位置（= 用户是否在跟读）；nextTick 后 DOM
-// 已撑高再钉底。只读 liveSession.live.text，不触发整列表 mermaid/高亮重算。
+// §10.6 流式：合并后的预览更新时只贴底一次。异步高亮/图片只会出现在权威消息，仍由
+// messages watcher 的 pinToBottomFor 兜住；无需每个流式批次都重启 120ms 的逐帧循环。
 watch(
   () => props.liveSession?.live?.text,
   () => {
     if (!props.liveSession?.live) return
-    if (isNearBottom()) nextTick(() => pinToBottomFor(120))
+    if (isNearBottom()) {
+      nextTick(() => {
+        // turn 开始或权威消息的 pin 循环若仍在运行，它已经负责贴底，不重复写布局。
+        if (pinRAF) return
+        const el = scrollEl.value
+        if (el) el.scrollTop = el.scrollHeight
+      })
+    }
   },
 )
 
@@ -2189,6 +2227,16 @@ function onDocClick(e: MouseEvent) {
                故不会压到紧随其后的 tool-only 结果卡上）。时间统一藏起，hover 才露出。 -->
           <div class="msg-actions">
             <span class="msg-time">{{ formatTime(m.timestamp) }}</span>
+            <button
+              v-if="cancelledPrompt?.index === vr.index"
+              class="msg-action-btn"
+              type="button"
+              :aria-label="t('chat.action.editMsg')"
+              v-tooltip="t('chat.action.editMsg')"
+              @click="editCancelledPrompt"
+            >
+              <IconPencil />
+            </button>
             <button
               class="msg-action-btn"
               type="button"

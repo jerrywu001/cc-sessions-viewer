@@ -826,12 +826,16 @@ fn codex_thread_fork_params(
     permission_mode: &str,
     model: Option<&str>,
     ephemeral: bool,
+    last_turn_id: Option<&str>,
+    exclude_turns: bool,
 ) -> serde_json::Value {
     let mut params = codex_thread_permission_overrides(permission_mode);
     params.insert("threadId".into(), serde_json::json!(thread_id));
     params.insert("cwd".into(), serde_json::json!(cwd));
-    // side 面板只渲染新分支产生的消息，不需要把源 thread 的全部 turns 回传一遍。
-    params.insert("excludeTurns".into(), serde_json::json!(true));
+    params.insert("excludeTurns".into(), serde_json::json!(exclude_turns));
+    if let Some(last_turn_id) = last_turn_id {
+        params.insert("lastTurnId".into(), serde_json::json!(last_turn_id));
+    }
     if let Some(model) = model {
         params.insert("model".into(), serde_json::json!(model));
     }
@@ -844,11 +848,23 @@ fn codex_thread_fork_params(
     serde_json::Value::Object(params)
 }
 
+fn codex_fork_base_turn_id(thread_result: &serde_json::Value) -> Option<String> {
+    thread_result
+        .pointer("/thread/turns")
+        .and_then(serde_json::Value::as_array)?
+        .iter()
+        .rev()
+        .skip(1)
+        .find_map(|turn| turn.get("id").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+}
+
 #[cfg(test)]
 mod codex_side_tests {
     use super::{
-        codex_item_to_msg, codex_plan_updated_to_msg, codex_steer_params, codex_thread_fork_params,
-        codex_thread_params, codex_turn_params, codex_user_input_request, codex_user_input_result,
+        codex_fork_base_turn_id, codex_item_to_msg, codex_plan_updated_to_msg, codex_steer_params,
+        codex_thread_fork_params, codex_thread_params, codex_turn_params, codex_user_input_request,
+        codex_user_input_result,
     };
 
     #[test]
@@ -859,6 +875,8 @@ mod codex_side_tests {
             "approve",
             Some("gpt-5.4"),
             true,
+            None,
+            true,
         );
 
         assert_eq!(params["threadId"], "source-thread");
@@ -866,7 +884,43 @@ mod codex_side_tests {
         assert_eq!(params["model"], "gpt-5.4");
         assert_eq!(params["ephemeral"], true);
         assert_eq!(params["excludeTurns"], true);
+        assert!(params.get("lastTurnId").is_none());
         assert_eq!(params["sandbox"], "workspace-write");
+    }
+
+    #[test]
+    fn edit_fork_params_stop_before_cancelled_turn_and_include_history() {
+        let params = codex_thread_fork_params(
+            "source-thread",
+            "/workspace/app",
+            "fullAccess",
+            Some("gpt-5.6"),
+            false,
+            Some("previous-turn"),
+            false,
+        );
+
+        assert_eq!(params["threadId"], "source-thread");
+        assert_eq!(params["lastTurnId"], "previous-turn");
+        assert_eq!(params["excludeTurns"], false);
+        assert!(params.get("ephemeral").is_none());
+    }
+
+    #[test]
+    fn edit_fork_uses_the_turn_before_the_cancelled_one() {
+        let result = serde_json::json!({
+            "thread": { "turns": [
+                { "id": "turn-1" },
+                { "id": "turn-2" },
+                { "id": "cancelled-turn" },
+            ] }
+        });
+
+        assert_eq!(codex_fork_base_turn_id(&result).as_deref(), Some("turn-2"));
+        assert!(codex_fork_base_turn_id(&serde_json::json!({
+            "thread": { "turns": [{ "id": "cancelled-turn" }] }
+        }))
+        .is_none());
     }
 
     #[test]
@@ -1507,7 +1561,15 @@ fn start_codex_app_server(
             .ok_or_else(|| "Codex side conversation requires a source thread".to_string())?;
         (
             "thread/fork",
-            codex_thread_fork_params(source_id, &cwd, permission_mode, model, ephemeral),
+            codex_thread_fork_params(
+                source_id,
+                &cwd,
+                permission_mode,
+                model,
+                ephemeral,
+                None,
+                true,
+            ),
         )
     } else if let Some(session_id) = session_id.as_ref() {
         let mut params = codex_thread_permission_overrides(permission_mode);
@@ -3061,6 +3123,62 @@ pub fn steer(id: u64, text: &str, text_elements: &[serde_json::Value]) -> Result
     // 只是 Codex 控制文本，GUI 应仅显示 `<follow-up>` 内的真实用户提示。
     remember_user_input(&meta, crate::util::visible_deferred_follow_up(text), &[]);
     Ok(())
+}
+
+/// 从最近一轮开始前的边界派生一个持久化 Codex thread，供“取消后编辑原提问”使用。
+pub fn fork_before_last_turn(id: u64) -> Result<String, String> {
+    let (arc, meta) = {
+        let m = map().lock().map_err(|e| e.to_string())?;
+        m.get(&id)
+            .map(|(handle, meta)| (handle.clone(), meta.clone()))
+            .ok_or_else(|| "chat not found".to_string())?
+    };
+    let ChatHandle::CodexAppServer { shared } = &*arc else {
+        return Err("forking by turn is only supported for Codex app-server chats".to_string());
+    };
+    let thread_id = shared
+        .thread_id
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone()
+        .ok_or_else(|| "codex app-server thread not initialized".to_string())?;
+    let read_id = codex_next_rpc_id(shared);
+    codex_write_rpc(
+        shared,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": read_id,
+            "method": "thread/read",
+            "params": { "threadId": thread_id, "includeTurns": true },
+        }),
+    )?;
+    let read_result = codex_wait_response(shared, &read_id, Duration::from_secs(15))?;
+    let fork_base_turn_id = codex_fork_base_turn_id(&read_result)
+        .ok_or_else(|| "cancelled turn has no earlier turn to fork from".to_string())?;
+    let rpc_id = codex_next_rpc_id(shared);
+    codex_write_rpc(
+        shared,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": rpc_id,
+            "method": "thread/fork",
+            "params": codex_thread_fork_params(
+                &thread_id,
+                &meta.cwd,
+                &meta.permission_mode,
+                meta.model.as_deref(),
+                false,
+                Some(&fork_base_turn_id),
+                false,
+            ),
+        }),
+    )?;
+    let result = codex_wait_response(shared, &rpc_id, Duration::from_secs(15))?;
+    result
+        .pointer("/thread/id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "codex app-server did not return a forked thread id".to_string())
 }
 
 fn spawn_oneshot_turn(id: u64, arc: Arc<ChatHandle>, spec: OneShotTurnSpec) -> Result<(), String> {

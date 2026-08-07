@@ -175,6 +175,21 @@ export const forkSession = (
   title: string,
 ) => invoke<string>('fork_session', { agent, projectKey, sourceId, title })
 
+/** 复制 Claude transcript 中目标提问之前的部分，返回新的 session id。 */
+export const forkSessionBeforeUserTurn = (
+  agent: Agent,
+  projectKey: string,
+  sourceId: string,
+  title: string,
+  keepUserTurns: number,
+) => invoke<string>('fork_session_before_user_turn', {
+  agent,
+  projectKey,
+  sourceId,
+  title,
+  keepUserTurns,
+})
+
 export const codexArchiveSession = (sessionId: string) =>
   invoke<void>('codex_archive_session', { sessionId })
 
@@ -447,6 +462,10 @@ export const agentChatSteer = (
     textElements,
   })
 
+/** 从最近一次被取消的 Codex turn 之前创建持久化分支，返回新 thread id。 */
+export const agentChatForkBeforeLastTurn = (id: number) =>
+  invoke<string>('agent_chat_fork_before_last_turn', { id })
+
 /** 读取本地图片文件为 base64（系统选择器只给路径，这里取字节做缩略图 + 视觉块）。 */
 export const readFileBase64 = (path: string) =>
   invoke<ChatImageInput>('read_file_base64', { path })
@@ -500,7 +519,7 @@ export const saveTempImage = (base64: string, mediaType: string) =>
   invoke<string>('save_temp_image', { base64, mediaType })
 
 /** GUI chat 输入框 `@` 文件浮层：列出会话 cwd 下的目录/文件（相对路径）。
- *  `query` 空 → 顶层直接子项；非空 → 递归子串匹配（大小写不敏感）。 */
+ *  `query` 空 → 顶层直接子项；裸查询 → 全工作区模糊搜索；带 `/` → 目录逐级浏览。 */
 export const listProjectFiles = (cwd: string, query: string, limit = 200) =>
   invoke<ProjectFileEntry[]>('list_project_files', { cwd, query, limit })
 

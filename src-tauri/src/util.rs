@@ -58,19 +58,132 @@ fn dir_has_visible_child(dir: &Path) -> bool {
     false
 }
 
-/// GUI chat `@` 浮层的项目文件列举 —— 像 IDE 文件树一样**逐级**展开，不递归。
-/// `query` 形如 `<dir_part><filter>`：到最后一个 `/`（含）的段是目录前缀，其后是末段过滤词。
-/// 只列 `cwd/dir_part` 的**直接子项**，按末段（大小写不敏感子串）过滤。空 query → cwd 顶层。
-/// 结果「目录在前、文件在后」，组内按名排序，截断到 `limit`，并为目录回填 `has_children`。
+fn fuzzy_text_score(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() || haystack == needle {
+        return Some(0);
+    }
+    if haystack.starts_with(needle) {
+        return Some(100 + haystack.len().saturating_sub(needle.len()));
+    }
+    if let Some(pos) = haystack.find(needle) {
+        return Some(200 + pos);
+    }
+
+    let mut search_from = 0;
+    let mut first = None;
+    let mut previous = None;
+    let mut gaps = 0;
+    for wanted in needle.chars() {
+        let (offset, matched) = haystack[search_from..]
+            .char_indices()
+            .find(|(_, ch)| *ch == wanted)?;
+        let index = search_from + offset;
+        if let Some(prev) = previous {
+            gaps += index.saturating_sub(prev + 1);
+        } else {
+            first = Some(index);
+        }
+        previous = Some(index);
+        search_from = index + matched.len_utf8();
+    }
+    Some(300 + first.unwrap_or(0) + gaps)
+}
+
+/// 裸查询的匹配优先级：文件名命中优先于相对路径命中；各自再按精确、前缀、子串、
+/// 非连续字符的顺序排序。
+fn project_match_score(name: &str, rel_path: &str, query: &str) -> Option<(u8, usize)> {
+    let name_lc = name.to_lowercase();
+    if let Some(score) = fuzzy_text_score(&name_lc, query) {
+        return Some((0, score));
+    }
+    fuzzy_text_score(&rel_path.to_lowercase(), query).map(|score| (1, score))
+}
+
+fn fill_directory_children(base: &Path, entries: &mut [ProjectFileEntry]) {
+    for entry in entries.iter_mut() {
+        if entry.is_dir {
+            entry.has_children = dir_has_visible_child(&base.join(&entry.rel_path));
+        }
+    }
+}
+
+fn search_project_files(base: &Path, query: &str, limit: usize) -> Vec<ProjectFileEntry> {
+    let mut pending = vec![(base.to_path_buf(), String::new())];
+    let mut matches: Vec<(u8, usize, ProjectFileEntry)> = Vec::new();
+
+    while let Some((dir, prefix)) = pending.pop() {
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == ".DS_Store" {
+                continue;
+            }
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir && SKIP_DIRS.contains(&name.as_str()) {
+                continue;
+            }
+            let rel_path = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            if let Some((source, score)) = project_match_score(&name, &rel_path, query) {
+                matches.push((
+                    source,
+                    score,
+                    ProjectFileEntry {
+                        rel_path: rel_path.clone(),
+                        name,
+                        is_dir,
+                        has_children: false,
+                    },
+                ));
+            }
+            if is_dir {
+                pending.push((entry.path(), rel_path));
+            }
+        }
+    }
+
+    matches.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.2.is_dir.cmp(&b.2.is_dir))
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.rel_path.len().cmp(&b.2.rel_path.len()))
+            .then_with(|| {
+                a.2.rel_path
+                    .to_lowercase()
+                    .cmp(&b.2.rel_path.to_lowercase())
+            })
+    });
+    let mut out: Vec<ProjectFileEntry> = matches
+        .into_iter()
+        .take(limit)
+        .map(|(_, _, entry)| entry)
+        .collect();
+    fill_directory_children(base, &mut out);
+    out
+}
+
+/// GUI chat `@` 浮层的项目文件列举。空 query → cwd 顶层；不含 `/` 的非空 query →
+/// 全工作区递归模糊搜索；含 `/` 的 query → 保留目录逐级浏览，末段在直接子项中模糊过滤。
 pub fn list_project_files(cwd: &str, query: &str, limit: usize) -> Vec<ProjectFileEntry> {
     let base = Path::new(cwd);
-    if cwd.is_empty() || !base.is_dir() {
+    if cwd.is_empty() || !base.is_dir() || limit == 0 {
         return Vec::new();
     }
-    // 末段 `/` 切成「目录前缀（含尾斜杠）」+「过滤词」。无 `/` → 顶层 + 整体作过滤词。
-    let (dir_part, filter) = match query.rfind('/') {
-        Some(i) => (&query[..=i], &query[i + 1..]),
-        None => ("", query),
+    let normalized_query = query.replace('\\', "/");
+    let query_lc = normalized_query.to_lowercase();
+    if !query_lc.is_empty() && !query_lc.contains('/') {
+        return search_project_files(base, &query_lc, limit);
+    }
+
+    // 末段 `/` 切成「目录前缀（含尾斜杠）」+「过滤词」。
+    let (dir_part, filter) = match normalized_query.rfind('/') {
+        Some(i) => (&normalized_query[..=i], &normalized_query[i + 1..]),
+        None => ("", normalized_query.as_str()),
     };
     let filter_lc = filter.to_lowercase();
     let target = if dir_part.is_empty() {
@@ -79,10 +192,10 @@ pub fn list_project_files(cwd: &str, query: &str, limit: usize) -> Vec<ProjectFi
         base.join(dir_part)
     };
 
-    let mut out: Vec<ProjectFileEntry> = Vec::new();
+    let mut out: Vec<(usize, ProjectFileEntry)> = Vec::new();
     let rd = match fs::read_dir(&target) {
         Ok(rd) => rd,
-        Err(_) => return Vec::new(), // 目标不存在（如打错的前缀）→ 空，前端收起浮层
+        Err(_) => return Vec::new(), // 目标不存在（如打错的前缀）→ 空结果
     };
     for entry in rd.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
@@ -93,30 +206,29 @@ pub fn list_project_files(cwd: &str, query: &str, limit: usize) -> Vec<ProjectFi
         if is_dir && SKIP_DIRS.contains(&name.as_str()) {
             continue;
         }
-        if !filter_lc.is_empty() && !name.to_lowercase().contains(&filter_lc) {
+        let Some(score) = fuzzy_text_score(&name.to_lowercase(), &filter_lc) else {
             continue;
-        }
-        out.push(ProjectFileEntry {
-            rel_path: format!("{dir_part}{name}"),
-            name,
-            is_dir,
-            has_children: false, // 截断后再回填，避免给丢弃项白扫一次 read_dir
-        });
+        };
+        out.push((
+            score,
+            ProjectFileEntry {
+                rel_path: format!("{dir_part}{name}"),
+                name,
+                is_dir,
+                has_children: false,
+            },
+        ));
     }
 
-    // 目录在前、文件在后；组内按相对路径（大小写敏感字节序，点文件 < 大写 < 小写）。
-    out.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+    // 目录在前、文件在后；组内优先更好的模糊匹配，再按路径稳定排序。
+    out.sort_by(|a, b| match (a.1.is_dir, b.1.is_dir) {
         (true, false) => std::cmp::Ordering::Less,
         (false, true) => std::cmp::Ordering::Greater,
-        _ => a.rel_path.cmp(&b.rel_path),
+        _ => a.0.cmp(&b.0).then_with(|| a.1.rel_path.cmp(&b.1.rel_path)),
     });
     out.truncate(limit);
-    // 截断后再为留下的目录回填 has_children（每个目录一次浅 read_dir，最多 limit 次）。
-    for e in out.iter_mut() {
-        if e.is_dir {
-            e.has_children = dir_has_visible_child(&base.join(&e.rel_path));
-        }
-    }
+    let mut out: Vec<ProjectFileEntry> = out.into_iter().map(|(_, entry)| entry).collect();
+    fill_directory_children(base, &mut out);
     out
 }
 
@@ -668,16 +780,10 @@ mod tests {
     }
 
     #[test]
-    fn list_project_files_filters_by_trailing_segment() {
+    fn list_project_files_fuzzy_filters_by_trailing_segment() {
         let dir = scratch("filter");
-        // 末段是过滤词（VS Code 路径式 `<dir>/<filter>`）。顶层用 "codex" 过滤。
-        let top = list_project_files(dir.to_str().unwrap(), "codex", 200);
-        assert_eq!(
-            top.iter().map(|e| e.rel_path.as_str()).collect::<Vec<_>>(),
-            vec![".codex"]
-        );
-        // 进入后再用末段过滤：.codex/ 下含 "sk" 的只有 skills。
-        let nested = list_project_files(dir.to_str().unwrap(), ".codex/sk", 200);
+        // 路径式 `<dir>/<filter>` 只过滤目标目录的直接子项，并支持非连续字符匹配。
+        let nested = list_project_files(dir.to_str().unwrap(), ".codex/sks", 200);
         assert_eq!(
             nested
                 .iter()
@@ -685,6 +791,19 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![".codex/skills"]
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_project_files_bare_query_recursively_fuzzy_matches_nested_files() {
+        let dir = scratch("recursive_fuzzy");
+        fs::create_dir_all(dir.join("src/components")).unwrap();
+        fs::write(dir.join("src/components/ChatComposer.vue"), "x").unwrap();
+
+        for query in ["ChatCom", "Com", "Cpsr"] {
+            let out = list_project_files(dir.to_str().unwrap(), query, 200);
+            assert_eq!(out[0].rel_path, "src/components/ChatComposer.vue");
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 

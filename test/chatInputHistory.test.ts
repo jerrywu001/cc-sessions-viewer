@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { buildChatHistory } from '../src/chatInputHistory'
+import {
+  buildChatHistory,
+  chatHistoryEntryFromMsg,
+  countChatHistoryEntriesBefore,
+} from '../src/chatInputHistory'
 import type { Block, Msg } from '../src/types'
 
 const txt = (text: string): Block => ({ kind: 'text', text, isError: false })
@@ -12,6 +16,23 @@ const user = (blocks: Block[], over: Partial<Msg> = {}): Msg => ({
 const assistant = (text: string): Msg => ({ role: 'assistant', sidechain: false, blocks: [txt(text)] })
 
 describe('buildChatHistory', () => {
+  it('converts only real user messages into editable entries', () => {
+    expect(chatHistoryEntryFromMsg(user([txt('real')]))?.text).toBe('real')
+    expect(chatHistoryEntryFromMsg(assistant('reply'))).toBeNull()
+    expect(chatHistoryEntryFromMsg(user([txt('[Request interrupted by user]')]))).toBeNull()
+  })
+
+  it('counts only real user prompts before a fork boundary', () => {
+    const msgs = [
+      user([txt('first')]),
+      assistant('reply'),
+      user([txt('injected')], { metaKind: 'meta' }),
+      user([txt('[Request interrupted by user]')]),
+      user([txt('second')]),
+    ]
+    expect(countChatHistoryEntriesBefore(msgs, 4)).toBe(1)
+  })
+
   it('extracts user prompts in order, oldest → newest', () => {
     const h = buildChatHistory([user([txt('first')]), assistant('hi'), user([txt('second')])])
     expect(h.map((e) => e.text)).toEqual(['first', 'second'])

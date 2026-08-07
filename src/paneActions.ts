@@ -14,6 +14,7 @@ import type { Agent, SessionMeta, TrashItem } from './types'
 import type { ExportKind } from './export'
 import type { ViewTab } from './viewTabs'
 import type { TerminalTab, SavedTab } from './terminals'
+import type { ChatHistoryEntry } from './chatInputHistory'
 
 export interface PaneActions {
   // —— TerminalStrip ——
@@ -38,6 +39,11 @@ export interface PaneActions {
   closeLiveChat: (tabUiId?: number) => void
   openRenameLiveChat: () => void
   forkLiveChat: () => void
+  editCancelledPrompt: (
+    entry: ChatHistoryEntry,
+    messageIndex: number,
+    priorUserTurns: number,
+  ) => void
   archiveLiveChat: () => void
   switchLiveChatToRead: () => void
   openLiveChatStats: () => void

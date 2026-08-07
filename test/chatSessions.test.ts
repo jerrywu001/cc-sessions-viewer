@@ -14,6 +14,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 import {
   chatEffectiveEffortForTest,
+  chatOnDeltaForTest,
   chatOnMsgForTest,
   chatOnResultForTest,
   canSteerQueued,
@@ -30,6 +31,34 @@ import {
 } from '../src/chatSessions'
 import { rememberChatGuiPreference } from '../src/chatGuiPreferences'
 import type { ChatPermissionRequest, ChatQuestionRequest, Msg } from '../src/types'
+
+describe('chatSessions streaming delta batching', () => {
+  it('publishes accumulated text at most once per 50ms and flushes the tail on stop', () => {
+    vi.useFakeTimers()
+    const session = {
+      live: null,
+      retry: null,
+      toolActivity: null,
+      toolActivities: [],
+    } as any
+
+    chatOnDeltaForTest(session, { index: 0, phase: 'start', kind: 'text' })
+    chatOnDeltaForTest(session, { index: 0, phase: 'delta', kind: 'text', text: '你' })
+    chatOnDeltaForTest(session, { index: 0, phase: 'delta', kind: 'text', text: '好' })
+    expect(session.live).toEqual({ kind: 'text', text: '' })
+
+    vi.advanceTimersByTime(49)
+    expect(session.live).toEqual({ kind: 'text', text: '' })
+    vi.advanceTimersByTime(1)
+    expect(session.live).toEqual({ kind: 'text', text: '你好' })
+
+    chatOnDeltaForTest(session, { index: 0, phase: 'delta', kind: 'text', text: '！' })
+    chatOnDeltaForTest(session, { index: 0, phase: 'stop', kind: 'text' })
+    expect(session.live).toEqual({ kind: 'text', text: '你好！' })
+    vi.runOnlyPendingTimers()
+    expect(session.live).toEqual({ kind: 'text', text: '你好！' })
+  })
+})
 
 afterEach(() => {
   vi.useRealTimers()

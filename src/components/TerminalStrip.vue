@@ -15,7 +15,7 @@ import {
   removeSavedTab,
 } from '../terminals'
 import { statusKind } from '../tabStatus'
-import type { ViewTab } from '../viewTabs'
+import { markViewTabViewed, viewTabStatusKind, type ViewTab } from '../viewTabs'
 import type { Pane } from '../panes'
 import { isFocused, paneCount, paneOf, primaryPaneId } from '../panes'
 import { moveTabTo, dragState, resetDragState, sameRef, type DragKind } from '../tabDrag'
@@ -397,7 +397,15 @@ watch([() => visibleTabs.value.length, () => visibleSaved.value.length, () => pr
   })
 })
 watch(() => props.pane.activeUiId, () => revealActiveTab())
-watch(() => props.activeViewTabId, (id) => {
+watch(() => props.activeViewTabId, (id, previousId) => {
+  if (previousId != null) {
+    const previous = props.viewTabs.find((vt) => vt.uiId === previousId)
+    if (previous) markViewTabViewed(previous)
+  }
+  if (id != null) {
+    const current = props.viewTabs.find((vt) => vt.uiId === id)
+    if (current) markViewTabViewed(current)
+  }
   if (id == null) return
   nextTick(() => {
     const el = trackRef.value?.querySelector<HTMLElement>(`.term-tab[data-tab-ui-id="${id}"]`)
@@ -459,6 +467,14 @@ function shortTitle(title: string): string {
   if (!title) return t('chat.tui.untitled')
   if (title.length > 22) return title.slice(0, 20) + '…'
   return title
+}
+
+function isViewTabActive(vt: ViewTab): boolean {
+  return props.pane.activeUiId === null && props.activeViewTabId === vt.uiId
+}
+
+function viewStatusKind(vt: ViewTab) {
+  return viewTabStatusKind(vt, isViewTabActive(vt))
 }
 
 function onTabClick(uiId: number, ev?: Event) {
@@ -1340,10 +1356,15 @@ onUnmounted(() => {
           v-else
           class="term-tab view-tab view-tab-closable"
           :class="{
-            active: pane.activeUiId === null && activeViewTabId === ut.vt.uiId,
+            active: isViewTabActive(ut.vt),
             dragging: isDragSource('view', ut.vt.uiId),
             'drop-before': dropSideAt(ut.orderIndex) === 'before',
             'drop-after': dropSideAt(ut.orderIndex) === 'after',
+            'state-working': viewStatusKind(ut.vt) === 'working',
+            'state-done': viewStatusKind(ut.vt) === 'done',
+            'state-blocked': viewStatusKind(ut.vt) === 'blocked',
+            'state-error': viewStatusKind(ut.vt) === 'error',
+            'state-exited': viewStatusKind(ut.vt) === 'exited',
           }"
           v-tooltip:bottom="ut.vt.title || (ut.vt.type === 'chat' ? t('chat.tui.chatTab') : t('chat.tui.viewTab'))"
           :data-tab-ui-id="ut.vt.uiId"
@@ -1361,6 +1382,21 @@ onUnmounted(() => {
           <component :is="ut.vt.type === 'chat' ? IconChat : ut.vt.type === 'git' ? IconGitBranch : IconReader" class="term-tab-agent" />
           <span class="term-tab-title">{{ ut.vt.title ? shortTitle(ut.vt.title) : (ut.vt.type === 'chat' ? t('chat.tui.chatTab') : t('chat.tui.viewTab')) }}</span>
           <span v-if="modHintDown && shortcutForIndex(inProjectBrowse ? ut.orderIndex + 1 : ut.orderIndex)" class="term-tab-shortcut">{{ shortcutForIndex(inProjectBrowse ? ut.orderIndex + 1 : ut.orderIndex) }}</span>
+          <span
+            v-if="viewStatusKind(ut.vt) === 'working'"
+            class="term-tab-status term-tab-status-working"
+            aria-hidden="true"
+          >
+            <i />
+            <i />
+            <i />
+          </span>
+          <span
+            v-else-if="viewStatusKind(ut.vt) !== 'none'"
+            class="term-tab-status"
+            :class="'term-tab-status-' + viewStatusKind(ut.vt)"
+            aria-hidden="true"
+          />
           <span
             class="term-tab-close"
             v-tooltip:bottom="t('chat.tui.tabClose')"
@@ -1587,7 +1623,14 @@ onUnmounted(() => {
       <div
         v-else-if="dragPreview?.kind === 'view'"
         class="term-tab view-tab term-tab-drag-preview"
-        :class="{ active: pane.activeUiId === null && activeViewTabId === dragPreview.vt.uiId }"
+        :class="{
+          active: isViewTabActive(dragPreview.vt),
+          'state-working': viewStatusKind(dragPreview.vt) === 'working',
+          'state-done': viewStatusKind(dragPreview.vt) === 'done',
+          'state-blocked': viewStatusKind(dragPreview.vt) === 'blocked',
+          'state-error': viewStatusKind(dragPreview.vt) === 'error',
+          'state-exited': viewStatusKind(dragPreview.vt) === 'exited',
+        }"
         :style="{
           left: dragPreview.x + 'px',
           top: dragPreview.y + 'px',
@@ -1605,6 +1648,21 @@ onUnmounted(() => {
               ? t('chat.tui.chatTab')
               : t('chat.tui.viewTab')
         }}</span>
+        <span
+          v-if="viewStatusKind(dragPreview.vt) === 'working'"
+          class="term-tab-status term-tab-status-working"
+          aria-hidden="true"
+        >
+          <i />
+          <i />
+          <i />
+        </span>
+        <span
+          v-else-if="viewStatusKind(dragPreview.vt) !== 'none'"
+          class="term-tab-status"
+          :class="'term-tab-status-' + viewStatusKind(dragPreview.vt)"
+          aria-hidden="true"
+        />
       </div>
     </Teleport>
   </div>

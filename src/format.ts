@@ -572,7 +572,12 @@ export function renderText(raw: string): string {
   return out
 }
 
-function renderTextImpl(raw: string): string {
+/** 流式预览专用：每一帧文本都是一次性增长前缀，不写 LRU，避免缓存大量中间 HTML。 */
+export function renderTextUncached(raw: string): string {
+  return renderTextImpl(raw, false)
+}
+
+function renderTextImpl(raw: string, cacheNested = true): string {
   const { text: pre, codes } = extractCommandTags(raw)
   // 按行扫围栏，而不是 split('```')：围栏长度由开围栏决定，闭围栏必须 ≥ 开围栏长度，
   // 更短的反引号串算作代码内容。这样 ````markdown 里嵌的 ```js 不会被误判成围栏。
@@ -636,7 +641,8 @@ function renderTextImpl(raw: string): string {
         .replace(/<\/?details[^>]*>/g, '')
         .replace(/<summary>[\s\S]*?<\/summary>/, '')
         .trim()
-      html += `<details class="md-details"><summary>${escapeHtml(summary)}</summary><div class="md-details-body">${renderText(content)}</div></details>`
+      const bodyHtml = cacheNested ? renderText(content) : renderTextImpl(content, false)
+      html += `<details class="md-details"><summary>${escapeHtml(summary)}</summary><div class="md-details-body">${bodyHtml}</div></details>`
       i = j
       continue
     }

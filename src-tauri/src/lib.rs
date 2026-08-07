@@ -635,6 +635,30 @@ fn fork_session(
     agents::source(&agent)?.fork_session(&project_key, &source_id, &title)
 }
 
+/// 取消后编辑原提问：只复制目标用户提问之前的 Claude transcript。
+#[tauri::command]
+fn fork_session_before_user_turn(
+    agent: String,
+    project_key: String,
+    source_id: String,
+    title: String,
+    keep_user_turns: usize,
+) -> Result<String, String> {
+    if source_id.is_empty()
+        || !source_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err("Invalid session ID".to_string());
+    }
+    agents::source(&agent)?.fork_session_before_user_turn(
+        &project_key,
+        &source_id,
+        &title,
+        keep_user_turns,
+    )
+}
+
 #[tauri::command]
 fn soft_delete_session(agent: String, path: String, project_label: String) -> Result<(), String> {
     trash::soft_delete(&agent, &path, &project_label)
@@ -1007,6 +1031,13 @@ fn agent_chat_steer(
     text_elements: Option<Vec<serde_json::Value>>,
 ) -> Result<(), String> {
     agent_chat::steer(id, &text, &text_elements.unwrap_or_default())
+}
+
+#[tauri::command]
+async fn agent_chat_fork_before_last_turn(id: u64) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || agent_chat::fork_before_last_turn(id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// 结束一个 chat 子进程（kill + 回收）。幂等。
@@ -1989,14 +2020,16 @@ fn git_diff_file(
 }
 
 /// GUI chat 输入框 `@` 文件浮层：列出会话 `cwd` 下的目录/文件（相对路径）。`query` 空 →
-/// 顶层直接子项；非空 → 递归子串匹配。详见 `util::list_project_files`。
+/// 顶层直接子项；裸查询 → 全工作区模糊搜索；带路径查询 → 目录逐级浏览。
 #[tauri::command]
-fn list_project_files(
+async fn list_project_files(
     cwd: String,
     query: String,
     limit: usize,
 ) -> Vec<crate::types::ProjectFileEntry> {
-    util::list_project_files(&cwd, &query, limit)
+    tauri::async_runtime::spawn_blocking(move || util::list_project_files(&cwd, &query, limit))
+        .await
+        .unwrap_or_default()
 }
 
 /// 由扩展名推断图片 MIME；未知回落到通用二进制类型。
@@ -2315,6 +2348,7 @@ pub fn run() {
             cancel_search,
             rename_session,
             fork_session,
+            fork_session_before_user_turn,
             purge_btw_session,
             codex_archive_session,
             soft_delete_session,
@@ -2339,6 +2373,7 @@ pub fn run() {
             agent_chat_list_running,
             agent_chat_send,
             agent_chat_steer,
+            agent_chat_fork_before_last_turn,
             agent_chat_stop,
             agent_chat_set_title,
             agent_chat_interrupt,

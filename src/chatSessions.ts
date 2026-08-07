@@ -30,6 +30,7 @@ import {
 import { useReclaude } from './settings'
 import { bumpUsage } from './usage'
 import { markProjectsDirty } from './projectsRefresh'
+import type { ChatHistoryEntry } from './chatInputHistory'
 import { codexPluginMentionTextElements, expandCodexPluginMentionsForPrompt } from './codexPluginMentions'
 import { isFileChangeResult } from './toolResultRouting'
 import { summarizeTool, type ToolSummary } from './liveToolSummary'
@@ -97,6 +98,8 @@ export interface ChatSession {
   createdAt?: string
   /** 由事件累积的对话消息，直接喂给 ChatView。 */
   msgs: Msg[]
+  /** 新分支首次显示时回填到输入框的一次性草稿；ChatComposer 消费后清空。 */
+  initialDraft?: ChatHistoryEntry
   /** 本轮问答状态。 */
   turnState: ChatTurnState
   /** 本轮开始时间戳（ms）；turnState='running' 时配合 `now` 算耗时。 */
@@ -323,7 +326,7 @@ function onMsg(s: ChatSession, msg: Msg) {
   if (msg.model && msg.model !== SYNTHETIC_MODEL) s.lastModel = sanitizeModel(s.agent, msg.model)
   updateToolActivity(s, msg)
   // 权威记录到达 → 当前块定稿，清掉流式预览（避免预览与真气泡并存）。
-  s.live = null
+  clearLivePreview(s)
   s.retry = null // 有权威输出 = 网络恢复，撤掉「重试中」。
   if (shouldDropDuplicatePatchOutputForTest(s.msgs, msg)) return
   if (mergeToolUpdate(s, msg)) return
@@ -526,11 +529,50 @@ function mergeToolUpdate(s: ChatSession, msg: Msg): boolean {
 /**
  * token 级流式增量（Claude / Codex）。只对 `text` 块做打字机预览（thinking / tool_use 块
  * 不预览 —— 交给随后的权威 assistant 记录定稿）。只动 `s.live` 这个小对象，不碰 `s.msgs`，
- * 故每 token 不触发整列表重渲染。
+ * 故不会触发整列表重渲染。delta 先在非响应式缓冲区合并，每 50ms 最多提交一次，避免
+ * token 频率直接变成 Markdown 重算、DOM 替换和自动滚动频率。
  */
+const LIVE_DELTA_FLUSH_MS = 50
+const pendingLiveDeltas = new WeakMap<ChatSession, { text: string; timer: number }>()
+
+function cancelPendingLiveDelta(s: ChatSession) {
+  const pending = pendingLiveDeltas.get(s)
+  if (!pending) return
+  window.clearTimeout(pending.timer)
+  pendingLiveDeltas.delete(s)
+}
+
+function flushPendingLiveDelta(s: ChatSession) {
+  const pending = pendingLiveDeltas.get(s)
+  if (!pending) return
+  window.clearTimeout(pending.timer)
+  pendingLiveDeltas.delete(s)
+  if (!pending.text) return
+  const prev = s.live ?? { kind: 'text' as const, text: '' }
+  s.live = { kind: 'text', text: prev.text + pending.text }
+}
+
+function queueLiveDelta(s: ChatSession, text: string) {
+  const pending = pendingLiveDeltas.get(s)
+  if (pending) {
+    pending.text += text
+    return
+  }
+  pendingLiveDeltas.set(s, {
+    text,
+    timer: window.setTimeout(() => flushPendingLiveDelta(s), LIVE_DELTA_FLUSH_MS),
+  })
+}
+
+function clearLivePreview(s: ChatSession) {
+  cancelPendingLiveDelta(s)
+  s.live = null
+}
+
 function onDelta(s: ChatSession, d: ChatDelta) {
   s.retry = null // 收到 token 流 = 有进展，撤掉「重试中」。
   if (d.phase === 'start') {
+    cancelPendingLiveDelta(s)
     // 仅文本块起预览；thinking / tool_use 不预览（authoritative 记录会补）。
     s.live = d.kind === 'text' ? { kind: 'text', text: '' } : null
     if (d.kind === 'text' && s.toolActivity?.phase === 'calling') {
@@ -539,12 +581,17 @@ function onDelta(s: ChatSession, d: ChatDelta) {
     }
   } else if (d.phase === 'delta') {
     if (d.kind === 'text' && d.text) {
-      const prev = s.live ?? { kind: 'text', text: '' }
-      // 重建对象触发响应式（ChatView 读 liveSession.live.text）。
-      s.live = { kind: 'text', text: prev.text + d.text }
+      queueLiveDelta(s, d.text)
     }
+  } else if (d.phase === 'stop') {
+    // 权威消息若稍晚到达，先把尾部 delta 完整展示出来；onMsg 随后负责清空预览。
+    flushPendingLiveDelta(s)
   }
-  // phase 'stop'：不处理 —— 权威 assistant 记录（onMsg）负责清空 + 定稿。
+}
+
+/** 仅供单测验证 delta 合并与收尾。 */
+export function chatOnDeltaForTest(s: ChatSession, d: ChatDelta) {
+  onDelta(s, d)
 }
 
 function onInit(s: ChatSession, p: ChatInitPayload) {
@@ -567,7 +614,7 @@ function onInit(s: ChatSession, p: ChatInitPayload) {
 
 function onResult(s: ChatSession, p: ChatResultPayload) {
   if (p.usage) s.usage = p.usage
-  s.live = null // 一轮结束，兜底清掉残留预览。
+  clearLivePreview(s) // 一轮结束，兜底清掉残留预览。
   s.lastTurnOutcome = p.ok === false ? 'failed' : 'completed'
   endTurn(s)
   // 一轮结束 → 账号 5h/周额度刚被这次对话消耗、值会变 → 事件驱动强制刷新（慢轮询之外的实时补位）。
@@ -586,7 +633,7 @@ function onExit(s: ChatSession, p: ChatExitPayload) {
     s.suppressNextExit = false
     return
   }
-  s.live = null
+  clearLivePreview(s)
   s.lastTurnOutcome = p.code === 0 ? 'completed' : 'failed'
   endTurn(s)
   if (p.code !== 0 && !s.errorMessage) {
@@ -917,6 +964,8 @@ export interface StartChatOptions {
    *  `--resume` 只在后端续上下文、不会把历史作为事件重放，所以前端必须自己预载，
    *  否则切到 chat 后会是一片空白。新开会话留空。 */
   preloadMsgs?: Msg[]
+  /** 新分支首次显示时回填到输入框的一次性草稿。 */
+  initialDraft?: ChatHistoryEntry
   /** 开起来立刻发的第一句（可选）。 */
   initialPrompt?: string
   initialImages?: ChatImageAttachment[]
@@ -979,6 +1028,13 @@ export async function startChat(opts: StartChatOptions): Promise<ChatSession> {
     title: opts.title,
     createdAt: opts.created ?? new Date().toISOString(),
     msgs: opts.preloadMsgs ? [...opts.preloadMsgs] : [],
+    initialDraft: opts.initialDraft
+      ? {
+          text: opts.initialDraft.text,
+          images: opts.initialDraft.images.map((image) => ({ ...image })),
+          files: opts.initialDraft.files.map((file) => ({ ...file })),
+        }
+      : undefined,
     turnState: 'idle',
     turnStartedAt: 0,
     lastTurnMs: 0,
@@ -1299,7 +1355,7 @@ export async function interruptChat(session: ChatSession): Promise<void> {
         registerChat(info.chatId, session)
         session.lastTurnOutcome = 'cancelled'
         endTurn(session)
-        session.live = null
+        clearLivePreview(session)
         session.status = 'running'
         drainQueue(session)
         return
@@ -1315,7 +1371,7 @@ export async function interruptChat(session: ChatSession): Promise<void> {
     await api.agentChatInterrupt(session.chatId)
     session.lastTurnOutcome = 'cancelled'
     endTurn(session)
-    session.live = null
+    clearLivePreview(session)
     if (session.status === 'spawning') session.status = 'running'
     drainQueue(session)
   } catch (err) {
@@ -1337,7 +1393,7 @@ export async function interruptChat(session: ChatSession): Promise<void> {
 export async function clearChat(session: ChatSession): Promise<void> {
   // 立即视觉清屏 —— 无论后续 restart 成败，界面与上下文角标都应清零。
   session.msgs = []
-  session.live = null
+  clearLivePreview(session)
   session.toolActivity = null
   session.toolActivities = []
   session.lastTurnOutcome = null

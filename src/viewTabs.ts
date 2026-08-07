@@ -9,6 +9,7 @@
 import { ref, computed } from 'vue'
 import type { Agent, SessionMeta, Msg } from './types'
 import type { ChatSession } from './chatSessions'
+import type { TabStatusKind } from './tabStatus'
 import { activeViewTabId, panes, focusPane, ensureLayout } from './panes'
 
 let nextViewTabId = 1
@@ -28,6 +29,10 @@ export interface ViewTab {
   loadingMsgs: boolean
   // chat tab
   chatSession: ChatSession | null
+  /** 最近一次已查看的 GUI chat turn；用于只在后台完成后显示一次 done 状态。 */
+  lastViewedChatTurnStartedAt: number
+  /** 最近一次已查看的 GUI chat 错误；同一个错误只在后台提醒一次。 */
+  lastViewedChatErrorKey: string | null
   // 来源会话（chat tab 续聊时绑定的原始 transcript）
   sourceSession: SessionMeta | null
   // live tail 状态（session tab 的文件追踪）
@@ -85,6 +90,8 @@ export function createViewTab(partial: Partial<ViewTab> & Pick<ViewTab, 'type' |
     msgs: [],
     loadingMsgs: false,
     chatSession: null,
+    lastViewedChatTurnStartedAt: 0,
+    lastViewedChatErrorKey: null,
     sourceSession: null,
     liveTailing: false,
     liveFadeTimer: 0,
@@ -108,6 +115,54 @@ export function createViewTab(partial: Partial<ViewTab> & Pick<ViewTab, 'type' |
 
 export function findViewTab(predicate: (t: ViewTab) => boolean): ViewTab | undefined {
   return viewTabs.value.find(predicate)
+}
+
+/** GUI chat tab 的状态语义与 TUI tab 对齐，但直接使用 chat 会话的权威生命周期。 */
+export function viewTabStatusKind(tab: ViewTab, isActive: boolean): TabStatusKind {
+  if (tab.type !== 'chat' || !tab.chatSession) return 'none'
+  const session = tab.chatSession
+  const errorKey = chatErrorKey(session)
+  if (errorKey) {
+    return !isActive && errorKey !== tab.lastViewedChatErrorKey ? 'error' : 'none'
+  }
+  if (session.status === 'exited') return 'exited'
+  if (session.pendingPermissions.length || session.pendingQuestions.length) return 'blocked'
+  if (session.turnState === 'running') return 'working'
+  if (
+    !isActive &&
+    session.lastTurnOutcome === 'completed' &&
+    session.turnStartedAt > tab.lastViewedChatTurnStartedAt
+  ) return 'done'
+  return 'none'
+}
+
+function chatErrorKey(session: ChatSession): string | null {
+  if (session.status !== 'error' && session.lastTurnOutcome !== 'failed') return null
+  return [
+    session.chatId ?? '',
+    session.turnStartedAt,
+    session.lastTurnOutcome ?? '',
+    session.errorMessage ?? '',
+  ].join('\0')
+}
+
+/** 确认已显示的完成/错误状态；运行中切走仍应在后台完成时亮 done。 */
+export function markViewTabViewed(tab: ViewTab) {
+  const session = tab.chatSession
+  if (session) {
+    const errorKey = chatErrorKey(session)
+    if (errorKey) tab.lastViewedChatErrorKey = errorKey
+  }
+  if (
+    tab.type === 'chat' &&
+    session?.turnState === 'idle' &&
+    session.lastTurnOutcome === 'completed'
+  ) {
+    tab.lastViewedChatTurnStartedAt = Math.max(
+      tab.lastViewedChatTurnStartedAt,
+      session.turnStartedAt,
+    )
+  }
 }
 
 export function removeViewTab(uiId: number) {

@@ -188,6 +188,7 @@ const liveChatMeta = computed<SessionMeta>(() => {
           @back="actions.closeLiveChat()"
           @rename="actions.openRenameLiveChat"
           @fork="actions.forkLiveChat"
+          @edit-cancelled="actions.editCancelledPrompt"
           @archive="actions.archiveLiveChat"
           @switch-to-read="actions.switchLiveChatToRead"
           @open-session-stats="actions.openLiveChatStats"

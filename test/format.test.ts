@@ -14,6 +14,7 @@ import {
   parseSystemEvent,
   parseTeammateMessage,
   renderText,
+  renderTextUncached,
   shortName,
 } from '../src/format'
 import { setLang } from '../src/settings'
@@ -83,6 +84,11 @@ describe('isAskUserQuestionInstructionOnlyMsg', () => {
 })
 
 describe('renderText', () => {
+  it('renders uncached streaming text identically, including nested details', () => {
+    const raw = '<details>\n<summary>More</summary>\n**streaming**\n</details>'
+    expect(renderTextUncached(raw)).toBe(renderText(raw))
+  })
+
   it('escapes HTML special characters', () => {
     expect(renderText('<b> & </b>')).toContain('&lt;b&gt; &amp; &lt;/b&gt;')
   })

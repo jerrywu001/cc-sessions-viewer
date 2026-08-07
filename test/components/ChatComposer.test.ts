@@ -221,6 +221,76 @@ describe('ChatComposer', () => {
     expect(document.activeElement).toBe(el)
   })
 
+  it('restores text and image drafts after switching sessions', async () => {
+    const sessionA = baseSession()
+    const sessionB = baseSession({ uiId: 2, chatId: 2, sessionId: 's2' })
+    const wrapper = mount(ChatComposer, {
+      props: { session: sessionA },
+      global: { directives: { tooltip: vTooltip } },
+    })
+    const input = wrapper.find('textarea')
+    const el = input.element as HTMLTextAreaElement
+    el.value = 'draft for A'
+    await input.trigger('input')
+    const image = new File(['image'], 'draft.png', { type: 'image/png' })
+    await input.trigger('paste', {
+      clipboardData: {
+        items: [{ kind: 'file', type: 'image/png', getAsFile: () => image }],
+      },
+    })
+    await vi.waitFor(() => expect(wrapper.findAll('.cc-thumb')).toHaveLength(1))
+
+    await wrapper.setProps({ session: sessionB })
+    expect(el.value).toBe('')
+    expect(wrapper.findAll('.cc-thumb')).toHaveLength(0)
+    el.value = 'draft for B'
+    await input.trigger('input')
+
+    await wrapper.setProps({ session: sessionA })
+    expect(el.value).toBe('draft for A')
+    expect(wrapper.findAll('.cc-thumb')).toHaveLength(1)
+
+    await wrapper.setProps({ session: sessionB })
+    expect(el.value).toBe('draft for B')
+    expect(wrapper.findAll('.cc-thumb')).toHaveLength(0)
+  })
+
+  it('defers popup work until IME composition ends and ignores the following Space keyup', async () => {
+    vi.useFakeTimers()
+    listProjectFilesMock.mockReset()
+    listProjectFilesMock.mockResolvedValue([])
+    const wrapper = mount(ChatComposer, {
+      props: { session: baseSession() },
+      global: { directives: { tooltip: vTooltip } },
+    })
+    try {
+      const ta = wrapper.find('textarea')
+      const el = ta.element as HTMLTextAreaElement
+
+      await ta.trigger('compositionstart')
+      el.value = '@'
+      el.selectionStart = el.selectionEnd = 1
+      await ta.trigger('input', { isComposing: true })
+      await vi.advanceTimersByTimeAsync(100)
+      expect(listProjectFilesMock).not.toHaveBeenCalled()
+
+      await ta.trigger('compositionend')
+      await wrapper.vm.$nextTick()
+      await vi.advanceTimersByTimeAsync(100)
+      await flushPromises()
+      expect(listProjectFilesMock).toHaveBeenCalledTimes(1)
+
+      // 中文候选词通常由 Space 提交；随后的 keyup 不能再跑一遍 @ 检测和文件请求。
+      await ta.trigger('keyup', { key: ' ' })
+      await vi.advanceTimersByTimeAsync(100)
+      await flushPromises()
+      expect(listProjectFilesMock).toHaveBeenCalledTimes(1)
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps the effort slider for Claude subscription sessions', () => {
     setLang('en')
     const wrapper = mount(ChatComposer, {
@@ -370,6 +440,30 @@ describe('ChatComposer @ file mention', () => {
     // 目录带尾斜杠展示，文件原名。
     expect(popup.text()).toContain('.codex/')
     expect(popup.text()).toContain('README.md')
+  })
+
+  it('keeps the mention popup open with an explicit empty state', async () => {
+    listProjectFilesMock.mockResolvedValue([])
+    const wrapper = mountComposer()
+    await typeAt(wrapper, '@missing')
+
+    expect(wrapper.find('.cc-mention').exists()).toBe(true)
+    expect(wrapper.findAll('.cc-mention-item')).toHaveLength(0)
+    expect(wrapper.find('.cc-mention-empty').text()).toBe('No matching files')
+    expect(wrapper.find('.cc-mention-hint').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows the relative path for workspace search results', async () => {
+    listProjectFilesMock.mockResolvedValue([
+      { relPath: 'src/components/ChatComposer.vue', name: 'ChatComposer.vue', isDir: false, hasChildren: false },
+    ])
+    const wrapper = mountComposer()
+    await typeAt(wrapper, '@ChatCom')
+
+    expect(wrapper.find('.cc-mention-nm').text()).toBe('ChatComposer.vue')
+    expect(wrapper.find('.cc-mention-rel').text()).toBe('src/components/ChatComposer.vue')
+    wrapper.unmount()
   })
 
   it('shows a breadcrumb header with the live directory path', async () => {
@@ -604,6 +698,36 @@ describe('ChatComposer /btw side chat', () => {
     await wrapper.vm.$nextTick()
     expect(el.value).toBe('')
     expect(wrapper.text()).not.toContain('History')
+  })
+
+  it('consumes a new branch initial draft with attachments and focuses it', async () => {
+    setLang('en')
+    const session = baseSession({
+      initialDraft: {
+        text: 'cancelled question',
+        images: [{
+          dataUrl: 'data:image/png;base64,AAAA',
+          mediaType: 'image/png',
+          data: 'AAAA',
+          name: 'draft.png',
+        }],
+        files: [{ path: '/work/proj/README.md', name: 'README.md', isDir: false }],
+      },
+    })
+    const wrapper = mount(ChatComposer, {
+      props: { session },
+      global: { directives: { tooltip: vTooltip } },
+      attachTo: document.body,
+    })
+    const ta = wrapper.find('textarea')
+    await wrapper.vm.$nextTick()
+
+    expect((ta.element as HTMLTextAreaElement).value).toBe('cancelled question')
+    expect(wrapper.findAll('.cc-thumb')).toHaveLength(1)
+    expect(wrapper.find('.cc-file-chip').text()).toContain('README.md')
+    expect(document.activeElement).toBe(ta.element)
+    expect(session.initialDraft).toBeUndefined()
+    wrapper.unmount()
   })
 
   it('keeps cycling history when a recalled entry is a slash command (no popup hijack)', async () => {
