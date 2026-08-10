@@ -4647,6 +4647,13 @@ body.is-tab-reordering * {
 .terminal-host .xterm-viewport {
   background-color: transparent !important;
 }
+/* xterm 把选中的单元格直接写成 span.xterm-decoration-top，并附加内联背景色；
+   覆盖 .xterm-selection 蒙层不会命中实际选区。壁纸模式下改用中性半透明灰，
+   避免浅色主题出现黑块、深色主题出现过暗的选区。 */
+:root.has-custom-background.theme-dark .xterm-rows .xterm-decoration-top,
+:root.has-custom-background.theme-dracula .xterm-rows .xterm-decoration-top {
+  background-color: rgb(255 255 255 / 18%) !important;
+}
 .terminal-codex-tui .xterm .xterm-rows .xterm-bg-257 {
   background-color: var(--terminal-inverse-bg) !important;
 }
@@ -6060,6 +6067,20 @@ body.is-tab-reordering * {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.32);
 }
 .set-background-media-check svg { width: 12px; height: 12px; }
+.set-background-media-type {
+  position: absolute;
+  right: 5px;
+  bottom: 40px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.62);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
 .set-background-media-delete {
   position: absolute;
   top: 4px;

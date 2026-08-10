@@ -368,6 +368,8 @@ describe('SettingsModal', () => {
     expect(choices).toHaveLength(2)
     expect(wrapper.findAll('video.set-background-thumb')).toHaveLength(0)
     expect(wrapper.findAll('.set-background-media-select video')).toHaveLength(1)
+    expect(wrapper.findAll('.set-background-media-type')).toHaveLength(1)
+    expect(wrapper.get('.set-background-media-type').text()).toBe('MP4')
 
     await choices[1].trigger('click')
     expect(backgroundImagePath.value).toBe('/app-data/background-media/c--rain.mp4')

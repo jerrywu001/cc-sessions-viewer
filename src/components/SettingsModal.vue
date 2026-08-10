@@ -979,6 +979,7 @@ async function installTurnHooks() {
                       preload="metadata"
                     />
                     <img v-else :src="convertFileSrc(media.path)" alt="">
+                    <span v-if="isBackgroundVideo(media)" class="set-background-media-type">MP4</span>
                     <span v-if="isSelectedBackgroundMedia(media)" class="set-background-media-check"><IconCheck /></span>
                     <span class="set-background-media-name">{{ media.name }}</span>
                   </button>

@@ -465,7 +465,8 @@ function xtermTheme(isDark: boolean) {
   // xterm 的画布默认会用 theme.background 填满。启用自定义壁纸时改成
   // 透明，让终端 / Codex TUI 的空白区域能显示图片或视频；ANSI 显式设置
   // 背景色的内容仍维持原样，保证交互界面的信息层级。
-  const background = backgroundImagePath.value ? 'rgba(0, 0, 0, 0)' : undefined
+  const hasCustomBackground = Boolean(backgroundImagePath.value)
+  const background = hasCustomBackground ? 'rgba(0, 0, 0, 0)' : undefined
   if (theme.value === 'dracula') {
     return {
       background: background ?? '#282a36',
@@ -520,7 +521,10 @@ function xtermTheme(isDark: boolean) {
         foreground: '#171717',
         cursor: '#171717',
         cursorAccent: '#ffffff',
-        selectionBackground: 'rgba(0,0,0,0.12)',
+        // xterm 会先把选区和 theme.background 混合。壁纸模式的透明背景会让
+        // 原本的黑色选区预混为纯黑，压住黑字；改成浅灰，让每次 xterm 重绘后
+        // 写入的内联选区色仍清晰可读。
+        selectionBackground: hasCustomBackground ? 'rgba(255,255,255,0.70)' : 'rgba(0,0,0,0.12)',
         black: '#171717',
         red: '#b91c1c',
         green: '#047857',
