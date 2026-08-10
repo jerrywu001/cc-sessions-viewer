@@ -1474,6 +1474,27 @@ fn usage_from_app_server_breakdown(v: &serde_json::Value) -> UsageSummary {
     }
 }
 
+fn kill_and_wait(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn stop_codex_app_server_child(shared: &CodexAppServerShared) {
+    if let Ok(mut child) = shared.child.lock() {
+        kill_and_wait(&mut child);
+    }
+}
+
+struct CodexAppServerStartupGuard(Option<Arc<CodexAppServerShared>>);
+
+impl Drop for CodexAppServerStartupGuard {
+    fn drop(&mut self) {
+        if let Some(shared) = self.0.as_ref() {
+            stop_codex_app_server_child(shared);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn start_codex_app_server(
     app: AppHandle,
@@ -1495,9 +1516,27 @@ fn start_codex_app_server(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
-    let stdin = child.stdin.take().ok_or("failed to capture stdin")?;
-    let stdout = child.stdout.take().ok_or("failed to capture stdout")?;
-    let stderr = child.stderr.take().ok_or("failed to capture stderr")?;
+    let stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            kill_and_wait(&mut child);
+            return Err("failed to capture stdin".into());
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            kill_and_wait(&mut child);
+            return Err("failed to capture stdout".into());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            kill_and_wait(&mut child);
+            return Err("failed to capture stderr".into());
+        }
+    };
 
     let shared = Arc::new(CodexAppServerShared {
         app: app.clone(),
@@ -1517,6 +1556,7 @@ fn start_codex_app_server(
         next_request_id: AtomicU64::new(1),
         latest_usage: Mutex::new(None),
     });
+    let mut startup_guard = CodexAppServerStartupGuard(Some(shared.clone()));
 
     spawn_stderr_pump(app.clone(), id, stderr);
     let app_for_reader = app.clone();
@@ -1610,6 +1650,7 @@ fn start_codex_app_server(
     if let Ok(mut g) = shared.thread_id.lock() {
         *g = Some(thread_id.clone());
     }
+    startup_guard.0 = None;
 
     Ok(Arc::new(ChatHandle::CodexAppServer { shared }))
 }
@@ -3514,10 +3555,7 @@ pub fn stop(id: u64) -> Result<(), String> {
             }
         }
         ChatHandle::CodexAppServer { shared, .. } => {
-            if let Ok(mut child) = shared.child.lock() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
+            stop_codex_app_server_child(shared);
         }
     }
     Ok(())
