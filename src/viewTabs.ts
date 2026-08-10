@@ -8,7 +8,7 @@
 
 import { ref, computed } from 'vue'
 import type { Agent, SessionMeta, Msg } from './types'
-import type { ChatSession } from './chatSessions'
+import { closeChat, type ChatSession } from './chatSessions'
 import type { TabStatusKind } from './tabStatus'
 import { activeViewTabId, panes, focusPane, ensureLayout } from './panes'
 
@@ -165,14 +165,16 @@ export function markViewTabViewed(tab: ViewTab) {
   }
 }
 
-export function removeViewTab(uiId: number) {
+export function removeViewTab(uiId: number): Promise<void> {
   const idx = viewTabs.value.findIndex(t => t.uiId === uiId)
-  if (idx < 0) return
+  if (idx < 0) return Promise.resolve()
   const tab = viewTabs.value[idx]
+  const chatUiId = tab.chatSession?.uiId
   window.clearTimeout(tab.liveFadeTimer)
   viewTabs.value.splice(idx, 1)
-  // 主动丢弃重引用：session 的 msgs 可能是几 MB 的 transcript，chatSession 指向已停的
-  // 会话对象。清空后立刻可回收，避免关 tab 后内存不降。
+  // session 的 msgs 可能是几 MB 的 transcript；先摘 UI 引用，让 tab 立即消失并可回收。
+  // chat tab 切到只读后 type 会变成 session，但后台 chatSession 仍在运行，因此释放不能
+  // 依赖 tab.type。否则关闭只读 tab 会遗留 app-server，之后恢复同一 thread 就撞 active writer。
   tab.msgs = []
   tab.chatSession = null
   const pane = panes.get(tab.paneId)
@@ -183,6 +185,7 @@ export function removeViewTab(uiId: number) {
     )
     pane.activeViewTabId = sameCtx.length > 0 ? sameCtx[sameCtx.length - 1].uiId : null
   }
+  return chatUiId == null ? Promise.resolve() : closeChat(chatUiId)
 }
 
 export function setActiveViewTab(uiId: number | null) {
@@ -203,7 +206,7 @@ export function visibleViewTabs(agent: Agent, projectKey: string | null): ViewTa
 
 export function closeViewTabsByProject(projectKey: string) {
   const toRemove = viewTabs.value.filter(t => t.projectKey === projectKey)
-  for (const t of toRemove) removeViewTab(t.uiId)
+  for (const t of toRemove) void removeViewTab(t.uiId)
 }
 
 /** 合成 key 被并入真实项目时，把挂在旧 key 上的 view tab（会话/聊天/git）迁到新 key，

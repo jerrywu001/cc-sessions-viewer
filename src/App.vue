@@ -128,7 +128,7 @@ import {
   setViewTitle,
   removeViewEverywhere,
 } from './viewHistory'
-import { startChat, closeChat, reconnectChats, lastAssistantModel, migrateChatSessionsProjectKey, chatSessions, type ChatSession } from './chatSessions'
+import { startChat, closeChat, reconnectChats, lastAssistantModel, migrateChatSessionsProjectKey, chatSessions, findChatBySourceSession, type ChatSession } from './chatSessions'
 import type { ChatHistoryEntry } from './chatInputHistory'
 import { sideChat, openSideChat, closeSideChat, closeAllSideChats, activeBtwSessionIds } from './sideChat'
 import {
@@ -884,10 +884,10 @@ async function stopWorktreeChats(worktreePath: string) {
   // filter 出独立数组 —— closeChat 会 splice chatSessions.value，边删边迭代原数组会漏。
   const victims = chatSessions.value.filter((c) => normPath(c.cwd) === target)
   for (const c of victims) {
-    const tab = viewTabs.value.find((t) => t.type === 'chat' && t.chatSession?.uiId === c.uiId)
-    if (tab) removeViewTab(tab.uiId)
+    const tab = viewTabs.value.find((t) => t.chatSession?.uiId === c.uiId)
     try {
-      await closeChat(c.uiId)
+      if (tab) await removeViewTab(tab.uiId)
+      else await closeChat(c.uiId)
     } catch {}
   }
 }
@@ -2698,9 +2698,8 @@ function closeLiveChat(tabUiId?: number) {
   const id = tabUiId ?? activeViewTab.value?.uiId
   if (!id) return
   const tab = viewTabs.value.find(t => t.uiId === id)
-  if (!tab || tab.type !== 'chat') return
-  if (tab.chatSession) void closeChat(tab.chatSession.uiId)
-  removeViewTab(id)
+  if (!tab) return
+  void removeViewTab(id)
 }
 
 function switchLiveChatToRead() {
@@ -2777,6 +2776,28 @@ async function resumeChatFromSession(s: SessionMeta) {
   if (existingRead?.chatSession) {
     existingRead.type = 'chat'
     setActiveViewTab(existingRead.uiId)
+    activeUiId.value = null
+    return
+  }
+  // 旧版本可能在关闭已切为 read 的 tab 时只丢 UI 引用、没有停止后台 chat。即使 tab 已不在，
+  // 也先复用仍存活的 ChatSession，避免为同一 Codex thread 再起一个 writer。
+  const detachedChat = findChatBySourceSession(chatAgent.value, s.id)
+  if (detachedChat) {
+    if (existingRead) {
+      existingRead.type = 'chat'
+      existingRead.chatSession = detachedChat
+      existingRead.sourceSession = s
+      setActiveViewTab(existingRead.uiId)
+    } else {
+      createViewTab({
+        type: 'chat',
+        agent: detachedChat.agent,
+        projectKey: detachedChat.projectKey,
+        title: detachedChat.title,
+        chatSession: detachedChat,
+        sourceSession: s,
+      })
+    }
     activeUiId.value = null
     return
   }

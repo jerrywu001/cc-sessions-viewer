@@ -929,7 +929,13 @@ export function migrateChatSessionsProjectKey(oldKey: string, newKey: string): v
 export function findChatBySourceSession(agent: Agent, sessionId: string): ChatSession | null {
   if (!sessionId) return null
   return (
-    chatSessions.value.find((c) => c.agent === agent && c.sessionId === sessionId) ?? null
+    chatSessions.value.find(
+      (c) =>
+        c.agent === agent &&
+        c.sessionId === sessionId &&
+        c.status !== 'exited' &&
+        c.status !== 'error',
+    ) ?? null
   )
 }
 

@@ -2,15 +2,24 @@ import { describe, expect, it, beforeEach } from 'vitest'
 import {
   createViewTab,
   markViewTabViewed,
+  removeViewTab,
   viewTabs,
   viewTabStatusKind,
   migrateViewTabsProjectKey,
   visibleViewTabs,
 } from '../src/viewTabs'
-import type { ChatSession } from '../src/chatSessions'
+import { chatSessions, findChatBySourceSession, type ChatSession } from '../src/chatSessions'
 
 function chatSession(over: Partial<ChatSession> = {}): ChatSession {
   return {
+    uiId: 1,
+    chatId: null,
+    agent: 'codex',
+    projectKey: 'proj',
+    cwd: 'C:\\repo',
+    sessionId: 'thread-1',
+    title: 'Thread',
+    msgs: [],
     status: 'running',
     turnState: 'idle',
     turnStartedAt: 100,
@@ -20,6 +29,37 @@ function chatSession(over: Partial<ChatSession> = {}): ChatSession {
     ...over,
   } as ChatSession
 }
+
+describe('GUI chat ownership', () => {
+  beforeEach(() => {
+    viewTabs.value = []
+    chatSessions.value = []
+  })
+
+  it('stops a live chat when its tab has already switched to read mode', async () => {
+    const session = chatSession({ uiId: 7 })
+    chatSessions.value = [session]
+    const tab = createViewTab({
+      type: 'session',
+      agent: 'codex',
+      projectKey: 'proj',
+      chatSession: session,
+    })
+
+    await removeViewTab(tab.uiId)
+
+    expect(viewTabs.value).toHaveLength(0)
+    expect(chatSessions.value).toHaveLength(0)
+  })
+
+  it('finds only a live owner when stale failed sessions share the thread id', () => {
+    const failed = chatSession({ uiId: 8, status: 'error' })
+    const live = chatSession({ uiId: 9 })
+    chatSessions.value = [failed, live]
+
+    expect(findChatBySourceSession('codex', 'thread-1')?.uiId).toBe(live.uiId)
+  })
+})
 
 describe('migrateViewTabsProjectKey', () => {
   beforeEach(() => {

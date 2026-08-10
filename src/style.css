@@ -406,6 +406,11 @@ button {
   background: transparent;
 }
 
+/* 用户气泡仍要保留与 assistant 的左右层级，但壁纸模式下不能再铺实体色块。 */
+:root.has-custom-background .bubble.user {
+  background: color-mix(in srgb, var(--user-bubble) 62%, transparent);
+}
+
 /* 设置框仍以清晰、稳定的阅读层为主，只轻微透出壁纸。不能再叠加局部模糊，
    否则会和遮罩层的 blur 叠加成一整片灰雾。 */
 :root.has-custom-background .settings-modal {
