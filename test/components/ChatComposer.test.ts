@@ -221,6 +221,29 @@ describe('ChatComposer', () => {
     expect(document.activeElement).toBe(el)
   })
 
+  it('keeps the draft and disables send until the chat backend is ready', async () => {
+    const session = baseSession({ chatId: null, status: 'spawning' })
+    const wrapper = mount(ChatComposer, {
+      props: { session },
+      global: { directives: { tooltip: vTooltip } },
+    })
+    const input = wrapper.find('textarea')
+    const el = input.element as HTMLTextAreaElement
+    el.value = 'send after ready'
+    await input.trigger('input')
+
+    expect(wrapper.find('.cc-primary').attributes('disabled')).toBeDefined()
+    await input.trigger('keydown', { key: 'Enter' })
+
+    expect(el.value).toBe('send after ready')
+    expect(session.queue).toEqual([])
+
+    await wrapper.setProps({
+      session: baseSession({ uiId: session.uiId, chatId: 7, status: 'running' }),
+    })
+    expect(wrapper.find('.cc-primary').attributes('disabled')).toBeUndefined()
+  })
+
   it('restores text and image drafts after switching sessions', async () => {
     const sessionA = baseSession()
     const sessionB = baseSession({ uiId: 2, chatId: 2, sessionId: 's2' })

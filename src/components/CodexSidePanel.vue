@@ -197,6 +197,9 @@ const fabStyle = computed(() => {
 
 // ---------- 运行态 ----------
 const running = computed(() => props.session.turnState === 'running')
+const ready = computed(
+  () => props.session.status === 'running' && props.session.chatId !== null,
+)
 const elapsedSec = computed(() =>
   running.value ? Math.max(0, Math.floor((now.value - props.session.turnStartedAt) / 1000)) : 0,
 )
@@ -267,7 +270,7 @@ watch(
 // ---------- 紧凑输入 ----------
 const draft = ref('')
 const taEl = ref<HTMLTextAreaElement | null>(null)
-const canSend = computed(() => draft.value.trim().length > 0 && !errored.value)
+const canSend = computed(() => draft.value.trim().length > 0 && ready.value)
 function autosize() {
   const el = taEl.value
   if (!el) return
