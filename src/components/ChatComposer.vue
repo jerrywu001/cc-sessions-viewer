@@ -238,10 +238,13 @@ const running = computed(() => props.session.turnState === 'running')
 const ended = computed(
   () => props.session.status === 'exited' || props.session.status === 'error',
 )
+const ready = computed(
+  () => props.session.status === 'running' && props.session.chatId !== null,
+)
 const canSend = computed(
   () =>
     !running.value &&
-    !ended.value &&
+    ready.value &&
     (!!text.value.trim() || images.value.length > 0 || files.value.length > 0),
 )
 
@@ -1392,7 +1395,8 @@ function removeFile(i: number) {
 // ---------- 发送 / 停止 ----------
 async function submit() {
   // running 时**不再拦截**：有内容就走 enqueuePrompt —— 空闲即发，运行中则入队（type-while-running）。
-  if (ended.value) return
+  // app-server 握手完成前保留草稿，不允许 enqueuePrompt 静默丢弃 chatId=null 的消息。
+  if (!ready.value) return
   if (!text.value.trim() && images.value.length === 0 && files.value.length === 0) return
   const body = text.value
   exitHistory()
