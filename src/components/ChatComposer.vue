@@ -1513,21 +1513,8 @@ function queuedLabel(q: QueuedMessage): string {
       </div>
     </Teleport>
 
-    <!-- 待发队列：Codex app-server 运行中可将指定项引导到当前 turn，其余仍按 result FIFO 发出。 -->
-    <div v-if="session.queue.length || session.submittedQueue.length" class="cc-queue" role="list">
-      <div
-        v-for="q in session.submittedQueue"
-        :key="q.id"
-        class="cc-queue-item cc-queue-item-submitted"
-        role="listitem"
-        v-tooltip="t('chat.composer.queue.submittedHint')"
-      >
-        <IconArrowUp class="cc-queue-ic" />
-        <span class="cc-queue-text">{{ queuedLabel(q) }}</span>
-        <span v-if="q.text.trim() && (q.images.length || q.files.length)" class="cc-queue-attach">
-          <IconPaperclip />{{ q.images.length + q.files.length }}
-        </span>
-      </div>
+    <!-- 待发队列：引导成功的消息已进入聊天记录，不再在输入框上方重复展示。 -->
+    <div v-if="session.queue.length" class="cc-queue" role="list">
       <div
         v-for="q in session.queue"
         :key="q.id"
@@ -1978,10 +1965,6 @@ function queuedLabel(q: QueuedMessage): string {
   background: var(--surface);
   color: var(--text-mute);
   font-size: 13px;
-}
-.cc-queue-item-submitted {
-  border-style: dashed;
-  opacity: 0.68;
 }
 .cc-queue-ic {
   flex: none;

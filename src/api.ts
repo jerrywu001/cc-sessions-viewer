@@ -55,6 +55,7 @@ export const setTitlebarTheme = (theme: 'dark' | 'light' | null) =>
 
 export const windowHideToTray = () => invoke<void>('window_hide_to_tray')
 export const windowExitApp = () => invoke<void>('window_exit_app')
+export const cleanupRuntimeChildren = () => invoke<void>('cleanup_runtime_children')
 
 /** 已导入应用数据目录的图片 / MP4 背景素材。 */
 export const backgroundMediaDirectory = () => invoke<string>('background_media_directory')

@@ -9,7 +9,7 @@
 import { markRaw, ref, shallowRef } from 'vue'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check as checkTauriUpdate, type Update } from '@tauri-apps/plugin-updater'
-import { appVersion, checkUpdate, openUrl, type UpdateInfo } from './api'
+import { appVersion, checkUpdate, cleanupRuntimeChildren, openUrl, type UpdateInfo } from './api'
 
 // 没拿到具体 release 的 html_url 时的兜底地址。和 App.vue 的 REPO_URL 同源；
 // /releases/latest 永远会重定向到当前最新 release 页面，等价于"先点 Latest"。
@@ -189,6 +189,7 @@ export function downloadAndInstallUpdate(): Promise<void> {
 }
 
 export async function relaunchApp(): Promise<void> {
+  await cleanupRuntimeChildren()
   await relaunch()
 }
 

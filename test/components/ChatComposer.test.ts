@@ -201,6 +201,7 @@ describe('ChatComposer', () => {
     )
     expect(session.queue).toEqual([])
     expect(session.submittedQueue.map((q) => q.text)).toEqual(['Focus on the failing test.'])
+    expect(wrapper.find('.cc-queue').exists()).toBe(false)
   })
 
   it('keeps input focus after sending', async () => {
