@@ -70,6 +70,8 @@ struct PtyHandle {
     writer: Mutex<Box<dyn Write + Send>>,
     /// 子进程句柄：kill 时用；waiter 线程 try_wait 走一份独立的弱引用避免长锁。
     child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
+    /// resume 会话的独占写入租约；纯 shell / new session 没有。
+    _session_lease: Option<crate::runtime::SessionLease>,
 }
 
 static PTYS: OnceLock<Mutex<HashMap<u64, Arc<PtyHandle>>>> = OnceLock::new();
@@ -223,6 +225,7 @@ pub fn spawn(
     rows: u16,
     color_scheme: Option<&str>,
     use_reclaude: bool,
+    session: Option<(String, String)>,
 ) -> Result<u64, String> {
     let cmd = build_shell_command(
         &cwd,
@@ -230,7 +233,7 @@ pub fn spawn(
         PtyColorScheme::parse(color_scheme),
         use_reclaude,
     );
-    spawn_raw(app, &cwd, cmd, cols, rows)
+    spawn_raw(app, &cwd, cmd, cols, rows, session)
 }
 
 /// 启动一个纯 shell PTY（不跑任何 agent CLI），用于在项目目录里执行任意命令。
@@ -242,7 +245,7 @@ pub fn spawn_shell(
     color_scheme: Option<&str>,
 ) -> Result<u64, String> {
     let cmd = build_interactive_shell(&cwd, PtyColorScheme::parse(color_scheme));
-    spawn_raw(app, &cwd, cmd, cols, rows)
+    spawn_raw(app, &cwd, cmd, cols, rows, None)
 }
 
 fn spawn_raw(
@@ -251,10 +254,23 @@ fn spawn_raw(
     cmd: CommandBuilder,
     cols: u16,
     rows: u16,
+    session: Option<(String, String)>,
 ) -> Result<u64, String> {
     if !std::path::Path::new(cwd).is_dir() {
         return Err("项目目录已不存在，无法启动终端".into());
     }
+    let spawn_permit = crate::runtime::spawn_permit()?;
+    let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+    let session_lease = session
+        .as_ref()
+        .map(|(agent, session_id)| {
+            crate::runtime::acquire_session(
+                agent,
+                session_id,
+                crate::runtime::SessionOwner::Tui(id),
+            )
+        })
+        .transpose()?;
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -265,32 +281,55 @@ fn spawn_raw(
         })
         .map_err(|e| format!("openpty failed: {e}"))?;
 
-    let child = pair
+    let mut child = pair
         .slave
         .spawn_command(cmd)
         .map_err(|e| format!("spawn failed: {e}"))?;
     // slave 端在父进程留着的话，PTY 永远不会 EOF；spawn 完立刻 drop。
     drop(pair.slave);
 
-    let reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|e| format!("clone reader failed: {e}"))?;
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|e| format!("take writer failed: {e}"))?;
+    let pid = match child.process_id() {
+        Some(pid) => pid,
+        None => {
+            stop_child(child.as_mut());
+            return Err("spawned PTY child has no process id".to_string());
+        }
+    };
+    if let Err(error) = crate::process_tree::register(pid) {
+        stop_child(child.as_mut());
+        return Err(error);
+    }
+    let reader = match pair.master.try_clone_reader() {
+        Ok(reader) => reader,
+        Err(error) => {
+            stop_child(child.as_mut());
+            return Err(format!("clone reader failed: {error}"));
+        }
+    };
+    let writer = match pair.master.take_writer() {
+        Ok(writer) => writer,
+        Err(error) => {
+            stop_child(child.as_mut());
+            return Err(format!("take writer failed: {error}"));
+        }
+    };
 
-    let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
     let handle = Arc::new(PtyHandle {
         master: Mutex::new(pair.master),
         writer: Mutex::new(writer),
         child: Mutex::new(child),
+        _session_lease: session_lease,
     });
-    map()
-        .lock()
-        .map_err(|e| e.to_string())?
-        .insert(id, handle.clone());
+    match map().lock() {
+        Ok(mut ptys) => {
+            ptys.insert(id, handle.clone());
+        }
+        Err(error) => {
+            stop_handle(handle.as_ref());
+            return Err(error.to_string());
+        }
+    }
+    drop(spawn_permit);
 
     // ---- reader 线程：阻塞 read → base64 → emit ----
     let app_for_reader = app.clone();
@@ -422,6 +461,24 @@ pub fn resize(id: u64, cols: u16, rows: u16) -> Result<(), String> {
         .map_err(|e| format!("resize failed: {e}"))
 }
 
+fn stop_child(child: &mut (dyn portable_pty::Child + Send + Sync)) {
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    if let Some(pid) = child.process_id() {
+        crate::process_tree::terminate(pid);
+    }
+    let _ = child.kill();
+    // wait 一下确保进程真死了，避免僵尸；失败不向上抛，关闭本身保持幂等。
+    let _ = child.wait();
+}
+
+fn stop_handle(handle: &PtyHandle) {
+    if let Ok(mut child) = handle.child.lock() {
+        stop_child(child.as_mut());
+    }
+}
+
 pub fn kill(id: u64) -> Result<(), String> {
     // 先把 entry 拿走 —— waiter 线程下一轮 try_wait 时会发现 entry 不见了直接 return，
     // 避免它在 child 已经被 drop 之后还去 emit 一个奇怪的 exit。
@@ -432,10 +489,17 @@ pub fn kill(id: u64) -> Result<(), String> {
     let Some(arc) = arc else {
         return Ok(());
     };
-    if let Ok(mut child) = arc.child.lock() {
-        let _ = child.kill();
-        // wait 一下确保进程真死了，避免僵尸；非阻塞失败也不返回错（用户 expected：UI 即时回到 view）。
-        let _ = child.wait();
-    }
+    stop_handle(arc.as_ref());
     Ok(())
+}
+
+/// 应用退出 / 在线更新前停止全部内嵌终端及其 CLI 后代。
+pub fn kill_all() {
+    let handles: Vec<Arc<PtyHandle>> = {
+        let mut ptys = map().lock().unwrap_or_else(|e| e.into_inner());
+        ptys.drain().map(|(_, handle)| handle).collect()
+    };
+    for handle in handles {
+        stop_handle(handle.as_ref());
+    }
 }

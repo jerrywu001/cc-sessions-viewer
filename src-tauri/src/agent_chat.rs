@@ -28,7 +28,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -124,6 +124,7 @@ struct CodexAppServerShared {
     response_cv: Condvar,
     next_request_id: AtomicU64,
     latest_usage: Mutex<Option<UsageSummary>>,
+    exited: AtomicBool,
 }
 
 struct ChatMeta {
@@ -138,6 +139,7 @@ struct ChatMeta {
     process_model: String,
     messages: Mutex<Vec<crate::types::Msg>>,
     turn_started_at_ms: Mutex<Option<u64>>,
+    session_lease: Mutex<Option<crate::runtime::SessionLease>>,
 }
 
 type ChatEntry = (Arc<ChatHandle>, Arc<ChatMeta>);
@@ -147,6 +149,27 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 fn map() -> &'static Mutex<HashMap<u64, ChatEntry>> {
     CHATS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn bind_chat_session(id: u64, agent: &str, session_id: &str) -> Result<(), String> {
+    let meta = {
+        let chats = map().lock().map_err(|e| e.to_string())?;
+        chats
+            .get(&id)
+            .map(|(_, meta)| meta.clone())
+            .ok_or_else(|| "chat not found".to_string())?
+    };
+    let mut lease = meta.session_lease.lock().map_err(|e| e.to_string())?;
+    if lease.is_none() {
+        *lease = Some(crate::runtime::acquire_session(
+            agent,
+            session_id,
+            crate::runtime::SessionOwner::Gui(id),
+        )?);
+    }
+    drop(lease);
+    *meta.session_id.lock().map_err(|e| e.to_string())? = Some(session_id.to_string());
+    Ok(())
 }
 
 fn now_ms() -> u64 {
@@ -272,6 +295,8 @@ fn build_piped_command(
     command: &AgentCommand,
     use_reclaude: bool,
 ) -> std::process::Command {
+    use std::os::unix::process::CommandExt;
+
     #[cfg(target_os = "macos")]
     const DEFAULT_SHELL: &str = "/bin/zsh";
     #[cfg(not(target_os = "macos"))]
@@ -288,6 +313,7 @@ fn build_piped_command(
     cmd.arg("-l").arg("-i").arg("-c").arg(&inner);
     cmd.env_remove("npm_config_prefix");
     cmd.current_dir(cwd);
+    cmd.process_group(0);
     cmd
 }
 
@@ -458,6 +484,20 @@ pub fn start(
     let use_reclaude = use_reclaude && agent == "claude";
     let source = agents::source(&agent)?;
     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+    let session_lease = if !fork {
+        session_id
+            .as_deref()
+            .map(|session_id| {
+                crate::runtime::acquire_session(
+                    &agent,
+                    session_id,
+                    crate::runtime::SessionOwner::Gui(id),
+                )
+            })
+            .transpose()?
+    } else {
+        None
+    };
     let pm_str = source.chat_process_model().as_str();
     let meta = Arc::new(ChatMeta {
         agent: agent.clone(),
@@ -471,6 +511,7 @@ pub fn start(
         process_model: pm_str.to_string(),
         messages: Mutex::new(preload_messages.unwrap_or_default()),
         turn_started_at_ms: Mutex::new(None),
+        session_lease: Mutex::new(session_lease),
     });
 
     match source.chat_process_model() {
@@ -490,20 +531,49 @@ pub fn start(
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
 
+            let spawn_permit = crate::runtime::spawn_permit()?;
             let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
-            let stdin = child.stdin.take().ok_or("failed to capture stdin")?;
-            let stdout = child.stdout.take().ok_or("failed to capture stdout")?;
-            let stderr = child.stderr.take().ok_or("failed to capture stderr")?;
+            if let Err(error) = crate::process_tree::register(child.id()) {
+                kill_and_wait(&mut child);
+                return Err(error);
+            }
+            let stdin = match child.stdin.take() {
+                Some(stdin) => stdin,
+                None => {
+                    kill_and_wait(&mut child);
+                    return Err("failed to capture stdin".into());
+                }
+            };
+            let stdout = match child.stdout.take() {
+                Some(stdout) => stdout,
+                None => {
+                    kill_and_wait(&mut child);
+                    return Err("failed to capture stdout".into());
+                }
+            };
+            let stderr = match child.stderr.take() {
+                Some(stderr) => stderr,
+                None => {
+                    kill_and_wait(&mut child);
+                    return Err("failed to capture stderr".into());
+                }
+            };
 
             let handle = Arc::new(ChatHandle::LongLived {
                 agent: agent.clone(),
                 stdin: Mutex::new(stdin),
                 child: Mutex::new(child),
             });
-            map()
-                .lock()
-                .map_err(|e| e.to_string())?
-                .insert(id, (handle, meta.clone()));
+            match map().lock() {
+                Ok(mut chats) => {
+                    chats.insert(id, (handle.clone(), meta.clone()));
+                }
+                Err(error) => {
+                    stop_handle(handle.as_ref());
+                    return Err(error.to_string());
+                }
+            }
+            drop(spawn_permit);
 
             let meta_for_reader = meta;
             let app_for_reader = app.clone();
@@ -535,17 +605,7 @@ pub fn start(
                 fork,
                 ephemeral,
             )?;
-            if let ChatHandle::CodexAppServer { shared } = &*handle {
-                if let Some(thread_id) = shared.thread_id.lock().ok().and_then(|g| g.clone()) {
-                    if let Ok(mut g) = meta.session_id.lock() {
-                        *g = Some(thread_id);
-                    }
-                }
-            }
-            map()
-                .lock()
-                .map_err(|e| e.to_string())?
-                .insert(id, (handle, meta));
+            debug_assert!(matches!(&*handle, ChatHandle::CodexAppServer { .. }));
             return Ok(id);
         }
         ChatProcessModel::OneShotResume => {
@@ -565,10 +625,12 @@ pub fn start(
                 approved_command_prefixes: Mutex::new(Vec::new()),
                 use_reclaude,
             });
+            let spawn_permit = crate::runtime::spawn_permit()?;
             map()
                 .lock()
                 .map_err(|e| e.to_string())?
                 .insert(id, (handle, meta));
+            drop(spawn_permit);
         }
     }
 
@@ -644,6 +706,9 @@ fn codex_wait_response(
                 .get("result")
                 .cloned()
                 .unwrap_or(serde_json::Value::Null));
+        }
+        if shared.exited.load(Ordering::SeqCst) {
+            return Err("codex app-server exited before responding".to_string());
         }
         let elapsed = start.elapsed();
         if elapsed >= timeout {
@@ -1475,6 +1540,10 @@ fn usage_from_app_server_breakdown(v: &serde_json::Value) -> UsageSummary {
 }
 
 fn kill_and_wait(child: &mut Child) {
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    crate::process_tree::terminate(child.id());
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -1485,12 +1554,19 @@ fn stop_codex_app_server_child(shared: &CodexAppServerShared) {
     }
 }
 
-struct CodexAppServerStartupGuard(Option<Arc<CodexAppServerShared>>);
+struct CodexAppServerStartupGuard {
+    id: u64,
+    shared: Arc<CodexAppServerShared>,
+    armed: bool,
+}
 
 impl Drop for CodexAppServerStartupGuard {
     fn drop(&mut self) {
-        if let Some(shared) = self.0.as_ref() {
-            stop_codex_app_server_child(shared);
+        if self.armed {
+            if let Ok(mut chats) = map().lock() {
+                chats.remove(&self.id);
+            }
+            stop_codex_app_server_child(&self.shared);
         }
     }
 }
@@ -1500,7 +1576,7 @@ fn start_codex_app_server(
     app: AppHandle,
     id: u64,
     meta: Arc<ChatMeta>,
-    _agent: String,
+    agent: String,
     cwd: String,
     session_id: Option<String>,
     permission_mode: &str,
@@ -1515,7 +1591,12 @@ fn start_codex_app_server(
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    let spawn_permit = crate::runtime::spawn_permit()?;
     let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
+    if let Err(error) = crate::process_tree::register(child.id()) {
+        kill_and_wait(&mut child);
+        return Err(error);
+    }
     let stdin = match child.stdin.take() {
         Some(stdin) => stdin,
         None => {
@@ -1555,8 +1636,26 @@ fn start_codex_app_server(
         response_cv: Condvar::new(),
         next_request_id: AtomicU64::new(1),
         latest_usage: Mutex::new(None),
+        exited: AtomicBool::new(false),
     });
-    let mut startup_guard = CodexAppServerStartupGuard(Some(shared.clone()));
+    let handle = Arc::new(ChatHandle::CodexAppServer {
+        shared: shared.clone(),
+    });
+    match map().lock() {
+        Ok(mut chats) => {
+            chats.insert(id, (handle.clone(), meta.clone()));
+        }
+        Err(error) => {
+            stop_codex_app_server_child(&shared);
+            return Err(error.to_string());
+        }
+    }
+    drop(spawn_permit);
+    let mut startup_guard = CodexAppServerStartupGuard {
+        id,
+        shared: shared.clone(),
+        armed: true,
+    };
 
     spawn_stderr_pump(app.clone(), id, stderr);
     let app_for_reader = app.clone();
@@ -1650,9 +1749,10 @@ fn start_codex_app_server(
     if let Ok(mut g) = shared.thread_id.lock() {
         *g = Some(thread_id.clone());
     }
-    startup_guard.0 = None;
+    bind_chat_session(id, &agent, &thread_id)?;
+    startup_guard.armed = false;
 
-    Ok(Arc::new(ChatHandle::CodexAppServer { shared }))
+    Ok(handle)
 }
 
 fn emit_codex_init_if_needed(id: u64, shared: &CodexAppServerShared) {
@@ -2888,6 +2988,14 @@ fn codex_app_server_reader(
             _ => {}
         }
     }
+    shared.exited.store(true, Ordering::SeqCst);
+    shared.response_cv.notify_all();
+    if let Ok(mut child) = shared.child.lock() {
+        let _ = child.wait();
+    }
+    if let Ok(mut chats) = map().lock() {
+        chats.remove(&id);
+    }
     let _ = app.emit(
         "agent-chat://exit",
         ExitPayload {
@@ -2923,20 +3031,30 @@ fn reader_loop(
                 session_id,
                 api_key_source,
             } => {
-                if let Some(s) = session_id.as_ref() {
-                    if let Ok(mut g) = meta.session_id.lock() {
-                        *g = Some(s.clone());
-                    }
+                let bind_error = session_id
+                    .as_ref()
+                    .and_then(|session_id| bind_chat_session(id, &agent, session_id).err());
+                if let Some(error) = bind_error {
+                    let _ = app.emit(
+                        "agent-chat://stderr",
+                        StderrPayload {
+                            chat_id: id,
+                            line: error,
+                        },
+                    );
+                    let _ = stop(id);
+                    false
+                } else {
+                    app.emit(
+                        "agent-chat://init",
+                        InitPayload {
+                            chat_id: id,
+                            session_id,
+                            api_key_source,
+                        },
+                    )
+                    .is_ok()
                 }
-                app.emit(
-                    "agent-chat://init",
-                    InitPayload {
-                        chat_id: id,
-                        session_id,
-                        api_key_source,
-                    },
-                )
-                .is_ok()
             }
             ChatEvent::Result { ok, usage } => {
                 mark_turn_finished(&meta);
@@ -3247,16 +3365,45 @@ fn spawn_oneshot_turn(id: u64, arc: Arc<ChatHandle>, spec: OneShotTurnSpec) -> R
         )
         .ok_or_else(|| format!("{agent} 暂不支持 GUI 聊天模式"))?;
 
+    let mut current = current.lock().map_err(|e| e.to_string())?;
+    if current.is_some() {
+        return Err("a turn is already running for this chat".to_string());
+    }
+    let spawn_permit = crate::runtime::spawn_permit()?;
+    let still_registered = map()
+        .lock()
+        .map_err(|e| e.to_string())?
+        .get(&id)
+        .is_some_and(|(handle, _)| Arc::ptr_eq(handle, &arc));
+    if !still_registered {
+        return Err("chat not found".to_string());
+    }
     let mut cmd = build_piped_command(cwd, &command, *use_reclaude);
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
-    let stdout = child.stdout.take().ok_or("failed to capture stdout")?;
-    let stderr = child.stderr.take().ok_or("failed to capture stderr")?;
-    if let Ok(mut g) = current.lock() {
-        *g = Some(child);
+    if let Err(error) = crate::process_tree::register(child.id()) {
+        kill_and_wait(&mut child);
+        return Err(error);
     }
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            kill_and_wait(&mut child);
+            return Err("failed to capture stdout".into());
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            kill_and_wait(&mut child);
+            return Err("failed to capture stderr".into());
+        }
+    };
+    *current = Some(child);
+    drop(current);
+    drop(spawn_permit);
     spawn_stderr_pump(app.clone(), id, stderr);
     let app_for_reader = app.clone();
     let agent_for_reader = agent.clone();
@@ -3304,6 +3451,7 @@ fn kill_current_oneshot(arc: &Arc<ChatHandle>) {
     if let ChatHandle::OneShot { current, .. } = &**arc {
         if let Ok(mut g) = current.lock() {
             if let Some(child) = g.as_mut() {
+                crate::process_tree::terminate(child.id());
                 let _ = child.kill();
             }
         }
@@ -3475,15 +3623,30 @@ fn oneshot_turn_reader(
                         *g = Some(s.clone());
                     }
                 }
-                app.emit(
-                    "agent-chat://init",
-                    InitPayload {
-                        chat_id: id,
-                        session_id,
-                        api_key_source,
-                    },
-                )
-                .is_ok()
+                let bind_error = session_id
+                    .as_ref()
+                    .and_then(|session_id| bind_chat_session(id, &agent, session_id).err());
+                if let Some(error) = bind_error {
+                    let _ = app.emit(
+                        "agent-chat://stderr",
+                        StderrPayload {
+                            chat_id: id,
+                            line: error,
+                        },
+                    );
+                    let _ = stop(id);
+                    false
+                } else {
+                    app.emit(
+                        "agent-chat://init",
+                        InitPayload {
+                            chat_id: id,
+                            session_id,
+                            api_key_source,
+                        },
+                    )
+                    .is_ok()
+                }
             }
             ChatEvent::Result { ok, usage } => {
                 saw_result = true;
@@ -3538,19 +3701,22 @@ pub fn stop(id: u64) -> Result<(), String> {
     let Some((arc, _meta)) = entry else {
         return Ok(());
     };
-    match &*arc {
+    stop_handle(arc.as_ref());
+    Ok(())
+}
+
+fn stop_handle(handle: &ChatHandle) {
+    match handle {
         ChatHandle::LongLived { child, .. } => {
             if let Ok(mut child) = child.lock() {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_and_wait(&mut child);
             }
         }
         ChatHandle::OneShot { current, .. } => {
             // 杀掉当前在跑的那一轮（如果有）；没有在跑就只是从 map 摘除。
             if let Ok(mut g) = current.lock() {
                 if let Some(mut c) = g.take() {
-                    let _ = c.kill();
-                    let _ = c.wait();
+                    kill_and_wait(&mut c);
                 }
             }
         }
@@ -3558,7 +3724,18 @@ pub fn stop(id: u64) -> Result<(), String> {
             stop_codex_app_server_child(shared);
         }
     }
-    Ok(())
+}
+
+/// 应用退出 / 在线更新前停止全部 GUI chat。先 drain 注册表，再逐个等待进程树退出；
+/// waiter 线程看到 entry 已移除会直接结束，不会在关机过程中继续向 WebView emit。
+pub fn stop_all() {
+    let entries: Vec<ChatEntry> = {
+        let mut chats = map().lock().unwrap_or_else(|e| e.into_inner());
+        chats.drain().map(|(_, entry)| entry).collect()
+    };
+    for (handle, _) in entries {
+        stop_handle(handle.as_ref());
+    }
 }
 
 /// 仅中断当前这轮生成，不结束 chat 会话本身。
@@ -3773,30 +3950,39 @@ pub fn list_running_chats() -> Vec<RunningChatInfo> {
     };
     guard
         .iter()
-        .map(|(id, (_handle, meta))| RunningChatInfo {
-            chat_id: *id,
-            agent: meta.agent.clone(),
-            project_key: meta.project_key.clone(),
-            cwd: meta.cwd.clone(),
-            session_id: meta.session_id.lock().ok().and_then(|g| g.clone()),
-            title: meta.title.lock().map(|g| g.clone()).unwrap_or_default(),
-            messages: meta.messages.lock().map(|g| g.clone()).unwrap_or_default(),
-            turn_state: if meta
-                .turn_started_at_ms
-                .lock()
-                .ok()
-                .and_then(|g| *g)
-                .is_some()
-            {
-                "running".to_string()
-            } else {
-                "idle".to_string()
-            },
-            turn_started_at_ms: meta.turn_started_at_ms.lock().ok().and_then(|g| *g),
-            permission_mode: meta.permission_mode.clone(),
-            model: meta.model.clone(),
-            effort: meta.effort.clone(),
-            process_model: meta.process_model.clone(),
+        .filter_map(|(id, (handle, meta))| {
+            if matches!(
+                &**handle,
+                ChatHandle::CodexAppServer { shared }
+                    if shared.thread_id.lock().ok().and_then(|g| g.clone()).is_none()
+            ) {
+                return None;
+            }
+            Some(RunningChatInfo {
+                chat_id: *id,
+                agent: meta.agent.clone(),
+                project_key: meta.project_key.clone(),
+                cwd: meta.cwd.clone(),
+                session_id: meta.session_id.lock().ok().and_then(|g| g.clone()),
+                title: meta.title.lock().map(|g| g.clone()).unwrap_or_default(),
+                messages: meta.messages.lock().map(|g| g.clone()).unwrap_or_default(),
+                turn_state: if meta
+                    .turn_started_at_ms
+                    .lock()
+                    .ok()
+                    .and_then(|g| *g)
+                    .is_some()
+                {
+                    "running".to_string()
+                } else {
+                    "idle".to_string()
+                },
+                turn_started_at_ms: meta.turn_started_at_ms.lock().ok().and_then(|g| *g),
+                permission_mode: meta.permission_mode.clone(),
+                model: meta.model.clone(),
+                effort: meta.effort.clone(),
+                process_model: meta.process_model.clone(),
+            })
         })
         .collect()
 }

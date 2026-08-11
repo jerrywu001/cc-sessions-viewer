@@ -2763,7 +2763,24 @@ async function startLiveChat(opts: {
 }
 
 /** 从会话详情开 / 续聊 live GUI chat（新开 chat tab，预载历史 + 上下文用量种子）。 */
-async function resumeChatFromSession(s: SessionMeta) {
+const pendingChatResumes = new Map<string, Promise<void>>()
+
+function resumeChatFromSession(s: SessionMeta): Promise<void> {
+  const agent = chatAgent.value
+  const key = `${agent}:${s.id}`
+  const pending = pendingChatResumes.get(key)
+  if (pending) return pending
+
+  const started = resumeChatFromSessionOnce(s, agent)
+  pendingChatResumes.set(key, started)
+  const clear = () => {
+    if (pendingChatResumes.get(key) === started) pendingChatResumes.delete(key)
+  }
+  void started.then(clear, clear)
+  return started
+}
+
+async function resumeChatFromSessionOnce(s: SessionMeta, agent: Agent) {
   // 已有同 sessionId 的 chat tab → 直接切过去
   const existingChat = findViewTab(t => t.type === 'chat' && t.chatSession?.sessionId === s.id)
   if (existingChat) {
@@ -2781,7 +2798,7 @@ async function resumeChatFromSession(s: SessionMeta) {
   }
   // 旧版本可能在关闭已切为 read 的 tab 时只丢 UI 引用、没有停止后台 chat。即使 tab 已不在，
   // 也先复用仍存活的 ChatSession，避免为同一 Codex thread 再起一个 writer。
-  const detachedChat = findChatBySourceSession(chatAgent.value, s.id)
+  const detachedChat = findChatBySourceSession(agent, s.id)
   if (detachedChat) {
     if (existingRead) {
       existingRead.type = 'chat'
@@ -2806,14 +2823,14 @@ async function resumeChatFromSession(s: SessionMeta) {
     preload = existingRead.msgs
   } else if (s.path) {
     try {
-      preload = await api.readSession(chatAgent.value, s.path)
+      preload = await api.readSession(agent, s.path)
     } catch {
       preload = []
     }
   }
   let initialUsage: UsageSummary | undefined
   try {
-    initialUsage = await api.sessionContextUsage(chatAgent.value, s.path)
+    initialUsage = await api.sessionContextUsage(agent, s.path)
   } catch {
     initialUsage = undefined
   }
@@ -2821,7 +2838,7 @@ async function resumeChatFromSession(s: SessionMeta) {
   const projectKey = activeProject.value?.dirName ?? activeDir.value ?? ''
   activeUiId.value = null
   await startChat({
-    agent: chatAgent.value,
+    agent,
     projectKey,
     cwd,
     sessionId: s.id,
@@ -2839,7 +2856,7 @@ async function resumeChatFromSession(s: SessionMeta) {
       } else {
         createViewTab({
           type: 'chat',
-          agent: chatAgent.value,
+          agent,
           projectKey,
           title: s.title,
           chatSession: chatSession,

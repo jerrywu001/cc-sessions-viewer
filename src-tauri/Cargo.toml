@@ -53,6 +53,7 @@ ureq = { version = "2", features = ["json"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
 # `/fork`：克隆会话时给新 transcript 生成全新 session id / 消息 uuid（v4）。
 uuid = { version = "1", features = ["v4"] }
 # 背景素材按内容去重，避免同一图片 / 视频被重复复制到应用缓存。
@@ -85,4 +86,15 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSStatusBar", "NSStatusBarButton", "NSStatusItem",
     "NSImage", "NSGraphics", "NSParagraphStyle",
     "NSTextField", "NSControl", "NSText", "NSStackView", "NSBox",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
 ] }

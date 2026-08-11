@@ -24,7 +24,9 @@ mod git;
 #[cfg(target_os = "macos")]
 mod menu;
 mod panic_log;
+mod process_tree;
 mod pty;
+mod runtime;
 pub mod stats;
 mod trash;
 #[cfg(target_os = "macos")]
@@ -792,6 +794,7 @@ fn pty_spawn(
         rows,
         color_scheme.as_deref(),
         use_reclaude.unwrap_or(false),
+        Some((agent, session_id)),
     )
 }
 
@@ -822,6 +825,7 @@ fn pty_spawn_new(
         rows,
         color_scheme.as_deref(),
         use_reclaude.unwrap_or(false),
+        None,
     )
 }
 
@@ -853,6 +857,18 @@ fn pty_resize(id: u64, cols: u16, rows: u16) -> Result<(), String> {
 #[tauri::command]
 fn pty_kill(id: u64) -> Result<(), String> {
     pty::kill(id)
+}
+
+fn cleanup_runtime_children_impl() {
+    runtime::begin_shutdown();
+    agent_chat::stop_all();
+    pty::kill_all();
+}
+
+/// 在线更新重启前由前端显式调用；正常退出另由 RunEvent::ExitRequested 兜底。
+#[tauri::command]
+fn cleanup_runtime_children() {
+    cleanup_runtime_children_impl();
 }
 
 // ---------- 程序化聊天（GUI chat）：管道子进程跑 stream-json ----------
@@ -1127,6 +1143,7 @@ fn resume_session(
     let command = agents::source(&agent)?
         .resume_command(&session_id, &path)
         .with_extra_args(&extra_args);
+    runtime::ensure_session_available(&agent, &session_id)?;
     spawn_terminal(&command, &cwd, &terminal_app)
 }
 
@@ -2301,6 +2318,13 @@ fn pin_traffic_lights(window: &tauri::WebviewWindow) {
 pub fn run() {
     panic_log::install();
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
@@ -2369,6 +2393,7 @@ pub fn run() {
             pty_write,
             pty_resize,
             pty_kill,
+            cleanup_runtime_children,
             agent_chat_start,
             agent_chat_list_running,
             agent_chat_send,
@@ -2511,6 +2536,7 @@ pub fn run() {
                     std::thread::spawn(move || {
                         // 给前端 before-quit 处理器一拍时间把状态写进 localStorage
                         std::thread::sleep(std::time::Duration::from_millis(300));
+                        cleanup_runtime_children_impl();
                         for (_, w) in app.webview_windows() {
                             let _ = w.destroy();
                         }
