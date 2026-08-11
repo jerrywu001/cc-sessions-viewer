@@ -15,6 +15,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 import {
   chatEffectiveEffortForTest,
   chatOnDeltaForTest,
+  chatOnExitForTest,
   chatOnMsgForTest,
   chatOnResultForTest,
   canSteerQueued,
@@ -25,6 +26,7 @@ import {
   removeQueued,
   respondPermission,
   respondQuestion,
+  sendPrompt,
   startChat,
   steerQueued,
   shouldDropDuplicatePatchOutputForTest,
@@ -156,6 +158,85 @@ describe('chatSessions Claude API-key compatibility', () => {
     expect(session.msgs).toHaveLength(1)
     expect(session.msgs[0].role).toBe('user')
     expect(session.msgs[0].blocks[0].text).toBe('[Request interrupted by user]')
+  })
+})
+
+describe('chatSessions recovery after an idle child exit', () => {
+  beforeEach(() => {
+    invokeMock.mockReset()
+  })
+
+  it('keeps the chat usable and resumes immediately when the user sends again', async () => {
+    invokeMock.mockResolvedValueOnce({ chatId: 90, processModel: 'longLivedStdin' })
+    const session = await startChat({
+      agent: 'claude',
+      projectKey: 'p',
+      cwd: '/tmp',
+      sessionId: 'resume-90',
+      title: 'C',
+    })
+    invokeMock.mockReset()
+    invokeMock.mockResolvedValueOnce({ chatId: 91, processModel: 'longLivedStdin' })
+
+    chatOnExitForTest(session, { chatId: 90, code: -1 })
+    expect(session.chatId).toBeNull()
+    expect(session.needsResume).toBe(true)
+    expect(session.status).toBe('running')
+    expect(invokeMock).not.toHaveBeenCalled()
+
+    await sendPrompt(session, 'continue')
+
+    expect(session.chatId).toBe(91)
+    expect(session.status).toBe('running')
+    expect(invokeMock).toHaveBeenCalledWith(
+      'agent_chat_start',
+      expect.objectContaining({ sessionId: 'resume-90' }),
+    )
+  })
+
+  it('automatically resumes after a short grace period', async () => {
+    vi.useFakeTimers()
+    invokeMock.mockResolvedValueOnce({ chatId: 93, processModel: 'longLivedStdin' })
+    const session = await startChat({
+      agent: 'claude',
+      projectKey: 'p',
+      cwd: '/tmp',
+      sessionId: 'resume-93',
+      title: 'C',
+    })
+    invokeMock.mockReset()
+    invokeMock.mockResolvedValueOnce({ chatId: 94, processModel: 'longLivedStdin' })
+
+    chatOnExitForTest(session, { chatId: 93, code: -1 })
+    await vi.advanceTimersByTimeAsync(750)
+
+    expect(session.chatId).toBe(94)
+    expect(session.needsResume).toBe(false)
+    expect(session.status).toBe('running')
+    expect(invokeMock).toHaveBeenCalledWith(
+      'agent_chat_start',
+      expect.objectContaining({ sessionId: 'resume-93' }),
+    )
+  })
+
+  it('keeps a transient resume failure retryable instead of ending the chat', async () => {
+    invokeMock.mockResolvedValueOnce({ chatId: 92, processModel: 'longLivedStdin' })
+    const session = await startChat({
+      agent: 'claude',
+      projectKey: 'p',
+      cwd: '/tmp',
+      sessionId: 'resume-92',
+      title: 'C',
+    })
+    invokeMock.mockReset()
+    invokeMock.mockRejectedValueOnce(new Error('temporary startup failure'))
+
+    chatOnExitForTest(session, { chatId: 92, code: -1 })
+    await sendPrompt(session, 'continue')
+
+    expect(session.status).toBe('running')
+    expect(session.needsResume).toBe(true)
+    expect(session.errorMessage).toContain('temporary startup failure')
   })
 })
 

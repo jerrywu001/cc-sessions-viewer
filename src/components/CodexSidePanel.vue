@@ -198,7 +198,7 @@ const fabStyle = computed(() => {
 // ---------- 运行态 ----------
 const running = computed(() => props.session.turnState === 'running')
 const ready = computed(
-  () => props.session.status === 'running' && props.session.chatId !== null,
+  () => props.session.status === 'running' && (props.session.chatId !== null || props.session.needsResume),
 )
 const elapsedSec = computed(() =>
   running.value ? Math.max(0, Math.floor((now.value - props.session.turnStartedAt) / 1000)) : 0,

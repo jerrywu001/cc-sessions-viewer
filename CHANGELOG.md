@@ -6,6 +6,48 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ---
 
+## [v0.3.17]
+
+### Bug Fixes
+
+- **Reliable chat-runtime cleanup** — runtime child processes and Codex output writers are now owned and released exactly once, preventing orphaned processes, duplicate output handling, and stale active-turn state.
+- **Idle chat recovery** — when a GUI chat process exits unexpectedly, its session lease is released before a delayed retry. The composer stays usable and queued messages are retained until recovery succeeds.
+- **Codex Chat startup on macOS** — Codex app-server no longer starts in an incompatible isolated process group, preventing initialization timeouts that incorrectly showed `Session ended`.
+- **Drafts survive chat remounts** — switching views or reopening a GUI chat no longer discards unsent text, images, or file attachments.
+- **Stable live-status timer** — long tool summaries no longer squeeze elapsed time onto multiple lines; the timer stays readable while the tool label wraps.
+- **Wallpaper-aware rich content** — file diffs, Markdown tables, Mermaid diagrams, and block math now use readable translucent surfaces over a custom background.
+
+### Maintenance
+
+- **Rust 1.97 CI compatibility** — grouped PTY launch options into a typed configuration object so strict Clippy checks pass on the current stable toolchain.
+
+## [v0.3.16]
+
+### Bug Fixes
+
+- **Background media clarity** — background-video entries are marked with an MP4 tag, and light-theme terminal text selections remain readable when a custom background image is active.
+- **Codex app-server startup timing** — GUI chat waits for the app-server to be ready before sending a turn, avoiding early-send failures.
+- **Codex turn cleanup and chat contrast** — completed Codex writers are released promptly, and user message bubbles use a softer contrast treatment.
+
+### Tests
+
+- Added coverage for MP4 background-media labeling and app-server readiness before a chat turn begins.
+
+## [v0.3.15]
+
+### Features
+
+- **Edit and fork chat prompts** — cancelled or historical user prompts can be restored to the composer and continued in a new branch without carrying the discarded prompt or partial answer forward.
+- **Clearer chat navigation** — GUI chat tabs surface running, completed, blocked, and failed states consistently; project drag ordering includes a floating preview and clearer insertion feedback.
+
+### Improvements
+
+- **More resilient composer interactions** — improved draft switching, IME handling, and `@` file mentions, including relative workspace paths and an explicit empty-result state.
+
+### Tests
+
+- Added coverage for editable prompt history, fork boundaries, composer mentions and drafts, project reordering, and GUI-chat tab status transitions.
+
 ## [v0.3.14]
 
 ### Features

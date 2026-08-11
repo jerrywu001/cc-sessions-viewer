@@ -82,8 +82,13 @@ function inline(text: string): string {
     const idx = codes.push(code) - 1
     return `${SENT}CODE${idx}${SENT}`
   })
-  // 行内数学 $...$ → 占位（保护内容不被后续 pass 误改）
+  // 行内数学 $...$ / \(...\) → 占位（保护内容不被后续 pass 误改）。
+  // Claude / ChatGPT 常用 \(...\)，而 $...$ 则是 Markdown 社区更常见的写法。
   s = s.replace(/\$([^\$\n]+?)\$/g, (_m, expr) => {
+    const idx = codes.push(`MATH:${expr}`) - 1
+    return `${SENT}CODE${idx}${SENT}`
+  })
+  s = s.replace(/(?<!\\)\\\(([^\n]+?)\\\)/g, (_m, expr) => {
     const idx = codes.push(`MATH:${expr}`) - 1
     return `${SENT}CODE${idx}${SENT}`
   })
@@ -609,13 +614,19 @@ function renderTextImpl(raw: string, cacheNested = true): string {
 
   let i = 0
   while (i < lines.length) {
-    // 块级数学 $$...$$
-    if (lines[i].trim() === '$$') {
+    // 块级数学 $$...$$ / \[...\]。后者是 LaTex 的标准显示数学分隔符，
+    // Claude / ChatGPT 在解释数学问题时经常使用。
+    const displayMathClose = lines[i].trim() === '$$'
+      ? '$$'
+      : lines[i].trim() === '\\['
+        ? '\\]'
+        : null
+    if (displayMathClose) {
       const body: string[] = []
       let j = i + 1
       let closed = false
       for (; j < lines.length; j++) {
-        if (lines[j].trim() === '$$') { closed = true; break }
+        if (lines[j].trim() === displayMathClose) { closed = true; break }
         body.push(lines[j])
       }
       flushText()
@@ -624,21 +635,28 @@ function renderTextImpl(raw: string, cacheNested = true): string {
       i = closed ? j + 1 : j
       continue
     }
-    // <details> 折叠
+    // <details> 折叠。嵌套的 details 必须按深度配对：不能在内层的 </details>
+    // 处提前结束外层，否则真正的外层闭合标签会泄漏为普通文本。
     if (lines[i].trim().startsWith('<details')) {
-      const block: string[] = [lines[i]]
-      let j = i + 1
+      const block: string[] = []
+      let j = i
       let closed = false
+      let depth = 0
       for (; j < lines.length; j++) {
         block.push(lines[j])
-        if (lines[j].trim().includes('</details>')) { closed = true; j++; break }
+        const opens = lines[j].match(/<details\b[^>]*>/gi)?.length ?? 0
+        const closes = lines[j].match(/<\/details\s*>/gi)?.length ?? 0
+        depth += opens - closes
+        if (depth <= 0) { closed = true; j++; break }
       }
       if (!closed) j = lines.length
       flushText()
       const raw = block.join('\n')
       const summary = /<summary>([\s\S]*?)<\/summary>/.exec(raw)?.[1]?.trim() ?? ''
       const content = raw
-        .replace(/<\/?details[^>]*>/g, '')
+        // 只剥掉当前层的开/闭标签，保留内层标签给递归 renderText() 继续处理。
+        .replace(/^\s*<details\b[^>]*>/i, '')
+        .replace(/<\/details\s*>\s*$/, '')
         .replace(/<summary>[\s\S]*?<\/summary>/, '')
         .trim()
       const bodyHtml = cacheNested ? renderText(content) : renderTextImpl(content, false)

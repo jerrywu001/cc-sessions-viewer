@@ -463,6 +463,12 @@ button {
   background: color-mix(in srgb, var(--code-bg) 74%, transparent) !important;
   border-color: var(--border);
 }
+:root.has-custom-background .code-copy {
+  background: color-mix(in srgb, var(--surface) 74%, transparent);
+}
+:root.has-custom-background .code-copy:hover {
+  background: color-mix(in srgb, var(--surface-hover) 64%, transparent);
+}
 :root.has-custom-background .codex-patch-file {
   background: color-mix(in srgb, var(--code-bg) 74%, transparent);
 }
@@ -471,6 +477,40 @@ button {
 }
 :root.has-custom-background .tool-chip {
   background: color-mix(in srgb, var(--surface-2) 64%, transparent);
+}
+
+/* Markdown / 工具结果里的富内容不是普通正文：diff、表格、Mermaid 和数学公式各自
+ * 都会再铺一层 surface 或 code-bg。壁纸模式下把这些局部容器也切到同一套半透明
+ * 表层，避免它们变成突兀的实色黑块；行级增删色和 SVG 本身仍保持原样。 */
+:root.has-custom-background .block-card,
+:root.has-custom-background .block-card .block-body,
+:root.has-custom-background .block-card .block-summary,
+:root.has-custom-background .md-details summary,
+:root.has-custom-background .md-math-block,
+:root.has-custom-background .md-mermaid,
+:root.has-custom-background .md-table {
+  background: color-mix(in srgb, var(--surface) 74%, transparent);
+}
+:root.has-custom-background.theme-dark .block-card,
+:root.has-custom-background.theme-dark .block-card .block-body {
+  background: color-mix(in srgb, var(--surface-2) 74%, transparent);
+}
+:root.has-custom-background .block-card.text-diff-result,
+:root.has-custom-background .text-diff-result .block-body,
+:root.has-custom-background .md-mermaid-source {
+  background: color-mix(in srgb, var(--code-bg) 74%, transparent);
+}
+:root.has-custom-background .text-diff-result .block-summary,
+:root.has-custom-background .md-math-block,
+:root.has-custom-background .md-table thead,
+:root.has-custom-background .mermaid-export {
+  background: color-mix(in srgb, var(--surface-2) 74%, transparent);
+}
+:root.has-custom-background .block-summary:hover,
+:root.has-custom-background .md-details summary:hover,
+:root.has-custom-background .md-table tbody tr:hover td,
+:root.has-custom-background .mermaid-export:hover {
+  background: color-mix(in srgb, var(--surface-hover) 64%, transparent);
 }
 .app-body {
   flex: 1;
@@ -3892,6 +3932,9 @@ details[open] > .thinking-summary .thinking-chev {
   }
 }
 .chat-running-time {
+  flex: 0 0 auto;
+  min-width: 48px;
+  white-space: nowrap;
   color: var(--text-dim);
   opacity: 0.8;
 }

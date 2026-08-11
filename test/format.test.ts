@@ -105,6 +105,41 @@ describe('renderText', () => {
     expect(renderText('line1\nline2')).toContain('line1<br>line2')
   })
 
+  it('recognizes LaTex parenthesis and bracket delimiters used by Claude and ChatGPT', () => {
+    const html = renderText(String.raw`求矩阵 \(A\) 的零空间：
+
+\[
+A\boldsymbol c=0.
+\]
+
+每组参数 \(\boldsymbol\eta\) 都对应一个紧致格式。`)
+
+    expect(html).toContain('class="md-math-inline" data-math="A"')
+    expect(html).toContain('class="md-math-block" data-math="A\\boldsymbol c=0."')
+    expect(html).toContain('class="md-math-inline" data-math="\\boldsymbol\\eta"')
+    // Delimiters become renderer placeholders rather than visible prose.
+    expect(html).not.toContain('<div class="text-run">\\[<br>')
+  })
+
+  it('pairs nested details tags without leaking the outer closing tag', () => {
+    const html = renderText(`<details>
+  <summary>点击展开详情</summary>
+
+  这里是可折叠的内容。
+
+  <details>
+    <summary>嵌套详情</summary>
+
+    这是嵌套内容。
+  </details>
+</details>`)
+
+    expect(html.match(/<details class="md-details">/g)).toHaveLength(2)
+    expect(html).toContain('<summary>点击展开详情</summary>')
+    expect(html).toContain('<summary>嵌套详情</summary>')
+    expect(html).not.toContain('<div class="text-run">&lt;/details&gt;</div>')
+  })
+
   it('linkifies a bare URL but keeps a backtick-wrapped URL literal', () => {
     expect(renderText('see https://x.com here')).toContain(
       '<a href="https://x.com" target="_blank" rel="noopener">https://x.com</a>',

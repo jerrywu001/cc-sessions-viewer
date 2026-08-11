@@ -790,11 +790,13 @@ fn pty_spawn(
         app,
         cwd,
         command,
-        cols,
-        rows,
-        color_scheme.as_deref(),
-        use_reclaude.unwrap_or(false),
-        Some((agent, session_id)),
+        pty::PtySpawnOptions {
+            cols,
+            rows,
+            color_scheme: color_scheme.as_deref(),
+            use_reclaude: use_reclaude.unwrap_or(false),
+            session: Some((agent, session_id)),
+        },
     )
 }
 
@@ -821,11 +823,13 @@ fn pty_spawn_new(
         app,
         cwd,
         command,
-        cols,
-        rows,
-        color_scheme.as_deref(),
-        use_reclaude.unwrap_or(false),
-        None,
+        pty::PtySpawnOptions {
+            cols,
+            rows,
+            color_scheme: color_scheme.as_deref(),
+            use_reclaude: use_reclaude.unwrap_or(false),
+            session: None,
+        },
     )
 }
 

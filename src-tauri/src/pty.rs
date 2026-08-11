@@ -74,6 +74,15 @@ struct PtyHandle {
     _session_lease: Option<crate::runtime::SessionLease>,
 }
 
+/// Agent PTY 启动所需的可选参数；收拢后避免调用方传递一串易混淆的基础类型。
+pub struct PtySpawnOptions<'a> {
+    pub cols: u16,
+    pub rows: u16,
+    pub color_scheme: Option<&'a str>,
+    pub use_reclaude: bool,
+    pub session: Option<(String, String)>,
+}
+
 static PTYS: OnceLock<Mutex<HashMap<u64, Arc<PtyHandle>>>> = OnceLock::new();
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -221,19 +230,15 @@ pub fn spawn(
     app: AppHandle,
     cwd: String,
     command: AgentCommand,
-    cols: u16,
-    rows: u16,
-    color_scheme: Option<&str>,
-    use_reclaude: bool,
-    session: Option<(String, String)>,
+    options: PtySpawnOptions<'_>,
 ) -> Result<u64, String> {
     let cmd = build_shell_command(
         &cwd,
         &command,
-        PtyColorScheme::parse(color_scheme),
-        use_reclaude,
+        PtyColorScheme::parse(options.color_scheme),
+        options.use_reclaude,
     );
-    spawn_raw(app, &cwd, cmd, cols, rows, session)
+    spawn_raw(app, &cwd, cmd, options.cols, options.rows, options.session)
 }
 
 /// 启动一个纯 shell PTY（不跑任何 agent CLI），用于在项目目录里执行任意命令。

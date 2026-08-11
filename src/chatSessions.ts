@@ -108,6 +108,11 @@ export interface ChatSession {
   lastTurnMs: number
   /** 进程生命周期。 */
   status: 'spawning' | 'running' | 'exited' | 'error'
+  /**
+   * 子进程在空闲时自行退出，但 session 本身仍可续聊。下一次发送时才重新拉起，避免
+   * app-server 的空闲回收与前端后台自动重启互相打架。
+   */
+  needsResume?: boolean
   /** 最近一次 result 的 token 用量。 */
   usage?: UsageSummary
   /** 最近一条 assistant 记录的模型全名（如 "claude-opus-4-8"）—— §10.5 上下文窗口换算用。 */
@@ -629,6 +634,9 @@ export function chatOnResultForTest(s: ChatSession, p: ChatResultPayload) {
 }
 
 function onExit(s: ChatSession, p: ChatExitPayload) {
+  // 旧进程的 exit 可能在自动重启完成后才抵达；此时当前 chatId 已属于新进程，
+  // 不能让旧事件再次把可用会话标成 ended。
+  if (s.chatId !== p.chatId) return
   if (s.suppressNextExit) {
     s.suppressNextExit = false
     return
@@ -639,24 +647,66 @@ function onExit(s: ChatSession, p: ChatExitPayload) {
   if (p.code !== 0 && !s.errorMessage) {
     s.errorMessage = s.stderrTail.slice(-3).join('\n') || `exited (${p.code})`
   }
-  // 自动重启：进程退出后尝试 restart-with-resume，保持 chat 可用。
-  void autoRestart(s)
+  // Codex app-server 会自行回收长时间空闲的进程。此前这里立刻后台 resume，新的
+  // app-server 又会立即退出，最后被冷却逻辑误标为 Session ended。进程已死时没有
+  // 并发写入风险，改为在用户下一次发送时再恢复同一 session。
+  sessionsByChatId.delete(p.chatId)
+  pendingByChatId.delete(p.chatId)
+  resumeCancelled.delete(s)
+  s.chatId = null
+  s.needsResume = true
+  s.status = 'running'
+  // 已在队列里的用户消息不必等第二次输入；把它视为“下一次发送”，恢复后继续发。
+  drainQueue(s)
+  scheduleResumeAfterExit(s)
 }
 
-const restartCooldown = new WeakMap<ChatSession, number>()
-async function autoRestart(s: ChatSession) {
+// app-server 偶发退出时，先留一点时间让旧进程完全收尾、释放底层资源，再恢复同一 thread。
+// 旧逻辑连续立刻重启，第二个 exit 会触发冷却并把聊天永久标成 ended；这里最多退避三次，
+// 始终保留按需恢复的入口，不能因为一次瞬时失败把输入框锁死。
+const AUTO_RESUME_BASE_DELAY_MS = 750
+const AUTO_RESUME_MAX_ATTEMPTS = 3
+const AUTO_RESUME_STABLE_MS = 10_000
+const resumeTimers = new WeakMap<ChatSession, number>()
+const resumeAttempts = new WeakMap<ChatSession, number>()
+const resumedAt = new WeakMap<ChatSession, number>()
+const resumeCancelled = new WeakSet<ChatSession>()
+
+function cancelScheduledResume(s: ChatSession) {
+  resumeCancelled.add(s)
+  const timer = resumeTimers.get(s)
+  if (timer !== undefined) window.clearTimeout(timer)
+  resumeTimers.delete(s)
+  s.needsResume = false
+}
+
+function scheduleResumeAfterExit(s: ChatSession) {
+  if (resumeCancelled.has(s) || resumeTimers.has(s) || s.chatId !== null || !s.needsResume || s.status !== 'running') return
   const now = Date.now()
-  const last = restartCooldown.get(s) ?? 0
-  if (now - last < 3000) {
-    if (s.status !== 'error') s.status = 'exited'
-    return
+  if (now - (resumedAt.get(s) ?? 0) >= AUTO_RESUME_STABLE_MS) {
+    resumeAttempts.delete(s)
   }
-  restartCooldown.set(s, now)
-  const old = s.chatId
-  if (old !== null) {
-    sessionsByChatId.delete(old)
-    pendingByChatId.delete(old)
-  }
+  const attempt = (resumeAttempts.get(s) ?? 0) + 1
+  if (attempt > AUTO_RESUME_MAX_ATTEMPTS) return
+  resumeAttempts.set(s, attempt)
+  const timer = window.setTimeout(() => {
+    resumeTimers.delete(s)
+    if (resumeCancelled.has(s) || s.chatId !== null || !s.needsResume || s.status !== 'running') return
+    void resumeParkedChat(s).then((resumed) => {
+      // 重连成功时把已保留在队列中的消息自动送出；失败则按退避重试，最终仍留给用户手动发送触发恢复。
+      if (resumed) drainQueue(s)
+      else scheduleResumeAfterExit(s)
+    })
+  }, AUTO_RESUME_BASE_DELAY_MS * 2 ** (attempt - 1))
+  resumeTimers.set(s, timer)
+}
+
+/** 按原 session 恢复后台进程；既供自动退避，也供用户发送消息时即时唤醒。 */
+async function resumeParkedChat(s: ChatSession): Promise<boolean> {
+  if (resumeCancelled.has(s)) return false
+  if (s.chatId !== null) return true
+  if (!s.needsResume || s.status === 'spawning') return false
+  s.status = 'spawning'
   try {
     const eff = sessionEffectiveEffort(s)
     const info = await api.agentChatStart(
@@ -670,16 +720,34 @@ async function autoRestart(s: ChatSession) {
       undefined,
       useReclaude.value,
     )
+    // 关闭操作可能正好发生在 app-server 握手期间；这时立刻收掉刚拉起的子进程，
+    // 不能把已关闭的 tab 重新注册成后台孤儿。
+    if (resumeCancelled.has(s)) {
+      void api.agentChatStop(info.chatId)
+      return false
+    }
     s.chatId = info.chatId
     s.processModel = info.processModel
     s.applied = { permissionMode: s.permissionMode, model: s.model, effort: eff }
     s.errorMessage = undefined
+    s.needsResume = false
     s.status = 'running'
+    resumedAt.set(s, Date.now())
     registerChat(info.chatId, s)
-    drainQueue(s)
-  } catch {
-    if (s.status !== 'error') s.status = 'exited'
+    return true
+  } catch (error) {
+    // app-server / lease 在退出的一瞬间仍可能未完全释放。不能把这类暂态错误等同于
+    // “会话不可恢复”，否则用户只看到 Session ended，也没法再试一次。
+    s.status = 'running'
+    s.needsResume = true
+    s.errorMessage = `Unable to restore this chat: ${String(error)}`
+    return false
   }
+}
+
+/** 仅供单测模拟子进程退出，覆盖自动恢复的状态机。 */
+export function chatOnExitForTest(s: ChatSession, p: ChatExitPayload) {
+  onExit(s, p)
 }
 
 function onStderr(s: ChatSession, p: ChatStderrPayload) {
@@ -772,9 +840,9 @@ function endTurn(s: ChatSession) {
 //（对齐 Claude CLI 的消息队列）。纯前端实现、后端零改动：sendPrompt 仍是「发一条」原语，
 // 队列只决定何时调它，故长驻（Claude）与 one-shot（Codex）通吃。
 
-/** 会话是否可发送（进程在、未退出 / 未出错）。 */
+/** 会话是否可发送（进程在，或已被空闲回收、可在发送前按原 session 恢复）。 */
 function chatUsable(s: ChatSession): boolean {
-  return s.chatId !== null && s.status !== 'exited' && s.status !== 'error'
+  return s.status === 'running' && (s.chatId !== null || s.needsResume === true)
 }
 
 /**
@@ -806,11 +874,23 @@ function drainQueue(session: ChatSession): void {
   if (session.turnState !== 'idle' || session.pendingSend) return
   if (session.queue.length === 0 || !chatUsable(session)) return
   const [next, ...rest] = session.queue
+  // 维持原先“发起即从待发列表移走”的即时反馈；仅当恢复尚未成功时再原样放回队首。
   session.queue = rest
   session.pendingSend = true
-  void sendPrompt(session, next.text, next.images, next.files).finally(() => {
-    session.pendingSend = false
-  })
+  let accepted = false
+  void sendPrompt(session, next.text, next.images, next.files)
+    .then((wasAccepted) => {
+      // 恢复前的暂态失败不能吞掉用户刚输入的内容；等自动/下一次恢复成功后仍由这条队列发送。
+      accepted = wasAccepted
+      if (!accepted && !session.queue.some((item) => item.id === next.id)) {
+        session.queue = [next, ...session.queue]
+      }
+    })
+    .finally(() => {
+      session.pendingSend = false
+      // 仅成功提交后才继续下一条；恢复暂态失败时保留队首，等恢复成功的回调再显式 drain。
+      if (accepted && session.queue.length && session.turnState === 'idle') drainQueue(session)
+    })
 }
 
 /** 移除一条待发消息（用户在待发列表点 ×）。 */
@@ -1120,12 +1200,13 @@ export async function sendPrompt(
   text: string,
   images: ChatImageAttachment[] = [],
   files: ChatFileAttachment[] = [],
-): Promise<void> {
+): Promise<boolean> {
   const trimmed = text.trim()
-  if (!trimmed && images.length === 0 && files.length === 0) return
-  if (session.chatId === null || session.status === 'exited' || session.status === 'error') {
-    return
+  if (!trimmed && images.length === 0 && files.length === 0) return false
+  if (session.status === 'exited' || session.status === 'error') {
+    return false
   }
+  if (session.chatId === null && !(await resumeParkedChat(session))) return false
 
   const { sendImages, sendText, textElements } = await preparePromptPayload(session, text, images, files)
 
@@ -1135,11 +1216,11 @@ export async function sendPrompt(
   // 就先 restart-with-resume 换新实例再发；one-shot 才能靠本轮 agentChatSend 直接生效。
   if (requiresRestartForSettings(session) && settingsChanged(session)) {
     const ok = await restartChat(session)
-    if (!ok) return // restart 失败：status 已置 error
+    if (!ok) return true // restart 失败：本条已本地回显，不能重新入队造成重复
   }
 
   const chatId = session.chatId
-  if (chatId === null) return // restart 兜底：进程没起来就别发
+  if (chatId === null) return false // restart 兜底：进程没起来就别发
 
   startTurn(session)
   try {
@@ -1158,6 +1239,7 @@ export async function sendPrompt(
     session.status = 'error'
     session.errorMessage = String(err)
   }
+  return true
 }
 
 /** 按当前 agent 的输入协议生成发送/引导共用的 app-server payload。 */
@@ -1312,6 +1394,7 @@ async function restartChat(s: ChatSession): Promise<boolean> {
  *  MVP 没有「不杀进程的软中断」，stop = kill 子进程 → 会话进入 exited，输入禁用。 */
 export async function stopChat(session: ChatSession): Promise<void> {
   clearQueue(session) // 停进程 → 待发队列作废。
+  cancelScheduledResume(session)
   if (session.chatId !== null) {
     try {
       await api.agentChatStop(session.chatId)
@@ -1397,6 +1480,11 @@ export async function interruptChat(session: ChatSession): Promise<void> {
  * one-shot（Codex）换一个 session_id 为空的新登记，下一轮即从零开始。
  */
 export async function clearChat(session: ChatSession): Promise<void> {
+  // 空闲回收后仍允许 `/clear` 真正开一个新上下文，而不是只清空视觉内容、下次发送又续回旧会话。
+  if (session.chatId === null && session.needsResume) {
+    const restored = await resumeParkedChat(session)
+    if (!restored) return
+  }
   // 立即视觉清屏 —— 无论后续 restart 成败，界面与上下文角标都应清零。
   session.msgs = []
   clearLivePreview(session)
@@ -1455,6 +1543,7 @@ export async function closeChat(uiId: number): Promise<void> {
   const idx = chatSessions.value.findIndex((c) => c.uiId === uiId)
   if (idx === -1) return
   const session = chatSessions.value[idx]
+  cancelScheduledResume(session)
   if (session.chatId !== null) {
     sessionsByChatId.delete(session.chatId)
     pendingByChatId.delete(session.chatId)

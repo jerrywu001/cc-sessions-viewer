@@ -172,6 +172,48 @@ fn bind_chat_session(id: u64, agent: &str, session_id: &str) -> Result<(), Strin
     Ok(())
 }
 
+/// 子进程已经结束时，先释放会话的独占写入租约，再通知前端。这样前端收到 exit 后
+/// 立即自动 resume 同一会话不会被刚退出的旧实例误判为仍在占用。
+fn release_session_lease(lease: &Mutex<Option<crate::runtime::SessionLease>>) {
+    if let Ok(mut lease) = lease.lock() {
+        lease.take();
+    }
+}
+
+/// 仅自然退出的 chat 会走这条路径：从注册表移除并释放会话租约。若 entry 已被 stop
+/// 主动取走，则返回 false，调用方不再向前端补发一个会触发自动重启的 exit 事件。
+fn release_and_remove_chat(id: u64) -> bool {
+    let entry = map().lock().ok().and_then(|mut chats| chats.remove(&id));
+    let Some((_handle, meta)) = entry else {
+        return false;
+    };
+    release_session_lease(&meta.session_lease);
+    true
+}
+
+#[cfg(test)]
+mod session_lease_tests {
+    use super::release_session_lease;
+    use std::sync::Mutex;
+
+    #[test]
+    fn releases_the_session_before_a_restart_can_resume_it() {
+        let session_id = format!("chat-exit-lease-{}", std::process::id());
+        let slot = Mutex::new(Some(
+            crate::runtime::acquire_session(
+                "codex",
+                &session_id,
+                crate::runtime::SessionOwner::Gui(1),
+            )
+            .unwrap(),
+        ));
+
+        release_session_lease(&slot);
+
+        assert!(crate::runtime::ensure_session_available("codex", &session_id).is_ok());
+    }
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -289,11 +331,16 @@ struct QuestionPayload {
 ///
 /// `use_reclaude`：用 reclaude 做进程包装器（`reclaude claude --print ...`），
 /// 走 reclaude 守护进程的鉴权 + 代理链路。与 IDE 插件的 "Claude Process Wrapper" 同理。
+///
+/// `isolate_process_group` 仅用于普通 CLI 子进程。Codex app-server 在 macOS 上经登录
+/// interactive shell 启动时，若被放入独立进程组，会卡在 `initialize` 的首个 JSON-RPC
+/// 请求而不返回任何 stdout；它必须继承父进程组。
 #[cfg(unix)]
 fn build_piped_command(
     cwd: &str,
     command: &AgentCommand,
     use_reclaude: bool,
+    isolate_process_group: bool,
 ) -> std::process::Command {
     use std::os::unix::process::CommandExt;
 
@@ -313,7 +360,9 @@ fn build_piped_command(
     cmd.arg("-l").arg("-i").arg("-c").arg(&inner);
     cmd.env_remove("npm_config_prefix");
     cmd.current_dir(cwd);
-    cmd.process_group(0);
+    if isolate_process_group {
+        cmd.process_group(0);
+    }
     cmd
 }
 
@@ -322,6 +371,7 @@ fn build_piped_command(
     cwd: &str,
     command: &AgentCommand,
     use_reclaude: bool,
+    _isolate_process_group: bool,
 ) -> std::process::Command {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -526,7 +576,7 @@ pub fn start(
                 )
                 .ok_or_else(|| format!("{agent} 暂不支持 GUI 聊天模式"))?;
 
-            let mut cmd = build_piped_command(&cwd, &command, use_reclaude);
+            let mut cmd = build_piped_command(&cwd, &command, use_reclaude, true);
             cmd.stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
@@ -1587,7 +1637,9 @@ fn start_codex_app_server(
 ) -> Result<Arc<ChatHandle>, String> {
     ensure_codex_cli_available(&cwd)?;
     let command = AgentCommand::new("codex").arg("app-server");
-    let mut cmd = build_piped_command(&cwd, &command, false);
+    // 不能给 Codex app-server 单独设进程组：Codex 0.146 在 macOS 的登录 shell 下会因此
+    // 卡住 initialize（没有任何 JSON-RPC 回复），最终触发前端的启动超时。
+    let mut cmd = build_piped_command(&cwd, &command, false, false);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -2993,16 +3045,15 @@ fn codex_app_server_reader(
     if let Ok(mut child) = shared.child.lock() {
         let _ = child.wait();
     }
-    if let Ok(mut chats) = map().lock() {
-        chats.remove(&id);
+    if release_and_remove_chat(id) {
+        let _ = app.emit(
+            "agent-chat://exit",
+            ExitPayload {
+                chat_id: id,
+                code: -1,
+            },
+        );
     }
-    let _ = app.emit(
-        "agent-chat://exit",
-        ExitPayload {
-            chat_id: id,
-            code: -1,
-        },
-    );
 }
 
 fn reader_loop(
@@ -3134,23 +3185,21 @@ fn waiter_loop(app: AppHandle, id: u64) {
         match res {
             Ok(Some(status)) => {
                 let code = status.code().unwrap_or(-1);
-                let _ = app.emit("agent-chat://exit", ExitPayload { chat_id: id, code });
-                if let Ok(mut m) = map().lock() {
-                    m.remove(&id);
+                if release_and_remove_chat(id) {
+                    let _ = app.emit("agent-chat://exit", ExitPayload { chat_id: id, code });
                 }
                 return;
             }
             Ok(None) => thread::sleep(Duration::from_millis(150)),
             Err(_) => {
-                let _ = app.emit(
-                    "agent-chat://exit",
-                    ExitPayload {
-                        chat_id: id,
-                        code: -1,
-                    },
-                );
-                if let Ok(mut m) = map().lock() {
-                    m.remove(&id);
+                if release_and_remove_chat(id) {
+                    let _ = app.emit(
+                        "agent-chat://exit",
+                        ExitPayload {
+                            chat_id: id,
+                            code: -1,
+                        },
+                    );
                 }
                 return;
             }
@@ -3378,7 +3427,7 @@ fn spawn_oneshot_turn(id: u64, arc: Arc<ChatHandle>, spec: OneShotTurnSpec) -> R
     if !still_registered {
         return Err("chat not found".to_string());
     }
-    let mut cmd = build_piped_command(cwd, &command, *use_reclaude);
+    let mut cmd = build_piped_command(cwd, &command, *use_reclaude, true);
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

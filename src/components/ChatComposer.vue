@@ -237,7 +237,7 @@ const ended = computed(
   () => props.session.status === 'exited' || props.session.status === 'error',
 )
 const ready = computed(
-  () => props.session.status === 'running' && props.session.chatId !== null,
+  () => props.session.status === 'running' && (props.session.chatId !== null || props.session.needsResume),
 )
 const canSend = computed(
   () =>
@@ -1560,6 +1560,11 @@ function queuedLabel(q: QueuedMessage): string {
       </div>
     </div>
 
+    <!-- 恢复多次仍失败时，别只留下模糊的 Session ended；把后端实际原因留给用户排障。 -->
+    <div v-if="ended && session.errorMessage" class="cc-session-error" role="alert">
+      {{ session.errorMessage }}
+    </div>
+
     <!-- 输入框：单个 div 容器 —— 框内含 slash 浮层 + 图片缩略图 + 文本行（图片在框内、不再单列在框外） -->
     <div ref="wrapEl" class="cc-input-wrap" :class="{ disabled: ended }" @click="onWrapClick">
       <!-- 系统文件拖入提示：盖在输入框内（inset:0，与输入框严丝合缝，复用其圆角与描边） -->
@@ -1832,6 +1837,17 @@ function queuedLabel(q: QueuedMessage): string {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+.cc-session-error {
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--danger) 38%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 /* 拖拽悬停态：输入框自身变成品牌色虚线投放区（边框即输入框边框，不会两层错位露灰边） */
 .chat-composer.drag-over .cc-input-wrap {
