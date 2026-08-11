@@ -19,6 +19,7 @@ import {
   type QueuedMessage,
 } from '../chatSessions'
 import { buildChatHistory, type ChatHistoryEntry } from '../chatInputHistory'
+import { setChatDraft, takeChatDraft } from '../chatDrafts'
 import { parseChatSlashAction } from '../chatSlashActions'
 import { systemSlashCommands } from '../chatSystemCommands'
 import { openSideChat } from '../sideChat'
@@ -167,7 +168,7 @@ onMounted(() => {
         runtimeLoaded.value = true
       })
   }
-  const initialDraft = takeInitialDraft()
+  const initialDraft = takeDraft(props.session)
   if (initialDraft) {
     exitHistory()
     applyHistoryEntry(initialDraft)
@@ -175,6 +176,7 @@ onMounted(() => {
   focusInput()
 })
 onBeforeUnmount(() => {
+  saveDraft(props.session)
   stopUsagePolling()
   window.removeEventListener('keydown', onGlobalKeydown)
   if (mentionTimer !== null) clearTimeout(mentionTimer)
@@ -184,7 +186,6 @@ onBeforeUnmount(() => {
 const text = ref('')
 const images = ref<ChatImageAttachment[]>([])
 const files = ref<ChatFileAttachment[]>([]) // 非图片附件（文件/文件夹）→ 发送时 @path
-const drafts = new Map<number, ChatHistoryEntry>()
 
 // ↑/↓ 历史回填（参考 Claude 客户端）：把本会话用户发过的消息抽成可翻列表。
 const promptHistory = computed<ChatHistoryEntry[]>(() => buildChatHistory(props.session.msgs))
@@ -197,14 +198,11 @@ const historyHint = computed(() =>
     ? ''
     : t('chat.composer.history', { n: histPos.value + 1, total: promptHistory.value.length }),
 )
-// 切换会话时按 uiId 保存并恢复草稿；各会话的文字和附件互不串用。
-watch(() => props.session.uiId, (uiId, previousUiId) => {
-  drafts.set(previousUiId, {
-    text: text.value,
-    images: images.value.map((image) => ({ ...image })),
-    files: files.value.map((file) => ({ ...file })),
-  })
-  const draft = drafts.get(uiId) ?? takeInitialDraft()
+// 以 ChatSession 对象为 key 保存草稿：组件被 v-if 卸载/重建后仍能恢复，各会话也天然隔离。
+watch(() => props.session, (session, previousSession) => {
+  if (session.uiId === previousSession.uiId) return
+  saveDraft(previousSession)
+  const draft = takeDraft(session)
   text.value = draft?.text ?? ''
   images.value = draft?.images.map((image) => ({ ...image })) ?? []
   files.value = draft?.files.map((file) => ({ ...file })) ?? []
@@ -1032,11 +1030,24 @@ function applyHistoryEntry(e: ChatHistoryEntry) {
   })
 }
 
-/** 取走新分支携带的一次性草稿，避免之后切回该会话时覆盖用户已编辑的内容。 */
-function takeInitialDraft(): ChatHistoryEntry | null {
-  const draft = props.session.initialDraft
+/** 保存当前输入到所属会话；空草稿直接清除，避免发送后重新进入又恢复旧内容。 */
+function saveDraft(session: ChatSession) {
+  if (!text.value.trim() && images.value.length === 0 && files.value.length === 0) {
+    setChatDraft(session, null)
+    return
+  }
+  setChatDraft(session, {
+    text: text.value,
+    images: images.value.map((image) => ({ ...image })),
+    files: files.value.map((file) => ({ ...file })),
+  })
+}
+
+/** 取走会话草稿或新分支携带的一次性草稿，交给当前组件继续编辑。 */
+function takeDraft(session: ChatSession): ChatHistoryEntry | null {
+  const draft = takeChatDraft(session) ?? session.initialDraft
   if (!draft) return null
-  props.session.initialDraft = undefined
+  session.initialDraft = undefined
   return {
     text: draft.text,
     images: draft.images.map((image) => ({ ...image })),

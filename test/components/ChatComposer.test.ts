@@ -277,6 +277,15 @@ describe('ChatComposer', () => {
     await wrapper.setProps({ session: sessionB })
     expect(el.value).toBe('draft for B')
     expect(wrapper.findAll('.cc-thumb')).toHaveLength(0)
+
+    wrapper.unmount()
+    const reopened = mount(ChatComposer, {
+      props: { session: sessionA },
+      global: { directives: { tooltip: vTooltip } },
+    })
+    await reopened.vm.$nextTick()
+    expect((reopened.find('textarea').element as HTMLTextAreaElement).value).toBe('draft for A')
+    expect(reopened.findAll('.cc-thumb')).toHaveLength(1)
   })
 
   it('defers popup work until IME composition ends and ignores the following Space keyup', async () => {
