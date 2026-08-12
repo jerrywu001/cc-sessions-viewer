@@ -1050,6 +1050,18 @@ fn bind_inline_image_placeholders(msg: &mut Msg) {
         return;
     }
 
+    // Agent-specific readers may already have recovered an exact binding from the
+    // source protocol (Claude's interleaved content is one such case). Keep those
+    // bindings authoritative; assigning the remaining images by generic attachment
+    // position would otherwise mark a normal image as a pasted image.
+    if msg
+        .blocks
+        .iter()
+        .any(|block| block.kind == "image" && block.inline_placeholder.is_some())
+    {
+        return;
+    }
+
     let mut attachment_position = 0usize;
     let mut used = HashSet::new();
     for block in &msg.blocks {
@@ -1068,9 +1080,7 @@ fn bind_inline_image_placeholders(msg: &mut Msg) {
             continue;
         }
         attachment_position += 1;
-        if block.inline_placeholder.is_some()
-            || !image_numbers.contains(&attachment_position)
-        {
+        if block.inline_placeholder.is_some() || !image_numbers.contains(&attachment_position) {
             continue;
         }
         let placeholder = format!("[Image #{attachment_position}]");

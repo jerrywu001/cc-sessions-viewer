@@ -62,6 +62,10 @@ export function bindInlineImagePlaceholdersAtAttachmentPositions<T extends { inl
   positions: number[],
 ): T[] {
   const placeholderList = inlineImagePlaceholders(text)
+  // Explicit source bindings are authoritative. This is important for Claude
+  // transcripts where [Image #N] follows an interleaved image block and N is not
+  // the overall file/image attachment position.
+  if (images.some((image) => image.inlinePlaceholder)) return images
   const placeholders = new Set(placeholderList)
   const used = new Set(images.map((image) => image.inlinePlaceholder).filter(Boolean))
   let boundByPosition = false

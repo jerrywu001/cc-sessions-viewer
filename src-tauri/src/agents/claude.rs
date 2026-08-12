@@ -23,8 +23,8 @@ use crate::types::{
     Block, ChatDelta, DiffHunk, DiffLine, Msg, ProjectInfo, SessionMeta, SessionPage, UsageSummary,
 };
 use crate::util::{
-    append_jsonl_line, clean_title, home, inline_at_file_path, is_jsonl, mtime_millis,
-    parse_iso8601_ms, strip_edge_references, text_block, validate_rename_name,
+    append_jsonl_line, clean_title, home, is_jsonl, mtime_millis, parse_iso8601_ms,
+    strip_edge_references, text_block, validate_rename_name,
 };
 
 pub struct ClaudeSource;
@@ -533,6 +533,53 @@ fn queued_command_blocks(v: &Value) -> Option<Vec<Block>> {
     }
 }
 
+/// Claude Code 会把普通文件附件单独落成一条
+/// `type:"attachment", attachment:{type:"file", filename:...}` 记录。
+/// 它不是 queued command，Read 模式会把它并回相邻的用户消息。
+fn file_attachment_block(v: &Value) -> Option<Block> {
+    let attachment = v.get("attachment")?;
+    if attachment.get("type").and_then(Value::as_str) != Some("file") {
+        return None;
+    }
+    let path = attachment
+        .get("filename")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            attachment
+                .get("content")
+                .and_then(|content| {
+                    content
+                        .get("filePath")
+                        .or_else(|| content.get("file").and_then(|file| file.get("filePath")))
+                })
+                .and_then(Value::as_str)
+        })?
+        .trim();
+    if path.is_empty() {
+        return None;
+    }
+    Some(Block {
+        kind: "file".to_string(),
+        file_path: Some(path.to_string()),
+        is_dir: Path::new(path).is_dir().then_some(true),
+        ..Default::default()
+    })
+}
+
+/// 历史 JSONL 里的 `attachment.type == "file"` 记录并不总是代表用户添加的附件。
+/// ClaudeCode 也会为普通的 `@src/file.rs` 引用写一条同形记录；真正的附件在用户
+/// 正文里会留下带引号的 `@"/absolute/path"` 标记，而 `record_to_msg` 已经把这个
+/// 标记归一成了 file block。只有前一条用户消息确实含有同路径的 file block 时，Read
+/// 模式才可以把这条 attachment 记录合并进去。
+fn user_has_quoted_file_ref(msg: &Msg, path: &str) -> bool {
+    msg.role == "user"
+        && msg.meta_kind.is_none()
+        && msg
+            .blocks
+            .iter()
+            .any(|block| block.kind == "file" && block.file_path.as_deref() == Some(path))
+}
+
 fn user_text(v: &Value) -> Option<String> {
     let content = v.get("message")?.get("content")?;
     match content {
@@ -575,6 +622,74 @@ fn image_src(el: &Value) -> Option<String> {
     None
 }
 
+/// Claude 的 `[Image #N]` 是贴图占位符，不是当前消息里所有图片/文件附件的
+/// 序号。原始 content 会把普通图片、正文和贴图图片交错写入；因此要根据占位符
+/// 所在 text block 与 image block 的相对位置绑定，不能交给通用的附件位置回退逻辑。
+fn bind_claude_inline_placeholders(content: &Value, blocks: &mut [Block]) {
+    let Some(arr) = content.as_array() else {
+        return;
+    };
+    let token_re = regex_lite::Regex::new(r"\[Image #(\d+)\]").expect("valid image token regex");
+    let mut image_events: Vec<(usize, usize)> = Vec::new();
+    let mut image_block_index = 0usize;
+    let mut text_events: Vec<(usize, Vec<String>)> = Vec::new();
+
+    for (raw_index, el) in arr.iter().enumerate() {
+        match el.get("type").and_then(Value::as_str) {
+            Some("image") if image_src(el).is_some() => {
+                if let Some(block_index) = blocks[image_block_index..]
+                    .iter()
+                    .position(|block| block.kind == "image")
+                    .map(|offset| image_block_index + offset)
+                {
+                    image_events.push((raw_index, block_index));
+                    image_block_index = block_index + 1;
+                }
+            }
+            Some("text") => {
+                let text = el.get("text").and_then(Value::as_str).unwrap_or_default();
+                let tokens = token_re
+                    .captures_iter(text)
+                    .filter_map(|caps| caps.get(0).map(|token| token.as_str().to_string()))
+                    .collect::<Vec<_>>();
+                if !tokens.is_empty() {
+                    text_events.push((raw_index, tokens));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut used_images = std::collections::HashSet::new();
+    let mut last_text_index = None;
+    for (text_index, tokens) in text_events {
+        for token in tokens {
+            // 当前 Claude 协议：贴图通常紧跟在它所属的 text block 之前/之后，且普通
+            // 图片前可能已有一个独立的正文 text block。优先选「上一个带文本块之后」
+            // 的最近图片，正好覆盖 [普通图, 正文, 贴图, [Image #1]]。
+            let preceding = image_events
+                .iter()
+                .rev()
+                .find(|(image_index, block_index)| {
+                    *image_index < text_index
+                        && last_text_index.is_none_or(|last| *image_index > last)
+                        && !used_images.contains(block_index)
+                });
+            let following = image_events.iter().find(|(image_index, block_index)| {
+                *image_index > text_index && !used_images.contains(block_index)
+            });
+            let Some((_, block_index)) = preceding.or(following) else {
+                continue;
+            };
+            if blocks[*block_index].inline_placeholder.is_none() {
+                blocks[*block_index].inline_placeholder = Some(token);
+            }
+            used_images.insert(*block_index);
+        }
+        last_text_index = Some(text_index);
+    }
+}
+
 /// 判断这条 user 消息是不是 Claude Code 紧跟在真实贴图之后写下的图片元引用，
 /// 形如 `[Image: source: <local-path>]` 或 `[Image: original WxH, displayed at ...]`。
 /// 真正的贴图已经在上一条 user 记录里以 base64 渲染过了，这种纯元数据直接丢弃。
@@ -602,31 +717,19 @@ fn is_image_source_meta(v: &Value, blocks: &[Block]) -> bool {
 }
 
 /// 解析用户文本里 Claude Code 的 `@文件` 引用：拖拽文件 / 用 `@` 选文件时，CC 会把形如
-/// `@"/abs/path with space.ext"`（带引号）或 `@/abs/path.ext`、`@dir/rel.ext`（不带引号、
-/// 不含空白）的标记写进 JSONL 原文。每个引用都会抽成 `file` 块（前端渲染成可点击外部打开的
-/// 文件 chip）；只有提示词首尾连续的附件区会从正文剔除。中间引用同时保留 tag 和完整原文，
-/// 避免「分析@file.sh的执行过程」被截断。返回 (file 块, 正文)。
+/// `@"/abs/path with space.ext"`（带双引号）的标记写进 JSONL 原文。带双引号的是
+/// ClaudeCode 的普通附件协议，应抽成 `file` 块（前端渲染成顶部附件 chip）；不带引号的
+/// `@src/rel.ext` 是聊天语义中的普通文件引用，只保留在正文里，不能提升为附件。返回
+/// (file 块, 正文)。
 fn extract_file_refs(text: &str, cwd: Option<&Path>) -> (Vec<Block>, String) {
     use regex_lite::Regex;
-    let re = Regex::new(r#"@"([^"]+)"|@(\S+)"#).expect("valid file-ref regex");
+    let re = Regex::new(r#"@"([^"]+)""#).expect("valid quoted file-ref regex");
     let mut files = Vec::new();
     let mut refs = Vec::new();
     for caps in re.captures_iter(text) {
         let whole = caps.get(0).unwrap();
-        let (path, reference_end) = match (caps.get(1), caps.get(2)) {
-            (Some(q), _) => (Some(q.as_str().to_string()), whole.end()),
-            (None, Some(u)) => {
-                let path = inline_at_file_path(u.as_str(), cwd);
-                let end = path
-                    .as_ref()
-                    .map(|path| whole.start() + 1 + path.len())
-                    .unwrap_or(whole.end());
-                (path, end)
-            }
-            _ => (None, whole.end()),
-        };
-        // path 为 None（普通 @提及，如 @某人）：不剔除，留给后续 cleaned 原样保留。
-        if let Some(p) = path {
+        let p = caps.get(1).map(|capture| capture.as_str().to_string());
+        if let Some(p) = p {
             // stat 一次区分文件 / 文件夹，让历史 chip 与实时回显一样显示对的图标 + 提示。
             // 仅确为目录才标 Some(true)；文件 / 解析不出（相对路径等）留 None → 文件图标。
             let path_on_disk = if Path::new(&p).is_absolute() {
@@ -643,7 +746,7 @@ fn extract_file_refs(text: &str, cwd: Option<&Path>) -> (Vec<Block>, String) {
                 is_dir,
                 ..Default::default()
             });
-            refs.push((whole.start(), reference_end));
+            refs.push((whole.start(), whole.end()));
         }
     }
     (files, tidy_after_strip(&strip_edge_references(text, &refs)))
@@ -676,11 +779,32 @@ fn tidy_after_strip(s: &str) -> String {
 /// 保留真实用户正文中的 `@文件` 引用。
 ///
 /// `@文件` 是 GUI chat 的正文语义，必须保留在原位置；如果在这里抬升成独立
-/// `file` block，实时消息和历史消息都会把它错误地显示到气泡上方。旧版 Claude
-/// 的 `@` 附件也保留为正文，由前端统一的 token 渲染器兼容展示。
+/// `file` block，实时消息和历史消息都会把它错误地显示到气泡上方。带引号的附件引用
+/// 从正文移除；未加引号的普通 `@文件` 不会被提升，继续保留在正文中。
 fn lift_file_refs(blocks: Vec<Block>, cwd: Option<&Path>) -> Vec<Block> {
-    let _ = cwd;
-    blocks
+    let mut out = Vec::new();
+    for block in blocks {
+        if block.kind != "text" {
+            out.push(block);
+            continue;
+        }
+        let Some(text) = block.text.as_deref() else {
+            out.push(block);
+            continue;
+        };
+        let (files, body) = extract_file_refs(text, cwd);
+        out.extend(files);
+        // 带引号的 @路径是附件：顶部显示 chip，正文移除附件 token；不带引号的
+        // @src/file.ts 不会被 extract_file_refs 提升，因此仍完整保留在正文中。
+        if !body.trim().is_empty() {
+            out.push(Block {
+                kind: "text".to_string(),
+                text: Some(body),
+                ..Default::default()
+            });
+        }
+    }
+    out
 }
 
 /// Claude Code 把若干「系统注入」内容也写成 `type:"user"` 记录，但它们并不是用户
@@ -1315,7 +1439,7 @@ fn scan_uncached(fp: &Path, size: u64, modified: u64) -> SessionMeta {
 
 fn read(path: &str) -> Result<Vec<Msg>, String> {
     let file = fs::File::open(path).map_err(|e| format!("Failed to open session: {e}"))?;
-    let mut msgs = Vec::new();
+    let mut msgs: Vec<Msg> = Vec::new();
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         if line.trim().is_empty() {
             continue;
@@ -1324,6 +1448,47 @@ fn read(path: &str) -> Result<Vec<Msg>, String> {
             Ok(v) => v,
             Err(_) => continue,
         };
+        if v.get("type").and_then(Value::as_str) == Some("attachment")
+            && v.get("attachment")
+                .and_then(|attachment| attachment.get("type"))
+                .and_then(Value::as_str)
+                == Some("file")
+        {
+            let Some(block) = file_attachment_block(&v) else {
+                continue;
+            };
+            let timestamp = v.get("timestamp").and_then(Value::as_str);
+            let merged = msgs.last_mut().filter(|previous| {
+                previous.role == "user"
+                    && previous.timestamp.as_deref().is_some_and(|previous_ts| {
+                        match (
+                            timestamp.and_then(parse_iso8601_ms),
+                            parse_iso8601_ms(previous_ts),
+                        ) {
+                            (Some(a), Some(b)) => (a - b).abs() <= 1_000,
+                            _ => false,
+                        }
+                    })
+            });
+            if let Some(previous) = merged {
+                let path = block.file_path.as_deref();
+                if !path.is_some_and(|path| user_has_quoted_file_ref(previous, path)) {
+                    // 普通 `@src/file.rs` 也可能伴随一条 file attachment 记录，但它不是
+                    // 用户添加的附件。不能把这条历史元记录单独渲染成顶部 file chip。
+                    continue;
+                }
+                if !previous.blocks.iter().any(|existing| {
+                    existing.kind == "file" && existing.file_path.as_deref() == path
+                }) {
+                    previous.blocks.push(block);
+                }
+            } else {
+                // 没有相邻的带引号用户引用时，无法证明这是附件；忽略历史元记录，避免
+                // 无上下文的 attachment 也凭空生成一个用户气泡。
+                continue;
+            }
+            continue;
+        }
         if let Some(msg) = record_to_msg(&v) {
             msgs.push(msg);
         }
@@ -1356,7 +1521,8 @@ pub(crate) fn record_to_msg(v: &Value) -> Option<Msg> {
     // `attachment`（attachment.type == "queued_command"）。常规解析只认
     // user/assistant，会整条丢掉它 —— 这里单独补成一条 user 气泡。
     if t == "attachment" {
-        let blocks = queued_command_blocks(v)?;
+        let blocks = queued_command_blocks(v)
+            .or_else(|| file_attachment_block(v).map(|block| vec![block]))?;
         // 排队进来的可能是用户手敲消息（→ Me），也可能是处理中到达的
         // 任务通知（commandMode == "task-notification" → 系统块）。
         let meta_kind = classify_meta_kind(v, &blocks);
@@ -1555,6 +1721,9 @@ pub(crate) fn record_to_msg(v: &Value) -> Option<Msg> {
     // 真实用户消息：保留正文里的 `@文件` 引用，让前端在原位置渲染；系统/meta
     // 注入的伪 user 记录同样不做文件提升。
     if t == "user" && meta_kind.is_none() {
+        if let Some(content) = message.and_then(|m| m.get("content")) {
+            bind_claude_inline_placeholders(content, &mut blocks);
+        }
         let cwd = v.get("cwd").and_then(|x| x.as_str()).map(Path::new);
         blocks = lift_file_refs(blocks, cwd);
     }
@@ -2608,21 +2777,18 @@ mod tests {
             "@/Users/wuchao/Downloads/仓库管理列表20260409163454.xlsx\nhi",
             None,
         );
-        assert_eq!(files.len(), 1);
+        assert!(files.is_empty());
         assert_eq!(
-            files[0].file_path.as_deref(),
-            Some("/Users/wuchao/Downloads/仓库管理列表20260409163454.xlsx")
+            body,
+            "@/Users/wuchao/Downloads/仓库管理列表20260409163454.xlsx\nhi"
         );
-        assert_eq!(body, "hi");
     }
 
     #[test]
     fn file_ref_multiple_files_one_message() {
         let (files, body) = extract_file_refs("@/a/one.txt @/b/two.md please review", None);
-        assert_eq!(files.len(), 2);
-        assert_eq!(files[0].file_path.as_deref(), Some("/a/one.txt"));
-        assert_eq!(files[1].file_path.as_deref(), Some("/b/two.md"));
-        assert!(body.contains("please review"));
+        assert!(files.is_empty());
+        assert_eq!(body, "@/a/one.txt @/b/two.md please review");
     }
 
     #[test]
@@ -2632,11 +2798,11 @@ mod tests {
             "@main_driver.dart @package.json @analysis_options.yaml hi",
             None,
         );
-        assert_eq!(files.len(), 3);
-        assert_eq!(files[0].file_path.as_deref(), Some("main_driver.dart"));
-        assert_eq!(files[1].file_path.as_deref(), Some("package.json"));
-        assert_eq!(files[2].file_path.as_deref(), Some("analysis_options.yaml"));
-        assert_eq!(body, "hi");
+        assert!(files.is_empty());
+        assert_eq!(
+            body,
+            "@main_driver.dart @package.json @analysis_options.yaml hi"
+        );
     }
 
     #[test]
@@ -2648,14 +2814,10 @@ mod tests {
     }
 
     #[test]
-    fn file_ref_in_mid_prompt_keeps_full_text_and_adds_tag() {
+    fn file_ref_in_mid_prompt_stays_plain_text() {
         let text = "分析@scripts/release/appstore-release.sh的执行过程和调用命令";
         let (files, body) = extract_file_refs(text, None);
-        assert_eq!(files.len(), 1);
-        assert_eq!(
-            files[0].file_path.as_deref(),
-            Some("scripts/release/appstore-release.sh")
-        );
+        assert!(files.is_empty());
         assert_eq!(body, text);
     }
 
@@ -2668,18 +2830,42 @@ mod tests {
     }
 
     #[test]
-    fn lift_file_refs_only_real_user_message() {
+    fn quoted_file_ref_is_lifted_and_removed_from_prompt() {
         let v = json!({
             "type": "user",
             "message": { "content": "@\"/tmp/report.xlsx\"\n看看这个" },
         });
         let msg = record_to_msg(&v).expect("user msg");
-        assert_eq!(msg.blocks.len(), 1);
-        assert_eq!(msg.blocks[0].kind, "text");
-        assert_eq!(
-            msg.blocks[0].text.as_deref(),
-            Some("@\"/tmp/report.xlsx\"\n看看这个")
-        );
+        assert_eq!(msg.blocks.len(), 2);
+        assert_eq!(msg.blocks[0].kind, "file");
+        assert_eq!(msg.blocks[0].file_path.as_deref(), Some("/tmp/report.xlsx"));
+        assert_eq!(msg.blocks[1].kind, "text");
+        assert_eq!(msg.blocks[1].text.as_deref(), Some("看看这个"));
+    }
+
+    #[test]
+    fn claude_interleaved_images_bind_pasted_tag_to_the_image_before_its_token() {
+        let v = json!({
+            "type": "user",
+            "message": {
+                "content": [
+                    { "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": "ordinary" } },
+                    { "type": "text", "text": "Sd " },
+                    { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "pasted" } },
+                    { "type": "text", "text": "[Image #1]" },
+                    { "type": "text", "text": " dsfsdf, 回复我hi即可 @\"/tmp/report.pdf\"" }
+                ]
+            }
+        });
+        let msg = record_to_msg(&v).expect("user msg");
+        let images: Vec<&Block> = msg
+            .blocks
+            .iter()
+            .filter(|block| block.kind == "image")
+            .collect();
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].inline_placeholder, None);
+        assert_eq!(images[1].inline_placeholder.as_deref(), Some("[Image #1]"));
     }
 
     #[test]
@@ -2694,6 +2880,80 @@ mod tests {
         assert_eq!(msg.blocks.len(), 1);
         assert_eq!(msg.blocks[0].kind, "text");
         assert_eq!(msg.blocks[0].text.as_deref(), Some(text));
+    }
+
+    #[test]
+    fn file_attachment_record_becomes_file_block() {
+        let v = json!({
+            "type": "attachment",
+            "timestamp": "2026-08-12T12:32:30.634Z",
+            "attachment": {
+                "type": "file",
+                "filename": "/Users/wuchao/Downloads/report.pdf",
+                "content": { "type": "pdf", "file": { "filePath": "/Users/wuchao/Downloads/report.pdf" } }
+            }
+        });
+        let msg = record_to_msg(&v).expect("file attachment");
+        assert_eq!(msg.role, "user");
+        assert_eq!(msg.blocks.len(), 1);
+        assert_eq!(msg.blocks[0].kind, "file");
+        assert_eq!(
+            msg.blocks[0].file_path.as_deref(),
+            Some("/Users/wuchao/Downloads/report.pdf")
+        );
+    }
+
+    #[test]
+    fn read_merges_file_attachment_record_into_same_user_message() {
+        let path = write_temp(
+            "claude-file-attachment.jsonl",
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-08-12T12:32:30.634Z","message":{"content":[{"type":"text","text":"Sd [Image #1] dsfsdf @\"/Users/wuchao/Downloads/report.pdf\""}]}}"#,
+                r#"{"type":"attachment","uuid":"f1","timestamp":"2026-08-12T12:32:30.634Z","attachment":{"type":"file","filename":"/Users/wuchao/Downloads/report.pdf","content":{"type":"pdf","file":{"filePath":"/Users/wuchao/Downloads/report.pdf"}}}}"#,
+            ],
+        );
+        let msgs = read(path.to_str().unwrap()).expect("read claude transcript");
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(
+            msgs[0]
+                .blocks
+                .iter()
+                .filter(|block| block.kind == "file")
+                .count(),
+            1
+        );
+        assert!(msgs[0].blocks.iter().any(|block| {
+            block.kind == "text"
+                && block
+                    .text
+                    .as_deref()
+                    .is_some_and(|text| text.contains("Sd [Image #1] dsfsdf"))
+        }));
+        assert!(!msgs[0].blocks.iter().any(|block| {
+            block
+                .text
+                .as_deref()
+                .is_some_and(|text| text.contains("@\"/Users/wuchao/Downloads/report.pdf\""))
+        }));
+    }
+
+    #[test]
+    fn read_ignores_file_attachment_record_for_unquoted_file_reference() {
+        let path = write_temp(
+            "claude-unquoted-file-reference.jsonl",
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-08-12T12:42:00.712Z","message":{"content":"hi, @src/tray.rs 回答我文件什么格式即可"}}"#,
+                r#"{"type":"attachment","uuid":"f1","timestamp":"2026-08-12T12:42:00.711Z","attachment":{"type":"file","filename":"/Users/wuchao/apps/claude-session-viewer/src-tauri/src/tray.rs","content":{"type":"text","file":{"filePath":"/Users/wuchao/apps/claude-session-viewer/src-tauri/src/tray.rs"}}}}"#,
+            ],
+        );
+        let msgs = read(path.to_str().unwrap()).expect("read claude transcript");
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].blocks.len(), 1);
+        assert_eq!(msgs[0].blocks[0].kind, "text");
+        assert_eq!(
+            msgs[0].blocks[0].text.as_deref(),
+            Some("hi, @src/tray.rs 回答我文件什么格式即可")
+        );
     }
 
     #[test]

@@ -636,6 +636,109 @@ fn image_src(el: &Value) -> Option<String> {
     }
 }
 
+/// 从 Codex 原始 user content 中读取贴图与正文占位符的对应关系。
+///
+/// Codex 会把一张图拆成三个相邻的 block：打开 `<image name=[Image #N]>` 的
+/// `input_text`、`input_image`、关闭 `</image>` 的 `input_text`。Read 模式不能
+/// 只收集所有 `input_image`，否则多个图片/文件混排时会丢失原始附件位置。
+fn codex_input_images(content: &Value) -> Vec<Block> {
+    let Some(arr) = content.as_array() else {
+        return Vec::new();
+    };
+    let token_re = regex_lite::Regex::new(r"\[Image #(\d+)\]").expect("valid image token regex");
+    let mut current_placeholder: Option<String> = None;
+    let mut images = Vec::new();
+
+    for el in arr {
+        match el.get("type").and_then(Value::as_str) {
+            Some("input_text") => {
+                let text = el.get("text").and_then(Value::as_str).unwrap_or_default();
+                if text.contains("<image") {
+                    current_placeholder = token_re.captures(text).and_then(|caps| {
+                        caps.get(1)
+                            .and_then(|n| n.as_str().parse::<usize>().ok())
+                            .filter(|n| *n > 0)
+                            .map(|n| format!("[Image #{n}]"))
+                    });
+                }
+                if text.contains("</image>") {
+                    current_placeholder = None;
+                }
+            }
+            Some("input_image") => {
+                if let Some(src) = image_src(el) {
+                    images.push(Block {
+                        kind: "image".to_string(),
+                        image_src: Some(src),
+                        inline_placeholder: current_placeholder.clone(),
+                        ..Default::default()
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    images
+}
+
+/// 用 Codex 写入正文的 `[Image #N]` 还原所有附件的原始顺序。
+/// N 不是图片数组下标，而是当前消息中 file/image 附件的 1-based 位置。
+fn order_codex_attachments(images: Vec<Block>, files: Vec<Block>) -> Vec<Block> {
+    if images.is_empty() {
+        return files;
+    }
+    if !images
+        .iter()
+        .any(|block| block.inline_placeholder.is_some())
+    {
+        let mut blocks = images;
+        blocks.extend(files);
+        return blocks;
+    }
+
+    let total = images.len() + files.len();
+    let max_position = images
+        .iter()
+        .filter_map(|block| block.inline_placeholder.as_deref())
+        .filter_map(|token| token.strip_prefix("[Image #")?.strip_suffix(']'))
+        .filter_map(|n| n.parse::<usize>().ok())
+        .max()
+        .unwrap_or(0);
+    let slot_count = total.max(max_position);
+    let mut slots: Vec<Option<Block>> = (0..slot_count).map(|_| None).collect();
+    let mut unpositioned_images = Vec::new();
+    for image in images {
+        let position = image
+            .inline_placeholder
+            .as_deref()
+            .and_then(|token| token.strip_prefix("[Image #")?.strip_suffix(']'))
+            .and_then(|n| n.parse::<usize>().ok());
+        if let Some(position) = position {
+            if position > 0 && position <= slots.len() && slots[position - 1].is_none() {
+                slots[position - 1] = Some(image);
+                continue;
+            }
+        }
+        unpositioned_images.push(image);
+    }
+
+    let mut files = files.into_iter();
+    let mut unpositioned_images = unpositioned_images.into_iter();
+    let mut ordered = Vec::with_capacity(slot_count);
+    for slot in slots {
+        if let Some(block) = slot {
+            ordered.push(block);
+        } else if let Some(file) = files.next() {
+            ordered.push(file);
+        } else if let Some(image) = unpositioned_images.next() {
+            ordered.push(image);
+        }
+    }
+    ordered.extend(files);
+    ordered.extend(unpositioned_images);
+    ordered
+}
+
 fn format_args(v: Option<&Value>) -> String {
     match v {
         Some(Value::String(s)) => match serde_json::from_str::<Value>(s) {
@@ -903,6 +1006,41 @@ fn strip_edge_at_paths(text: &str) -> String {
 pub fn extract_codex_files_pub(text: &str) -> (Vec<Block>, String) {
     extract_codex_files(text)
 }
+
+/// GUI 粘贴板图片会先保存到应用自己的临时图片目录，再由 Codex 以普通文件
+/// mention 写入 rollout。旧格式没有保留 `inlinePlaceholder`，但这个路径仍能
+/// 区分粘贴图和用户选择的普通图片附件。
+fn is_codex_pasted_image_path(path: &str) -> bool {
+    Path::new(path)
+        .components()
+        .any(|component| component.as_os_str() == "cc-sessions-viewer-images")
+}
+
+/// 为旧 Codex rollout 中的粘贴图恢复正文 `[Image #N]` 标签。
+fn bind_codex_pasted_file_placeholders(body: &str, blocks: &mut [Block]) {
+    let token_re = regex_lite::Regex::new(r"\[Image #\d+\]").expect("valid image token regex");
+    let tokens: Vec<String> = token_re
+        .find_iter(body)
+        .map(|m| m.as_str().to_string())
+        .collect();
+    let mut next = 0usize;
+    for block in blocks {
+        if block.kind != "image" || block.inline_placeholder.is_some() {
+            continue;
+        }
+        let Some(path) = block.image_src.as_deref() else {
+            continue;
+        };
+        if !is_codex_pasted_image_path(path) {
+            continue;
+        }
+        if let Some(token) = tokens.get(next) {
+            block.inline_placeholder = Some(token.clone());
+            next += 1;
+        }
+    }
+}
+
 fn extract_codex_files(text: &str) -> (Vec<Block>, String) {
     const HEADER: &str = "# Files mentioned by the user:";
     const REQUEST: &str = "## My request for Codex:";
@@ -1261,25 +1399,20 @@ fn read_with_title_index(
             {
                 // 不渲染整条 response_item.message —— 它还包含 <environment_context>
                 // 等内部包裹，由 event_msg.user_message 负责干净文本。这里只抢救图片。
-                if let Some(arr) = p.get("content").and_then(|x| x.as_array()) {
-                    for el in arr {
-                        if let Some(src) = image_src(el) {
-                            pending_user_images.push(Block {
-                                kind: "image".to_string(),
-                                image_src: Some(src),
-                                ..Default::default()
-                            });
-                        }
-                    }
-                }
+                pending_user_images
+                    .extend(codex_input_images(p.get("content").unwrap_or(&Value::Null)));
             }
             ("event_msg", "user_message") => {
                 let text = p.get("message").and_then(|x| x.as_str()).unwrap_or("");
                 // `turn/steer` 的延后约束是模型控制面，不属于用户气泡；先剥离它，才能
                 // 继续正确识别其内的 Codex 文件头。
                 let visible_text = crate::util::visible_deferred_follow_up(text);
-                let (file_blocks, body) = extract_codex_files(visible_text);
-                let mut blocks: Vec<Block> = std::mem::take(&mut pending_user_images);
+                let (mut file_blocks, body) = extract_codex_files(visible_text);
+                if pending_user_images.is_empty() {
+                    bind_codex_pasted_file_placeholders(&body, &mut file_blocks);
+                }
+                let blocks =
+                    order_codex_attachments(std::mem::take(&mut pending_user_images), file_blocks);
                 // 图片已由 response_item 捕获到 pending_user_images。只去除首尾的附件
                 // 标记；行中文件引用仍要完整显示，post_process 会做附件 tag 去重。
                 // `@文件` 选择结果属于正文语义，必须保留在原位置。只有旧版
@@ -1290,9 +1423,21 @@ fn read_with_title_index(
                         first_user_title = clean;
                     }
                 }
-                blocks.extend(file_blocks);
                 if !body.trim().is_empty() {
+                    let mut blocks = blocks;
                     blocks.push(text_block("text", &body));
+                    if !blocks.is_empty() {
+                        msgs.push(Msg {
+                            uuid: None,
+                            role: "user".to_string(),
+                            timestamp: ts,
+                            model: None,
+                            sidechain: false,
+                            blocks,
+                            meta_kind: None,
+                        });
+                    }
+                    continue;
                 }
                 if !blocks.is_empty() {
                     msgs.push(Msg {
@@ -1334,9 +1479,14 @@ fn read_with_title_index(
                         .as_deref()
                         .map(crate::util::visible_deferred_follow_up)
                         .unwrap_or_default();
-                    let (file_blocks, body) = extract_codex_files(visible_text);
-                    let mut blocks: Vec<Block> = std::mem::take(&mut pending_user_images);
-                    blocks.extend(file_blocks);
+                    let (mut file_blocks, body) = extract_codex_files(visible_text);
+                    if pending_user_images.is_empty() {
+                        bind_codex_pasted_file_placeholders(&body, &mut file_blocks);
+                    }
+                    let mut blocks = order_codex_attachments(
+                        std::mem::take(&mut pending_user_images),
+                        file_blocks,
+                    );
                     if !body.trim().is_empty() {
                         blocks.push(text_block("text", &body));
                     }
@@ -2587,6 +2737,28 @@ mod tests {
     }
 
     #[test]
+    fn legacy_codex_pasted_image_path_gets_the_visible_image_tag() {
+        let pasted = std::env::temp_dir()
+            .join("cc-sessions-viewer-images")
+            .join("chat-img-123.png");
+        let mut blocks = vec![
+            Block {
+                kind: "image".to_string(),
+                image_src: Some("/Users/wuchao/Downloads/ordinary.png".to_string()),
+                ..Default::default()
+            },
+            Block {
+                kind: "image".to_string(),
+                image_src: Some(pasted.to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        ];
+        bind_codex_pasted_file_placeholders("hi [Image #1]", &mut blocks);
+        assert_eq!(blocks[0].inline_placeholder, None);
+        assert_eq!(blocks[1].inline_placeholder.as_deref(), Some("[Image #1]"));
+    }
+
+    #[test]
     fn read_new_codex_rollout_message_shape() {
         let lines = [
             r#"{"timestamp":"2026-08-12T02:52:01.262Z","type":"session_meta","payload":{"id":"new","cwd":"/tmp"}}"#,
@@ -2609,6 +2781,23 @@ mod tests {
         let session = scan(&p, &meta, &HashMap::new(), CodexThreadFlags::default());
         assert_eq!(session.title, "[Image #1] 给宠物增加右键菜单，看截图");
         assert_eq!(session.message_count, 2);
+    }
+
+    #[test]
+    fn read_codex_preserves_mixed_file_and_image_attachment_positions() {
+        let lines = [
+            r#"{"timestamp":"2026-08-12T02:52:01.000Z","type":"session_meta","payload":{"id":"mixed","cwd":"/tmp"}}"#,
+            r#"{"timestamp":"2026-08-12T02:52:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<image name=[Image #2] path=\"/tmp/pasted.png\">\n"},{"type":"input_image","image_url":"data:image/png;base64,abc"},{"type":"input_text","text":"</image>"},{"type":"input_text","text":"[Image #2] review"}]}}"#,
+            r##"{"timestamp":"2026-08-12T02:52:02.001Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"local_image","path":"/tmp/pasted.png"},{"type":"text","text":"# Files mentioned by the user:\n\n## report.pdf: /tmp/report.pdf\n\n## My request for Codex:\n[Image #2] review"}]}}}"##,
+        ];
+        let p = write_temp("codex-mixed-attachment-order.jsonl", &lines);
+        let msgs = read_with_title_index(p.to_string_lossy().as_ref(), &HashMap::new()).unwrap();
+        let blocks = &msgs[0].blocks;
+        assert_eq!(blocks[0].kind, "file");
+        assert_eq!(blocks[0].file_path.as_deref(), Some("/tmp/report.pdf"));
+        assert_eq!(blocks[1].kind, "image");
+        assert_eq!(blocks[1].inline_placeholder.as_deref(), Some("[Image #2]"));
+        assert_eq!(blocks[2].text.as_deref(), Some("[Image #2] review"));
     }
 
     #[test]
