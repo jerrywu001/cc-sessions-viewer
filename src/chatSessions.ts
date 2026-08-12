@@ -30,6 +30,7 @@ import {
 import { useReclaude } from './settings'
 import { bumpUsage } from './usage'
 import { markProjectsDirty } from './projectsRefresh'
+import { humanizeRestoreError, humanizeSessionError, isRetryableSessionError } from './sessionError'
 import type { ChatHistoryEntry } from './chatInputHistory'
 import { codexPluginMentionTextElements, expandCodexPluginMentionsForPrompt } from './codexPluginMentions'
 import { isFileChangeResult } from './toolResultRouting'
@@ -319,6 +320,13 @@ function onMsg(s: ChatSession, msg: Msg) {
   // null/undefined → 前端 formatTime(null) 会渲染成「1970-01-01 08:00」。这里补上
   // 「此刻」（消息刚到达的时间），让 live 气泡显示真实时间。
   if (!msg.timestamp) msg.timestamp = new Date().toISOString()
+  // GUI Chat 的每条模型/工具消息都记录本轮累计耗时。它是运行时字段，不写回 transcript；
+  // 这样 hover 时可以显示类似「13s」，同时不会把历史消息之间的空档误当成执行时间。
+  if (s.turnState === 'running' && (
+    msg.role === 'assistant' || msg.blocks.some((block) => block.kind === 'tool_result')
+  )) {
+    msg.executionMs = Math.max(0, Date.now() - s.turnStartedAt)
+  }
   // Codex 的 item.completed 不带 model 字段 → 用会话当前选中的模型回填，
   // 让气泡显示模型标签（与 read 模式一致）、也让 lastModel 有值。
   if (!msg.model && msg.role === 'assistant' && s.model) msg.model = s.model
@@ -519,6 +527,7 @@ function mergeToolUpdate(s: ChatSession, msg: Msg): boolean {
       ...existing,
       model: msg.model ?? existing.model,
       timestamp: existing.timestamp ?? msg.timestamp,
+      executionMs: msg.executionMs ?? existing.executionMs,
       blocks: [...retainedBlocks, ...msg.blocks],
     }
     s.msgs = [
@@ -645,7 +654,7 @@ function onExit(s: ChatSession, p: ChatExitPayload) {
   s.lastTurnOutcome = p.code === 0 ? 'completed' : 'failed'
   endTurn(s)
   if (p.code !== 0 && !s.errorMessage) {
-    s.errorMessage = s.stderrTail.slice(-3).join('\n') || `exited (${p.code})`
+    s.errorMessage = humanizeSessionError(s.stderrTail.slice(-3).join('\n') || `exited (${p.code})`)
   }
   // Codex app-server 会自行回收长时间空闲的进程。此前这里立刻后台 resume，新的
   // app-server 又会立即退出，最后被冷却逻辑误标为 Session ended。进程已死时没有
@@ -671,12 +680,17 @@ const resumeTimers = new WeakMap<ChatSession, number>()
 const resumeAttempts = new WeakMap<ChatSession, number>()
 const resumedAt = new WeakMap<ChatSession, number>()
 const resumeCancelled = new WeakSet<ChatSession>()
+const resumeInFlight = new WeakSet<ChatSession>()
 
-function cancelScheduledResume(s: ChatSession) {
-  resumeCancelled.add(s)
+function cancelResumeTimer(s: ChatSession) {
   const timer = resumeTimers.get(s)
   if (timer !== undefined) window.clearTimeout(timer)
   resumeTimers.delete(s)
+}
+
+function cancelScheduledResume(s: ChatSession) {
+  resumeCancelled.add(s)
+  cancelResumeTimer(s)
   s.needsResume = false
 }
 
@@ -706,6 +720,8 @@ async function resumeParkedChat(s: ChatSession): Promise<boolean> {
   if (resumeCancelled.has(s)) return false
   if (s.chatId !== null) return true
   if (!s.needsResume || s.status === 'spawning') return false
+  if (resumeInFlight.has(s)) return false
+  resumeInFlight.add(s)
   s.status = 'spawning'
   try {
     const eff = sessionEffectiveEffort(s)
@@ -740,9 +756,50 @@ async function resumeParkedChat(s: ChatSession): Promise<boolean> {
     // “会话不可恢复”，否则用户只看到 Session ended，也没法再试一次。
     s.status = 'running'
     s.needsResume = true
-    s.errorMessage = `Unable to restore this chat: ${String(error)}`
+    s.errorMessage = humanizeRestoreError(error)
     return false
+  } finally {
+    resumeInFlight.delete(s)
   }
+}
+
+/**
+ * 在其它位置释放单会话锁后，直接恢复当前 Chat，不需要用户关闭再重新打开 tab。
+ * 该入口只对已识别的单会话锁错误开放；失败时继续保留错误和“重试”按钮。
+ */
+export async function retryChatResume(s: ChatSession): Promise<boolean> {
+  if (resumeInFlight.has(s)) return false
+  if (!isRetryableSessionError(s.errorMessage)) return false
+
+  // 手动点击优先于自动退避，避免同一 session 同时发起两个 app-server。
+  cancelResumeTimer(s)
+  resumeCancelled.delete(s)
+
+  // 某些锁冲突发生在 send/restart 阶段，此时旧 chatId 还留在前端状态里，
+  // 但对应进程已经停止或无法继续使用。先摘掉旧路由并尽力停止它，再按原
+  // sessionId 重新拉起；否则按钮看似可点，实际上会被 chatId 非空挡住。
+  if (s.chatId !== null) {
+    const old = s.chatId
+    // 先摘掉旧路由并置空 chatId，旧进程稍后到达的 exit 不会误伤新恢复的 tab；
+    // stop 失败也不影响继续按原 sessionId 尝试恢复。
+    sessionsByChatId.delete(old)
+    pendingByChatId.delete(old)
+    s.chatId = null
+    try {
+      await api.agentChatStop(old)
+    } catch {
+      /* 旧进程可能已经退出，继续尝试恢复 */
+    }
+  }
+  s.needsResume = true
+  s.status = 'running'
+
+  const resumed = await resumeParkedChat(s)
+  if (resumed) {
+    s.errorMessage = undefined
+    drainQueue(s)
+  }
+  return resumed
 }
 
 /** 仅供单测模拟子进程退出，覆盖自动恢复的状态机。 */
@@ -1189,7 +1246,7 @@ export async function startChat(opts: StartChatOptions): Promise<ChatSession> {
     }
   } catch (err) {
     session.status = 'error'
-    session.errorMessage = String(err)
+    session.errorMessage = humanizeSessionError(err)
   }
   return session
 }
@@ -1237,7 +1294,7 @@ export async function sendPrompt(
     session.lastTurnOutcome = 'failed'
     endTurn(session)
     session.status = 'error'
-    session.errorMessage = String(err)
+    session.errorMessage = humanizeSessionError(err)
   }
   return true
 }
@@ -1385,7 +1442,7 @@ async function restartChat(s: ChatSession): Promise<boolean> {
     return true
   } catch (err) {
     s.status = 'error'
-    s.errorMessage = String(err)
+    s.errorMessage = humanizeSessionError(err)
     return false
   }
 }
@@ -1450,7 +1507,7 @@ export async function interruptChat(session: ChatSession): Promise<void> {
         return
       } catch (err) {
         session.suppressNextExit = false
-        session.errorMessage = String(err)
+        session.errorMessage = humanizeSessionError(err)
         session.lastTurnOutcome = 'failed'
         endTurn(session)
         // autoRestart in onExit will recover
@@ -1465,7 +1522,7 @@ export async function interruptChat(session: ChatSession): Promise<void> {
     drainQueue(session)
   } catch (err) {
     session.status = 'error'
-    session.errorMessage = String(err)
+    session.errorMessage = humanizeSessionError(err)
     session.lastTurnOutcome = 'failed'
     endTurn(session)
   } finally {
@@ -1532,7 +1589,7 @@ export async function clearChat(session: ChatSession): Promise<void> {
   } catch (err) {
     session.suppressNextExit = false
     session.status = 'error'
-    session.errorMessage = String(err)
+    session.errorMessage = humanizeSessionError(err)
     session.lastTurnOutcome = 'failed'
     endTurn(session)
   }
@@ -1587,7 +1644,7 @@ export async function respondPermission(
     maybeExitClaudePlanMode(session, request, choice)
   } catch (err) {
     session.status = 'error'
-    session.errorMessage = String(err)
+    session.errorMessage = humanizeSessionError(err)
   }
 }
 
@@ -1634,7 +1691,7 @@ export async function respondQuestion(
     maybeExitCodexPlanMode(session, selections)
   } catch (err) {
     session.status = 'error'
-    session.errorMessage = String(err)
+    session.errorMessage = humanizeSessionError(err)
   }
 }
 

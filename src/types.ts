@@ -95,6 +95,8 @@ export interface Msg {
   uuid?: string
   role: 'user' | 'assistant'
   timestamp?: string
+  /** Live Chat 中从本轮用户输入到该条模型/工具消息到达的耗时（仅前端运行时字段）。 */
+  executionMs?: number
   model?: string
   sidechain: boolean
   blocks: Block[]

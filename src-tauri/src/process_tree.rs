@@ -106,10 +106,65 @@ pub fn terminate(pid: u32) {
         return;
     }
 
-    // agent_chat 启动时把 shell 设为独立进程组组长；向负 PID 发信号会连同后代一起终止。
+    // 大多数 agent CLI 位于独立进程组，向负 PID 发信号可一次结束完整进程树。Codex
+    // app-server 在 macOS 的 login shell 中不能独立成组（会卡住 initialize），因此再按
+    // PPID 递归补杀后代，防止外层 shell 已死、内部 writer 却继续占着同一 thread。
     unsafe {
         libc::kill(-(pid as i32), libc::SIGKILL);
     }
+    for child in unix_descendants(pid).into_iter().rev() {
+        unsafe {
+            libc::kill(child as i32, libc::SIGKILL);
+        }
+    }
+    unsafe {
+        libc::kill(pid as i32, libc::SIGKILL);
+    }
+}
+
+/// 读取当前父子关系并返回 root 的全部后代（父在前、子在后）。`ps` 是 macOS 与 Linux
+/// 都有的系统工具；读取失败时自然回退为上面的进程组 / 直接 PID 终止。
+#[cfg(unix)]
+fn unix_descendants(root: u32) -> Vec<u32> {
+    use std::collections::HashMap;
+    use std::process::{Command, Stdio};
+
+    let Ok(output) = Command::new("ps")
+        .args(["-axo", "pid=,ppid="])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(pid), Some(parent)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let (Ok(pid), Ok(parent)) = (pid.parse::<u32>(), parent.parse::<u32>()) else {
+            continue;
+        };
+        children.entry(parent).or_default().push(pid);
+    }
+
+    let mut descendants = Vec::new();
+    let mut pending = vec![root];
+    while let Some(parent) = pending.pop() {
+        if let Some(direct_children) = children.get(&parent) {
+            for &child in direct_children {
+                descendants.push(child);
+                pending.push(child);
+            }
+        }
+    }
+    descendants
 }
 
 #[cfg(all(test, target_os = "windows"))]
@@ -131,5 +186,39 @@ mod tests {
         terminate(child.id());
         let _ = child.kill();
         child.wait().unwrap();
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use super::*;
+    use std::process::{Command, Stdio};
+    use std::thread;
+    use std::time::Duration;
+
+    #[test]
+    fn discovers_and_terminates_descendants_without_a_process_group() {
+        // 模拟 Codex app-server 的 shell 包装层：外层 shell 与其 child 共用父进程组，
+        // 因而单靠 kill(-pid) 不会命中它们。
+        let mut shell = Command::new("sh")
+            .args(["-c", "sleep 30 & wait"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let mut descendants = Vec::new();
+        for _ in 0..20 {
+            descendants = unix_descendants(shell.id());
+            if !descendants.is_empty() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!descendants.is_empty());
+
+        terminate(shell.id());
+        let _ = shell.wait();
     }
 }

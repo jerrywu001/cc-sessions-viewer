@@ -175,6 +175,7 @@ import { projectsDirty, markProjectsDirty } from './projectsRefresh'
 import { paneViewsOf } from './paneRegistry'
 import { PaneActionsKey, type PaneActions } from './paneActions'
 import { chatSupported } from './chatComposerOptions'
+import { humanizeSessionError } from './sessionError'
 
 // ---------- 状态 ----------
 // 默认进首个可见 agent —— 用户若在设置里关掉了 claude，启动时就不该停在隐藏的 agent 上。
@@ -1496,7 +1497,7 @@ async function addBookmarkByPath(path: string) {
       })
     }
   } catch (e) {
-    notify(`${e}`, true)
+    notify(humanizeSessionError(e), true)
   }
 }
 
@@ -2702,15 +2703,27 @@ function closeLiveChat(tabUiId?: number) {
   void removeViewTab(id)
 }
 
-function switchLiveChatToRead() {
+async function switchLiveChatToRead() {
   const tab = activeViewTab.value
   if (!tab || tab.type !== 'chat') return
   const source = tab.sourceSession
-  if (!source) return
+  const chat = tab.chatSession
+  if (!source || !chat) return
+
+  // Read 模式不应继续持有 Codex/Claude 的 writer lease。之前这里只把 tab 的
+  // type 改成 session，后台 Chat 进程仍在运行；随后从 Read 点“resume”内嵌
+  // 终端就会撞上“already open in GUI chat”。先停掉并移除 live Chat，确认
+  // closeChat 完成后再把同一个 tab 切成只读，确保新的 resume 有机会拿到锁。
+  await closeChat(chat.uiId)
+  // 停止期间用户可能关闭了 tab 或切换到别的 view；不要把已脱离列表的旧 tab
+  // 再写回响应式状态。
+  if (findViewTab(t => t.uiId === tab.uiId) !== tab) return
   tab.type = 'session'
   tab.session = source
+  tab.chatSession = null
+  tab.sourceSession = null
   tab.loadingMsgs = true
-  api.readSession(agent.value, source.path).then(msgs => {
+  api.readSession(tab.agent, source.path).then(msgs => {
     tab.msgs = msgs
     tab.loadingMsgs = false
   }).catch(() => { tab.loadingMsgs = false })

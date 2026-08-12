@@ -4,6 +4,7 @@ import {
   formatElapsedSeconds,
   formatSize,
   formatTime,
+  historicalMessageExecutionMs,
   formatTokens,
   highlightSegments,
   isAskUserQuestionInstructionOnlyMsg,
@@ -18,6 +19,7 @@ import {
   shortName,
 } from '../src/format'
 import { setLang } from '../src/settings'
+import type { Msg } from '../src/types'
 
 // format.ts pulls localized strings via t(); pin the language so assertions
 // don't depend on the host machine's locale.
@@ -663,6 +665,46 @@ describe('formatElapsedSeconds', () => {
     expect(formatElapsedSeconds(7)).toBe('7s')
     expect(formatElapsedSeconds(1000)).toBe('16m 40s')
     expect(formatElapsedSeconds(3725)).toBe('1h 02m')
+  })
+})
+
+describe('historicalMessageExecutionMs', () => {
+  const msg = (role: Msg['role'], timestamp: string, kind: string = 'text'): Msg => ({
+    role,
+    timestamp,
+    sidechain: false,
+    blocks: [{ kind, isError: false }],
+  })
+
+  it('calculates each assistant/tool message from the preceding user turn', () => {
+    const messages = [
+      msg('user', '2026-08-12T03:00:00.000Z'),
+      msg('assistant', '2026-08-12T03:00:13.000Z'),
+      msg('user', '2026-08-12T03:00:20.000Z', 'tool_result'),
+      msg('assistant', '2026-08-12T03:00:21.000Z'),
+      msg('user', '2026-08-12T03:00:30.000Z'),
+      msg('assistant', '2026-08-12T03:00:35.000Z'),
+    ]
+
+    expect([...historicalMessageExecutionMs(messages)]).toEqual([
+      [1, 13_000],
+      [2, 20_000],
+      [3, 21_000],
+      [5, 5_000],
+    ])
+  })
+
+  it('ignores system messages and invalid timestamps without crossing turns', () => {
+    const messages = [
+      msg('user', '2026-08-12T03:00:00.000Z'),
+      { ...msg('user', '2026-08-12T03:00:01.000Z'), metaKind: 'meta' },
+      msg('assistant', 'not-a-date'),
+      msg('assistant', '2026-08-12T03:00:04.000Z'),
+      msg('user', ''),
+      msg('assistant', '2026-08-12T03:00:10.000Z'),
+    ]
+
+    expect([...historicalMessageExecutionMs(messages)]).toEqual([[3, 4_000]])
   })
 })
 

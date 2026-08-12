@@ -29,6 +29,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import type { Agent, SessionMeta } from './types'
 import { backgroundImagePath, theme, launchArgs, useReclaude } from './settings'
 import { t } from './i18n'
+import { humanizeTerminalSessionError } from './sessionError'
 import { panes, focusPane, ensureLayout, activeUiId } from './panes'
 import * as api from './api'
 import {
@@ -1294,7 +1295,7 @@ function isTerminalCancelInput(data: string) {
 }
 
 /**
- * codex resume 在 TUI 引导阶段常因「配置加载失败 / model provider 缺失」直接退出，
+ * codex resume 在 TUI 引导阶段常因「配置加载失败 / model provider 缺失 / 会话被占用」直接退出，
  * codex 打进 xterm 的原始报错（如 `Model provider \`aixj_vip\` not found`）用户往往看不懂
  * ——尤其是那些在旧 CLI / VSCode 扩展里用过、后来 provider 改名/删除的历史会话。
  * 这里从最近的 PTY 输出里识别这类错误，返回一句可操作的本地化提示；否则 null（不打扰
@@ -1309,6 +1310,11 @@ export function codexResumeConfigHint(recentOutput: string): string | null {
   }
   if (/failed to load configuration/i.test(plain)) {
     return t('tui.codexConfigError')
+  }
+  // 内嵌终端没有 Chat 那样的“重试”按钮，必须明确告诉用户释放外部占用后
+  // 关闭当前终端 tab，再重新打开会话；否则用户只会看到 app-server 原始英文报错。
+  if (/already has an active writer|active writer/i.test(plain)) {
+    return t('tui.codexActiveWriter')
   }
   return null
 }
@@ -1583,8 +1589,8 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
   } catch (e) {
     setProcessState(tab, 'error')
     setTurnState(tab, 'error', 'pty-exit')
-    tab.errorMessage = String(e)
-    term.write(`\r\n\x1b[31m[error] ${e}\x1b[0m\r\n`)
+    tab.errorMessage = humanizeTerminalSessionError(e)
+    term.write(`\r\n\x1b[31m[error] ${tab.errorMessage}\x1b[0m\r\n`)
     return
   }
   tab.ptyId = ptyId

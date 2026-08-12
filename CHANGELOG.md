@@ -6,6 +6,18 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ---
 
+## [v0.3.18]
+
+### Bug Fixes
+
+- **Session-lock recovery** — GUI Chat now explains which Chat, terminal, or external Codex process is holding a session, and offers an in-place Retry button after the other owner is closed.
+- **Embedded terminal recovery guidance** — terminal resume failures now use terminal-specific instructions, including closing the current embedded terminal before reopening the session.
+- **Chat-to-Read cleanup** — switching a live Chat to Read mode now stops and releases its background Chat process, preventing subsequent embedded-terminal resumes from being rejected by a stale Chat writer lock.
+
+### Tests
+
+- Added coverage for session-lock retry behavior, terminal-specific recovery messages, and releasing Chat ownership when switching to Read mode.
+
 ## [v0.3.17]
 
 ### Bug Fixes

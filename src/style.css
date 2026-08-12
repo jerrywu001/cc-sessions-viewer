@@ -496,11 +496,15 @@ button {
   background: color-mix(in srgb, var(--surface-2) 74%, transparent);
 }
 :root.has-custom-background .block-card.text-diff-result,
-:root.has-custom-background .text-diff-result .block-body,
+:root.has-custom-background .text-diff-result .block-body {
+  background: color-mix(in srgb, var(--code-bg) 60%, transparent);
+}
+:root.has-custom-background .text-diff-result .block-summary {
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+}
 :root.has-custom-background .md-mermaid-source {
   background: color-mix(in srgb, var(--code-bg) 74%, transparent);
 }
-:root.has-custom-background .text-diff-result .block-summary,
 :root.has-custom-background .md-math-block,
 :root.has-custom-background .md-table thead,
 :root.has-custom-background .mermaid-export {
@@ -2765,6 +2769,12 @@ mark.locate-hl {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
 }
+.msg-execution-time {
+  color: var(--text-mute);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
 .msg-action-btn {
   display: inline-flex;
   align-items: center;
@@ -3882,6 +3892,10 @@ details[open] > .thinking-summary .thinking-chev {
    不会重绘、动画直接冻死（实测 Safari 同引擎里整列纹丝不动）。实色文字 + 动画 mask-position 不碰
    文字裁剪层，是 WebKit 里唯一能动起来的写法。模板需给 .chat-running-label 绑 :data-text。 */
 .chat-running-label {
+  /* 动词按实际翻译文本保留完整宽度：中文「处理中」、英文 "Working" 等长度不同，
+     不能再让长工具胶囊把它压成半个字。工具摘要占剩余空间并自行截断。 */
+  flex: 0 0 auto;
+  white-space: nowrap;
   position: relative;
   font-weight: 500;
   color: var(--text-mute); /* 静止态是浅灰（参考 Codex），高光扫过时才提到 --text */
@@ -3944,6 +3958,9 @@ details[open] > .thinking-summary .thinking-chev {
 .chat-running-tool {
   display: inline-flex;
   align-items: center;
+  /* 默认按内容收缩，不把整行剩余空间填成一条空胶囊；只有空间不足时才收缩，
+     给状态动词、计时和中断按钮让位。 */
+  flex: 0 1 auto;
   gap: 5px;
   min-width: 0;
   max-width: 100%;
@@ -4092,6 +4109,8 @@ details[open] > .thinking-summary .thinking-chev {
 .chat-running-stop {
   display: inline-flex;
   align-items: center;
+  /* 停止按钮是固定操作入口，不能被长工具摘要压窄或挤到换行。 */
+  flex: 0 0 auto;
   gap: 4px;
   margin-left: 2px;
   padding: 2px 8px;
@@ -4100,6 +4119,7 @@ details[open] > .thinking-summary .thinking-chev {
   background: transparent;
   color: var(--text-dim);
   font-size: 12px;
+  white-space: nowrap;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease, background 0.15s ease;

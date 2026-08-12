@@ -24,6 +24,7 @@ import {
   parseRetryLine,
   reconnectChats,
   removeQueued,
+  retryChatResume,
   respondPermission,
   respondQuestion,
   sendPrompt,
@@ -32,6 +33,7 @@ import {
   shouldDropDuplicatePatchOutputForTest,
 } from '../src/chatSessions'
 import { rememberChatGuiPreference } from '../src/chatGuiPreferences'
+import { humanizeSessionError } from '../src/sessionError'
 import type { ChatPermissionRequest, ChatQuestionRequest, Msg } from '../src/types'
 
 describe('chatSessions streaming delta batching', () => {
@@ -238,6 +240,31 @@ describe('chatSessions recovery after an idle child exit', () => {
     expect(session.needsResume).toBe(true)
     expect(session.errorMessage).toContain('temporary startup failure')
   })
+
+  it('resumes the current chat from a single-session lock error', async () => {
+    invokeMock.mockResolvedValueOnce({ chatId: 95, processModel: 'longLivedStdin' })
+    const session = await startChat({
+      agent: 'codex',
+      projectKey: 'p',
+      cwd: '/tmp',
+      sessionId: 'resume-95',
+      title: 'C',
+    })
+
+    // Simulate the old process ending after the lock error was reported. The retry
+    // button should cancel the pending timer and resume this same tab in place.
+    vi.useFakeTimers()
+    chatOnExitForTest(session, { chatId: 95, code: -1 })
+    session.errorMessage = humanizeSessionError(new Error('thread already has an active writer'))
+    invokeMock.mockReset()
+    invokeMock.mockResolvedValueOnce({ chatId: 96, processModel: 'codexAppServer' })
+
+    await expect(retryChatResume(session)).resolves.toBe(true)
+    expect(session.chatId).toBe(96)
+    expect(session.needsResume).toBe(false)
+    expect(session.status).toBe('running')
+    expect(session.errorMessage).toBeUndefined()
+  })
 })
 
 describe('chatSessions live tool result routing', () => {
@@ -345,6 +372,32 @@ describe('chatSessions compact live tool activity', () => {
       blocks: [{ kind: 'tool_result', toolId: 'bash-1', text: 'permission denied', isError: true }],
     })
     expect(session.toolActivity).toMatchObject({ toolName: 'Bash', toolId: 'bash-1', phase: 'failed' })
+  })
+
+  it('records execution time on live assistant and tool messages', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-12T03:00:13.000Z'))
+    invokeMock.mockResolvedValueOnce({ chatId: 85, processModel: 'longLivedStdin' })
+    const session = await startChat({ agent: 'claude', projectKey: 'p', cwd: '/tmp', title: 'C' })
+    session.turnState = 'running'
+    session.turnStartedAt = Date.now() - 13_000
+
+    const assistant: Msg = {
+      role: 'assistant',
+      sidechain: false,
+      blocks: [{ kind: 'text', text: 'Done', isError: false }],
+    }
+    chatOnMsgForTest(session, assistant)
+    expect(session.msgs[0].executionMs).toBe(13_000)
+
+    const toolResult: Msg = {
+      role: 'user',
+      sidechain: false,
+      blocks: [{ kind: 'tool_result', toolId: 'bash-1', text: 'ok', isError: false }],
+    }
+    chatOnMsgForTest(session, toolResult)
+    expect(session.msgs[1].executionMs).toBe(13_000)
+    vi.useRealTimers()
   })
 
   it('keeps parallel tool calls available after one result arrives', async () => {

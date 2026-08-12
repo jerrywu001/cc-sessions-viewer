@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch, defineAsyncComponent } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import type { Agent, Msg, SessionMeta, Block, ChatQuestionRequest } from '../types'
-import { renderText, renderTextUncached, formatTime, formatElapsedSeconds, isCaveatOnlyMsg, isAskUserQuestionInstructionOnlyMsg, parseSystemEvent, cleanMetaText, metaKindIsPre, parseMetaFields, parseTeammateMessage, stripImagePlaceholders, parseFileRef } from '../format'
+import { renderText, renderTextUncached, formatTime, formatElapsedSeconds, historicalMessageExecutionMs, isCaveatOnlyMsg, isAskUserQuestionInstructionOnlyMsg, parseSystemEvent, cleanMetaText, metaKindIsPre, parseMetaFields, parseTeammateMessage, stripImagePlaceholders, parseFileRef } from '../format'
 import type { MetaField } from '../format'
 import { prettifyAndHighlightJson } from '../jsonHighlight'
 import { renderAllMermaid, resetMermaidForTheme } from '../mermaid'
@@ -112,7 +112,7 @@ const emit = defineEmits<{
   resumeHere: []
   /** 入口 3：把当前只读会话就地切到 GUI chat 模式。 */
   switchToChat: []
-  /** live chat 头部：切回来源会话的只读详情（read 模式），进程不停。 */
+  /** live chat 头部：切回来源会话的只读详情（read 模式），会先释放 live Chat。 */
   switchToRead: []
   rename: []
   /** `/fork` 指令：把当前 live chat clone 成独立新会话并切过去（仅 live 模式、Claude）。 */
@@ -358,6 +358,14 @@ function thinkingLabel(messageIndex: number): string {
   return elapsed
     ? t('tool.thinkingDone', { duration: elapsed })
     : t('tool.thinkingDoneNoDuration')
+}
+
+const historicalExecutionTimes = computed(() => historicalMessageExecutionMs(props.messages))
+
+function messageExecutionLabel(m: Msg, messageIndex: number): string | null {
+  const executionMs = m.executionMs ?? historicalExecutionTimes.value.get(messageIndex)
+  if (executionMs == null || !Number.isFinite(executionMs)) return null
+  return formatElapsedSeconds(Math.max(1, Math.floor(executionMs / 1000)))
 }
 
 function isCodexInlineCodeToolUse(b: Block): boolean {
@@ -2227,6 +2235,13 @@ function onDocClick(e: MouseEvent) {
                故不会压到紧随其后的 tool-only 结果卡上）。时间统一藏起，hover 才露出。 -->
           <div class="msg-actions">
             <span class="msg-time">{{ formatTime(m.timestamp) }}</span>
+            <span
+              v-if="messageExecutionLabel(m, vr.index)"
+              class="msg-execution-time"
+              :title="t('chat.message.executionTime', { duration: messageExecutionLabel(m, vr.index)! })"
+            >
+              {{ messageExecutionLabel(m, vr.index) }}
+            </span>
             <button
               v-if="cancelledPrompt?.index === vr.index"
               class="msg-action-btn"

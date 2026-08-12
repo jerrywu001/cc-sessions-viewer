@@ -180,11 +180,16 @@ fn release_session_lease(lease: &Mutex<Option<crate::runtime::SessionLease>>) {
     }
 }
 
-/// 仅自然退出的 chat 会走这条路径：从注册表移除并释放会话租约。若 entry 已被 stop
-/// 主动取走，则返回 false，调用方不再向前端补发一个会触发自动重启的 exit 事件。
+/// 从运行中注册表摘除 chat。lease 必须在旧子进程真正停止后释放：否则模型切换的
+/// stop → resume 虽然能越过 GUI 锁，却可能与 Codex 尚未收尾的旧 writer 并发。
+fn remove_chat(id: u64) -> Option<ChatEntry> {
+    map().lock().ok().and_then(|mut chats| chats.remove(&id))
+}
+
+/// 仅自然退出的 chat 会走这条路径。若 entry 已被 stop 主动取走，则返回 false，调用方
+/// 不再向前端补发一个会触发自动重启的 exit 事件。
 fn release_and_remove_chat(id: u64) -> bool {
-    let entry = map().lock().ok().and_then(|mut chats| chats.remove(&id));
-    let Some((_handle, meta)) = entry else {
+    let Some((_handle, meta)) = remove_chat(id) else {
         return false;
     };
     release_session_lease(&meta.session_lease);
@@ -1599,6 +1604,29 @@ fn kill_and_wait(child: &mut Child) {
 }
 
 fn stop_codex_app_server_child(shared: &CodexAppServerShared) {
+    // `codex app-server` 会为 resume 的 thread 持有一个 writer。直接杀掉外层 shell 时，
+    // 打包版里它的内部清理可能来不及完成，下一次 resume 就会收到
+    // "thread already has an active writer"。先按 app-server 协议取消订阅，收到确认后再
+    // 终止进程树；协议调用失败/超时仍会走下面的强制回收，关闭操作不会被卡住。
+    if let Some(thread_id) = shared.thread_id.lock().ok().and_then(|g| g.clone()) {
+        let rpc_id = codex_next_rpc_id(shared);
+        if codex_write_rpc(
+            shared,
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": rpc_id,
+                "method": "thread/unsubscribe",
+                "params": { "threadId": thread_id },
+            }),
+        )
+        .is_ok()
+        {
+            // 正常 app-server 是本地管道通信，确认会在极短时间内返回；这里只留一个很小的
+            // 窗口让它释放 writer，不能为了异常进程把关闭 Chat tab 卡住一秒。超时后立即由
+            // 进程树清理兜底。
+            let _ = codex_wait_response(shared, &rpc_id, Duration::from_millis(100));
+        }
+    }
     if let Ok(mut child) = shared.child.lock() {
         kill_and_wait(&mut child);
     }
@@ -1613,10 +1641,13 @@ struct CodexAppServerStartupGuard {
 impl Drop for CodexAppServerStartupGuard {
     fn drop(&mut self) {
         if self.armed {
-            if let Ok(mut chats) = map().lock() {
-                chats.remove(&self.id);
-            }
+            // 初始化超时 / 失败也必须先释放 lease；否则用户刷新页面后重试同一会话，
+            // 会被 reader 线程尚未退出的旧 ChatMeta 永久挡住。
+            let entry = remove_chat(self.id);
             stop_codex_app_server_child(&self.shared);
+            if let Some((_handle, meta)) = entry {
+                release_session_lease(&meta.session_lease);
+            }
         }
     }
 }
@@ -3743,14 +3774,12 @@ fn oneshot_turn_reader(
 /// 结束一个 chat 会话：先把 entry 拿走（waiter 下一轮发现不见了就 return，
 /// 不再 emit 奇怪的 exit），再 kill + wait 回收，避免僵尸。幂等。
 pub fn stop(id: u64) -> Result<(), String> {
-    let entry = {
-        let mut m = map().lock().map_err(|e| e.to_string())?;
-        m.remove(&id)
-    };
-    let Some((arc, _meta)) = entry else {
+    let Some((arc, meta)) = remove_chat(id) else {
         return Ok(());
     };
     stop_handle(arc.as_ref());
+    // 等真正的 app-server / 其后代都停掉，再允许同一 thread 被新模型 resume。
+    release_session_lease(&meta.session_lease);
     Ok(())
 }
 
@@ -3782,8 +3811,9 @@ pub fn stop_all() {
         let mut chats = map().lock().unwrap_or_else(|e| e.into_inner());
         chats.drain().map(|(_, entry)| entry).collect()
     };
-    for (handle, _) in entries {
+    for (handle, meta) in entries {
         stop_handle(handle.as_ref());
+        release_session_lease(&meta.session_lease);
     }
 }
 

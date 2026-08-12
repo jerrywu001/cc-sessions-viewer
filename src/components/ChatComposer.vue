@@ -14,6 +14,7 @@ import {
   interruptChat,
   now,
   removeQueued,
+  retryChatResume,
   steerQueued,
   type ChatSession,
   type QueuedMessage,
@@ -26,12 +27,13 @@ import { openSideChat } from '../sideChat'
 import { openCodexSideChat } from '../codexSideChat'
 import { formatElapsedSeconds } from '../format'
 import { showTooltipFor, hideTooltip } from '../tooltip'
+import { isRetryableSessionError } from '../sessionError'
 import type { ChatImageAttachment, ChatFileAttachment, SlashCommand, ProjectFileEntry } from '../types'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 import {
-  IconPlus, IconSend, IconStop, IconClose, IconFolder, IconPaperclip, IconSlashSquare, IconSkill,
+  IconPlus, IconSend, IconStop, IconClose, IconFolder, IconPaperclip, IconSlashSquare, IconSkill, IconRefresh,
   IconArrowUp, IconChevronRight, IconZap, IconCornerDownLeft,
   fileIconFor,
 } from './icons'
@@ -236,6 +238,10 @@ const running = computed(() => props.session.turnState === 'running')
 const ended = computed(
   () => props.session.status === 'exited' || props.session.status === 'error',
 )
+const retryableSessionError = computed(
+  () => isRetryableSessionError(props.session.errorMessage),
+)
+const retryingResume = ref(false)
 const ready = computed(
   () => props.session.status === 'running' && (props.session.chatId !== null || props.session.needsResume),
 )
@@ -261,6 +267,16 @@ const retryLabel = computed(() => {
     ? t('chat.running.retryingN', { n: r.attempt, max: r.max })
     : t('chat.running.retrying')
 })
+
+async function onRetryResume() {
+  if (retryingResume.value || !retryableSessionError.value) return
+  retryingResume.value = true
+  try {
+    await retryChatResume(props.session)
+  } finally {
+    retryingResume.value = false
+  }
+}
 
 // ---------- §10.2/10.3/10.4 底栏切换器 ----------
 // 改的只是 session 上的当前选择（懒生效）：one-shot（Codex）下一轮带新 flag 即生效；
@@ -1560,9 +1576,20 @@ function queuedLabel(q: QueuedMessage): string {
       </div>
     </div>
 
-    <!-- 恢复多次仍失败时，别只留下模糊的 Session ended；把后端实际原因留给用户排障。 -->
-    <div v-if="ended && session.errorMessage" class="cc-session-error" role="alert">
-      {{ session.errorMessage }}
+    <!-- 单会话锁释放后可直接重试恢复当前 Chat，不需要关闭并重新打开 tab。 -->
+    <div v-if="session.errorMessage && (ended || retryableSessionError)" class="cc-session-error" role="alert">
+      <span class="cc-session-error-text">{{ session.errorMessage }}</span>
+      <button
+        v-if="retryableSessionError"
+        type="button"
+        class="cc-session-retry"
+        :disabled="retryingResume"
+        :aria-busy="retryingResume"
+        @click.stop="onRetryResume"
+      >
+        <IconRefresh :class="{ spinning: retryingResume }" />
+        {{ retryingResume ? t('session.error.retrying') : t('session.error.retry') }}
+      </button>
     </div>
 
     <!-- 输入框：单个 div 容器 —— 框内含 slash 浮层 + 图片缩略图 + 文本行（图片在框内、不再单列在框外） -->
@@ -1848,6 +1875,46 @@ function queuedLabel(q: QueuedMessage): string {
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cc-session-error-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cc-session-retry {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 3px 9px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  color: var(--danger);
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.cc-session-retry:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 17%, var(--surface));
+}
+.cc-session-retry:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+.cc-session-retry svg {
+  width: 14px;
+  height: 14px;
+}
+.cc-session-retry svg.spinning {
+  animation: cc-session-retry-spin 0.9s linear infinite;
+}
+@keyframes cc-session-retry-spin {
+  to { transform: rotate(360deg); }
 }
 /* 拖拽悬停态：输入框自身变成品牌色虚线投放区（边框即输入框边框，不会两层错位露灰边） */
 .chat-composer.drag-over .cc-input-wrap {

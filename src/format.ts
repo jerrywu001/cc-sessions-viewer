@@ -1,6 +1,7 @@
 // 轻量文本格式化：把会话内容渲染成可读的 HTML（无第三方依赖）。
 import { t } from './i18n'
 import { renderCodexPluginLinkHtml } from './codexPluginMentions'
+import type { Msg } from './types'
 
 function escapeHtml(s: string): string {
   return s
@@ -213,6 +214,44 @@ export function parseSystemEvent(m: {
   const rn = RENAME_INNER_RE.exec(sr[1])
   if (rn) return { kind: 'rename', name: rn[1] }
   return null
+}
+
+/**
+ * 为没有运行时 executionMs 的历史消息，从 transcript 时间戳推算本轮累计耗时。
+ * 只返回助手消息和工具结果，且不修改原始消息，避免把近似值写回会话文件。
+ */
+export function historicalMessageExecutionMs(messages: Msg[]): Map<number, number> {
+  const result = new Map<number, number>()
+  let turnStartedAt: number | null = null
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]
+    const timestamp = Date.parse(message.timestamp ?? '')
+    const hasToolResult = message.blocks.some((b) => b.kind === 'tool_result')
+    const startsTurn =
+      message.role === 'user' &&
+      !hasToolResult &&
+      !message.metaKind &&
+      !isCaveatOnlyMsg(message) &&
+      !isAskUserQuestionInstructionOnlyMsg(message) &&
+      !parseSystemEvent(message)
+
+    if (startsTurn) {
+      turnStartedAt = Number.isFinite(timestamp) ? timestamp : null
+      continue
+    }
+
+    if (
+      turnStartedAt == null ||
+      !Number.isFinite(timestamp) ||
+      (message.role !== 'assistant' && !hasToolResult)
+    ) continue
+
+    const elapsedMs = timestamp - turnStartedAt
+    if (elapsedMs >= 0) result.set(index, elapsedMs)
+  }
+
+  return result
 }
 
 // ─── 系统注入的 user 记录（metaKind）的展示 ──────────────────────────────

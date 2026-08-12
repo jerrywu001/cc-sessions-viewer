@@ -2,12 +2,15 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   captureStableTerminalCursor,
   codexSgrNormalizer,
+  codexResumeConfigHint,
   handleWindowsTerminalSelectionDelete,
   shouldBlinkTerminalCursor,
   shouldCopyWindowsTerminalSelection,
   shouldUseStableTerminalCursor,
   type TerminalTab,
 } from '../src/terminals'
+import { setLang } from '../src/settings'
+import { humanizeTerminalSessionError } from '../src/sessionError'
 
 // Windows：实测 codex 认不出背景、按深色主题出色 → 浅色主题下镜像前景。
 const normalizeLightSgr = codexSgrNormalizer('light', true)
@@ -54,6 +57,26 @@ describe('terminal keyboard handling', () => {
   it('does not intercept modified or unrelated keys', () => {
     expect(shouldCopyWindowsTerminalSelection(key({ shiftKey: true }), true, 'Win32')).toBe(false)
     expect(shouldCopyWindowsTerminalSelection(key({ key: 'v' }), true, 'Win32')).toBe(false)
+  })
+})
+
+describe('Codex terminal resume hints', () => {
+  it('explains how to recover when another writer owns the session', () => {
+    setLang('zh')
+    expect(
+      codexResumeConfigHint(
+        'thread/resume failed: thread 019 already has an active writer (code -32600)',
+      ),
+    ).toBe('这个会话正在被其他 Codex 进程或客户端占用。请先关闭外部终端或 Codex 客户端中的该会话，然后关闭当前内嵌终端，再重新打开会话。')
+  })
+})
+
+describe('embedded terminal session errors', () => {
+  it('uses terminal-specific recovery instructions for an in-app Chat lock', () => {
+    setLang('zh')
+    expect(
+      humanizeTerminalSessionError(new Error('Session is already open in GUI chat')),
+    ).toBe('这个会话已在应用内 Chat 中打开。请先关闭那个 Chat，然后关闭当前内嵌终端，再重新打开会话。')
   })
 })
 
