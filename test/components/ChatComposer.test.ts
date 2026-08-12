@@ -263,6 +263,8 @@ describe('ChatComposer', () => {
       },
     })
     await vi.waitFor(() => expect(wrapper.findAll('.cc-thumb')).toHaveLength(1))
+    expect(wrapper.find('.cc-thumb-tag').exists()).toBe(true)
+    expect(el.value).toContain('[Image #1]')
 
     await wrapper.setProps({ session: sessionB })
     expect(el.value).toBe('')
@@ -271,8 +273,9 @@ describe('ChatComposer', () => {
     await input.trigger('input')
 
     await wrapper.setProps({ session: sessionA })
-    expect(el.value).toBe('draft for A')
-    expect(wrapper.findAll('.cc-thumb')).toHaveLength(1)
+    expect(el.value).toBe('draft for A[Image #1]')
+    await vi.waitFor(() => expect(wrapper.findAll('.cc-thumb')).toHaveLength(1))
+    expect(wrapper.find('.cc-thumb-tag').exists()).toBe(true)
 
     await wrapper.setProps({ session: sessionB })
     expect(el.value).toBe('draft for B')
@@ -284,8 +287,60 @@ describe('ChatComposer', () => {
       global: { directives: { tooltip: vTooltip } },
     })
     await reopened.vm.$nextTick()
-    expect((reopened.find('textarea').element as HTMLTextAreaElement).value).toBe('draft for A')
-    expect(reopened.findAll('.cc-thumb')).toHaveLength(1)
+    expect((reopened.find('textarea').element as HTMLTextAreaElement).value).toBe('draft for A[Image #1]')
+    await vi.waitFor(() => expect(reopened.findAll('.cc-thumb')).toHaveLength(1))
+    expect(reopened.find('.cc-thumb-tag').exists()).toBe(true)
+  })
+
+  it('inserts a pasted image token at the middle caret without moving surrounding text', async () => {
+    const wrapper = mount(ChatComposer, {
+      props: { session: baseSession() },
+      global: { directives: { tooltip: vTooltip } },
+    })
+    const input = wrapper.find('textarea')
+    const el = input.element as HTMLTextAreaElement
+    el.value = 'before after'
+    el.selectionStart = el.selectionEnd = 'before '.length
+    await input.trigger('input')
+    const image = new File(['image'], 'middle.png', { type: 'image/png' })
+    await input.trigger('paste', {
+      clipboardData: {
+        items: [{ kind: 'file', type: 'image/png', getAsFile: () => image }],
+      },
+    })
+    await vi.waitFor(() => expect(el.value).toBe('before [Image #1]after'))
+    expect(el.selectionStart).toBe('before [Image #1]'.length)
+    await vi.waitFor(() => expect(wrapper.findAll('.cc-thumb')).toHaveLength(1))
+    expect(wrapper.find('.cc-thumb-tag').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('replaces the selected range with multiple pasted image tokens in order', async () => {
+    const wrapper = mount(ChatComposer, {
+      props: { session: baseSession() },
+      global: { directives: { tooltip: vTooltip } },
+    })
+    const input = wrapper.find('textarea')
+    const el = input.element as HTMLTextAreaElement
+    el.value = 'keep this text'
+    el.selectionStart = 'keep '.length
+    el.selectionEnd = 'keep this'.length
+    await input.trigger('input')
+    const one = new File(['one'], 'one.png', { type: 'image/png' })
+    const two = new File(['two'], 'two.png', { type: 'image/png' })
+    await input.trigger('paste', {
+      clipboardData: {
+        items: [
+          { kind: 'file', type: 'image/png', getAsFile: () => one },
+          { kind: 'file', type: 'image/png', getAsFile: () => two },
+        ],
+      },
+    })
+    await vi.waitFor(() => expect(el.value).toBe('keep [Image #1] [Image #2] text'))
+    expect(el.selectionStart).toBe('keep [Image #1] [Image #2]'.length)
+    await vi.waitFor(() => expect(wrapper.findAll('.cc-thumb')).toHaveLength(2))
+    expect(wrapper.findAll('.cc-thumb-tag')).toHaveLength(2)
+    wrapper.unmount()
   })
 
   it('defers popup work until IME composition ends and ignores the following Space keyup', async () => {
@@ -883,6 +938,7 @@ describe('ChatComposer /btw side chat', () => {
 
     expect((ta.element as HTMLTextAreaElement).value).toBe('cancelled question')
     expect(wrapper.findAll('.cc-thumb')).toHaveLength(1)
+    expect(wrapper.findAll('.cc-thumb-tag')).toHaveLength(0)
     expect(wrapper.find('.cc-file-chip').text()).toContain('README.md')
     expect(document.activeElement).toBe(ta.element)
     expect(session.initialDraft).toBeUndefined()

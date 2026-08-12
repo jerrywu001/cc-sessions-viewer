@@ -298,6 +298,7 @@ export default {
   'chat.composer.system.archive': 'このセッションをアーカイブして終了',
   'chat.composer.system.reload-skills': 'スキルをディスクから再読み込み',
   'chat.composer.removeImage': '削除',
+  'chat.composer.pastedImage': '貼り付け',
   'chat.composer.dropHint': 'ドロップしてメッセージにファイルを追加',
   'chat.composer.history': '履歴 {n}/{total}',
   'chat.composer.mention.attach': '添付',

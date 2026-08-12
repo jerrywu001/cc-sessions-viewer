@@ -70,6 +70,7 @@ import {
   codexPluginMentionRanges,
 } from '../codexPluginMentions'
 import { formatInlineFileMention, inlineFileMentions } from '../inlineFileMentions'
+import { nextInlineImageNumber } from '../inlineImages'
 import { rememberChatGuiPreference } from '../chatGuiPreferences'
 
 const props = defineProps<{ session: ChatSession }>()
@@ -176,6 +177,7 @@ onMounted(() => {
     exitHistory()
     applyHistoryEntry(initialDraft)
   }
+  resetInlineImageSequence(text.value)
   focusInput()
 })
 onBeforeUnmount(() => {
@@ -189,6 +191,34 @@ onBeforeUnmount(() => {
 const text = ref('')
 const images = ref<ChatImageAttachment[]>([])
 const files = ref<ChatFileAttachment[]>([]) // 非图片附件（文件/文件夹）→ 发送时 @path
+const pendingInlineImages = ref(0)
+const pendingInlinePlaceholders = new Set<string>()
+// 只用于本次草稿分配占位符，避免删除前面的图片后新图片重新复用旧编号。
+let nextInlineImageId = 1
+
+function syncInlineImageBindings() {
+  for (const placeholder of pendingInlinePlaceholders) {
+    if (!text.value.includes(placeholder)) pendingInlinePlaceholders.delete(placeholder)
+  }
+  images.value = images.value.filter((image) =>
+    !image.inlinePlaceholder || text.value.split(image.inlinePlaceholder).length - 1 === 1,
+  )
+  const ordinary = images.value.filter((image) => !image.inlinePlaceholder)
+  const inline = images.value
+    .filter((image): image is ChatImageAttachment & { inlinePlaceholder: string } => !!image.inlinePlaceholder)
+    .sort((a, b) => text.value.indexOf(a.inlinePlaceholder) - text.value.indexOf(b.inlinePlaceholder))
+  images.value = [...ordinary, ...inline]
+}
+
+function resetInlineImageSequence(value: string) {
+  nextInlineImageId = nextInlineImageNumber(value)
+}
+
+function bindImagesToText(_value: string, source: ChatImageAttachment[]): ChatImageAttachment[] {
+  // Composer state already carries explicit bindings for pasted images. Do not infer a
+  // binding for a normal top attachment just because the user typed literal `[Image #N]`.
+  return source
+}
 
 // ↑/↓ 历史回填（参考 Claude 客户端）：把本会话用户发过的消息抽成可翻列表。
 const promptHistory = computed<ChatHistoryEntry[]>(() => buildChatHistory(props.session.msgs))
@@ -205,10 +235,13 @@ const historyHint = computed(() =>
 watch(() => props.session, (session, previousSession) => {
   if (session.uiId === previousSession.uiId) return
   saveDraft(previousSession)
+  // 图片读取属于旧会话；切换后不能阻塞新会话的发送按钮。
+  pendingInlineImages.value = 0
   const draft = takeDraft(session)
   text.value = draft?.text ?? ''
-  images.value = draft?.images.map((image) => ({ ...image })) ?? []
+  images.value = draft ? bindImagesToText(text.value, draft.images.map((image) => ({ ...image }))) : []
   files.value = draft?.files.map((file) => ({ ...file })) ?? []
+  resetInlineImageSequence(text.value)
   exitHistory()
   stash.value = null
   nextTick(autosize)
@@ -220,7 +253,7 @@ watch(() => props.session.turnState, (cur, prev) => {
   if (prev === 'idle' && cur === 'running' && stash.value) {
     if (!text.value.trim() && images.value.length === 0 && files.value.length === 0) {
       text.value = stash.value.text
-      images.value = stash.value.images
+      images.value = bindImagesToText(text.value, stash.value.images)
       files.value = stash.value.files
       stash.value = null
       nextTick(autosize)
@@ -250,6 +283,7 @@ const canSend = computed(
   () =>
     !running.value &&
     ready.value &&
+    pendingInlineImages.value === 0 &&
     (!!text.value.trim() || images.value.length > 0 || files.value.length > 0),
 )
 
@@ -1054,6 +1088,7 @@ function scheduleInputWork() {
 
 function onInput(e: InputEvent) {
   exitHistory() // 用户一旦手动编辑就退出历史浏览，下次 ↑ 重新从最新一条开始
+  syncInlineImageBindings()
   // 中文 / 日文 IME 合成期间会连续派发 input；半成品不需要自动高度、命令或文件检测。
   if (e.isComposing || composing.value) return
   // compositionend 已经安排了最终值处理时，忽略 Vue 紧邻补发的 input；普通输入保持
@@ -1071,7 +1106,8 @@ function exitHistory() {
 /** 把一条历史输入回填进输入框，光标移到末尾。 */
 function applyHistoryEntry(e: ChatHistoryEntry) {
   text.value = e.text
-  images.value = e.images.map((i) => ({ ...i }))
+  images.value = bindImagesToText(text.value, e.images.map((i) => ({ ...i })))
+  resetInlineImageSequence(text.value)
   files.value = e.files.map((f) => ({ ...f }))
   nextTick(() => {
     autosize()
@@ -1085,6 +1121,7 @@ function applyHistoryEntry(e: ChatHistoryEntry) {
 
 /** 保存当前输入到所属会话；空草稿直接清除，避免发送后重新进入又恢复旧内容。 */
 function saveDraft(session: ChatSession) {
+  syncInlineImageBindings()
   if (!text.value.trim() && images.value.length === 0 && files.value.length === 0) {
     setChatDraft(session, null)
     return
@@ -1103,7 +1140,7 @@ function takeDraft(session: ChatSession): ChatHistoryEntry | null {
   session.initialDraft = undefined
   return {
     text: draft.text,
-    images: draft.images.map((image) => ({ ...image })),
+    images: bindImagesToText(draft.text, draft.images.map((image) => ({ ...image }))),
     files: draft.files.map((file) => ({ ...file })),
   }
 }
@@ -1353,6 +1390,10 @@ function onKeydown(e: KeyboardEvent) {
     e.preventDefault()
     return
   }
+  if ((e.key === 'Backspace' || e.key === 'Delete') && !e.isComposing && deleteInlineImageAtCaret(e.key)) {
+    e.preventDefault()
+    return
+  }
   if ((e.key === 'Backspace' || e.key === 'Delete') && !e.isComposing && deleteCodexPluginMentionAtCaret(e.key)) {
     e.preventDefault()
     return
@@ -1400,14 +1441,6 @@ function readFile(file: File): Promise<ChatImageAttachment | null> {
   })
 }
 
-async function addFiles(files: FileList | File[]) {
-  for (const f of Array.from(files)) {
-    if (!f.type.startsWith('image/')) continue
-    const att = await readFile(f)
-    if (att) images.value.push(att)
-  }
-}
-
 function onPaste(e: ClipboardEvent) {
   const items = e.clipboardData?.items
   if (!items) return
@@ -1415,11 +1448,117 @@ function onPaste(e: ClipboardEvent) {
   if (!imgs.length) return
   e.preventDefault()
   const files = imgs.map((it) => it.getAsFile()).filter((f): f is File => !!f)
-  void addFiles(files)
+  void pasteImagesAtCaret(files)
+}
+
+async function pasteImagesAtCaret(files: File[]) {
+  const el = taEl.value
+  if (!el || !files.length) return
+  const pasteSession = props.session
+  const sessionUiId = pasteSession.uiId
+  const start = el.selectionStart ?? text.value.length
+  const end = el.selectionEnd ?? start
+  const entries = files.map((file) => {
+    const placeholder = `[Image #${nextInlineImageId++}]`
+    pendingInlinePlaceholders.add(placeholder)
+    return { file, placeholder }
+  })
+  pendingInlineImages.value += entries.length
+  const inserted = entries.map((entry) => entry.placeholder).join(' ')
+  text.value = text.value.slice(0, start) + inserted + text.value.slice(end)
+  const caret = start + inserted.length
+  nextTick(() => {
+    el.focus()
+    el.setSelectionRange(caret, caret)
+    autosize()
+  })
+
+  try {
+    const loaded = await Promise.all(entries.map(async ({ file, placeholder }) => {
+      const image = await readFile(file)
+      return image ? { ...image, inlinePlaceholder: placeholder } : null
+    }))
+    if (props.session.uiId !== sessionUiId) {
+      const draft = takeChatDraft(pasteSession)
+      if (draft) {
+        const draftText = draft.text
+        const valid: ChatImageAttachment[] = []
+        for (const image of loaded) {
+          if (image && image.inlinePlaceholder && draftText.includes(image.inlinePlaceholder)) {
+            valid.push(image)
+          }
+        }
+        setChatDraft(pasteSession, {
+          ...draft,
+          images: [...draft.images, ...valid],
+        })
+      }
+      return
+    }
+    for (const [index, image] of loaded.entries()) {
+      const placeholder = entries[index].placeholder
+      if (image && text.value.includes(placeholder)) {
+        images.value.push(image)
+      } else if (!image) {
+        text.value = text.value.replace(placeholder, '')
+      }
+      pendingInlinePlaceholders.delete(placeholder)
+    }
+  } finally {
+    pendingInlineImages.value = Math.max(0, pendingInlineImages.value - entries.length)
+    for (const { placeholder } of entries) pendingInlinePlaceholders.delete(placeholder)
+  }
+  if (props.session.uiId !== sessionUiId) return
+  syncInlineImageBindings()
+  nextTick(() => {
+    autosize()
+    detectSlash()
+    detectMention()
+  })
 }
 
 function removeImage(i: number) {
+  const image = images.value[i]
   images.value.splice(i, 1)
+  if (image?.inlinePlaceholder) {
+    const start = text.value.indexOf(image.inlinePlaceholder)
+    if (start >= 0) text.value = text.value.slice(0, start) + text.value.slice(start + image.inlinePlaceholder.length)
+  }
+}
+
+function removeImageAttachment(image: ChatImageAttachment) {
+  const index = images.value.indexOf(image)
+  if (index >= 0) removeImage(index)
+}
+
+function deleteInlineImageAtCaret(key: 'Backspace' | 'Delete'): boolean {
+  const el = taEl.value
+  if (!el || el.selectionStart !== el.selectionEnd) return false
+  const caret = el.selectionStart
+  const candidates = [
+    ...images.value.map((image) => ({ image, token: image.inlinePlaceholder })),
+    ...Array.from(pendingInlinePlaceholders, (token) => ({ image: null, token })),
+  ]
+  for (const { image, token } of candidates) {
+    if (!token) continue
+    const start = text.value.indexOf(token)
+    if (start < 0) continue
+    const end = start + token.length
+    const matches = key === 'Backspace' ? caret > start && caret <= end : caret >= start && caret < end
+    if (!matches) continue
+    text.value = text.value.slice(0, start) + text.value.slice(end)
+    if (image) images.value = images.value.filter((candidate) => candidate !== image)
+    pendingInlinePlaceholders.delete(token)
+    nextTick(() => {
+      el.focus()
+      el.setSelectionRange(start, start)
+      autosize()
+      detectSlash()
+      detectMention()
+    })
+    return true
+  }
+  return false
 }
 
 // ---------- 文件 / 文件夹附件（系统选择器 → @path） ----------
@@ -1500,6 +1639,10 @@ async function submit() {
   // running 时**不再拦截**：有内容就走 enqueuePrompt —— 空闲即发，运行中则入队（type-while-running）。
   // app-server 握手完成前保留草稿，不允许 enqueuePrompt 静默丢弃 chatId=null 的消息。
   if (!ready.value) return
+  if (pendingInlineImages.value > 0) return
+  // Ctrl+Del、程序化 token 删除等路径不一定会触发 textarea input；发送前再做一次
+  // 绑定校验，避免正文已删掉 token 但仍把孤立图片送给 agent。
+  syncInlineImageBindings()
   if (!text.value.trim() && images.value.length === 0 && files.value.length === 0) return
   const body = text.value
   exitHistory()
@@ -1743,7 +1886,7 @@ function queuedLabel(q: QueuedMessage): string {
       <!-- ↑/↓ 历史回填提示：浏览历史消息时显示「History 当前/总数」（框内左上角） -->
       <div v-if="historyHint" class="cc-history-hint">{{ historyHint }}</div>
 
-      <!-- 图片缩略图（框内顶部）：hover 显示文件名，点击预览 -->
+      <!-- 图片缩略图（框内顶部）：hover 显示文件名，点击预览。正文粘贴的图片额外标记「贴图」。 -->
       <div v-if="images.length" class="cc-attachments">
         <div
           v-for="(img, i) in images"
@@ -1753,10 +1896,11 @@ function queuedLabel(q: QueuedMessage): string {
           @click="previewSrc = img.dataUrl"
         >
           <img :src="img.dataUrl" alt="" />
+          <span v-if="img.inlinePlaceholder" class="cc-thumb-tag">{{ t('chat.composer.pastedImage') }}</span>
           <button
             class="cc-thumb-x"
             v-tooltip="t('chat.composer.removeImage')"
-            @click.stop="removeImage(i)"
+            @click.stop="removeImageAttachment(img)"
           >
             <IconClose />
           </button>
@@ -2054,6 +2198,20 @@ function queuedLabel(q: QueuedMessage): string {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+.cc-thumb-tag {
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  max-width: calc(100% - 6px);
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 9px;
+  line-height: 12px;
+  pointer-events: none;
+  user-select: none;
 }
 .cc-thumb-x {
   position: absolute;

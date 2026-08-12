@@ -1945,6 +1945,7 @@ fn read_file_base64(path: String) -> Result<crate::types::ChatImageInput, String
     Ok(crate::types::ChatImageInput {
         media_type: image_mime_from_ext(&p),
         data: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        placeholder: None,
     })
 }
 

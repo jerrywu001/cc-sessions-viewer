@@ -285,7 +285,36 @@ pub trait SessionSource: Send + Sync {
     /// 某家的 stdin 形状）。
     fn chat_encode_input(&self, text: &str, images: &[crate::types::ChatImageInput]) -> String {
         let mut content: Vec<Value> = Vec::new();
-        for img in images {
+        let mut cursor = 0usize;
+        let mut used = std::collections::HashSet::new();
+        macro_rules! append_text {
+            ($value:expr) => {
+                if !$value.is_empty() {
+                    content.push(serde_json::json!({ "type": "text", "text": $value }));
+                }
+            };
+        }
+        // Inline images are interleaved at their visible token position. Sort by text position
+        // rather than attachment resolution order: two paste operations can resolve in reverse.
+        let mut inline: Vec<(usize, usize, &crate::types::ChatImageInput)> = images
+            .iter()
+            .enumerate()
+            .filter_map(|(index, img)| {
+                let placeholder = img.placeholder.as_deref()?;
+                let start = text.find(placeholder)?;
+                Some((start, index, img))
+            })
+            .collect();
+        inline.sort_by_key(|(start, _, _)| *start);
+        for (start, index, img) in inline {
+            let placeholder = img
+                .placeholder
+                .as_deref()
+                .expect("inline image placeholder");
+            if start < cursor {
+                continue;
+            }
+            append_text!(&text[cursor..start]);
             content.push(serde_json::json!({
                 "type": "image",
                 "source": {
@@ -294,9 +323,33 @@ pub trait SessionSource: Send + Sync {
                     "data": img.data,
                 }
             }));
+            append_text!(placeholder);
+            cursor = start + placeholder.len();
+            used.insert(index);
         }
-        if !text.is_empty() {
-            content.push(serde_json::json!({ "type": "text", "text": text }));
+        append_text!(&text[cursor..]);
+        // Normal top attachments retain the historical image-before-text behavior.
+        let normal_images: Vec<Value> = images
+            .iter()
+            .enumerate()
+            .filter_map(|(index, img)| {
+                if used.contains(&index) || img.placeholder.is_some() {
+                    return None;
+                }
+                Some(serde_json::json!({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img.media_type,
+                        "data": img.data,
+                    }
+                }))
+            })
+            .collect();
+        if !normal_images.is_empty() {
+            let mut ordered = normal_images;
+            ordered.extend(content);
+            content = ordered;
         }
         serde_json::json!({
             "type": "user",
@@ -823,6 +876,8 @@ pub fn source(agent: &str) -> Result<Box<dyn SessionSource>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ChatImageInput;
+    use serde_json::Value;
 
     #[test]
     fn snippet_returns_match_with_surrounding_context() {
@@ -832,6 +887,38 @@ mod tests {
         assert!(snip.contains("fox"));
         assert!(snip.contains("brown"));
         assert!(snip.contains("jumps"));
+    }
+
+    #[test]
+    fn chat_encode_input_interleaves_images_at_visible_placeholders() {
+        let source = source("claude").expect("Claude source");
+        let line = source.chat_encode_input(
+            "before [Image #1] middle [Image #2] after",
+            &[
+                ChatImageInput {
+                    media_type: "image/png".into(),
+                    data: "one".into(),
+                    placeholder: Some("[Image #1]".into()),
+                },
+                ChatImageInput {
+                    media_type: "image/jpeg".into(),
+                    data: "two".into(),
+                    placeholder: Some("[Image #2]".into()),
+                },
+            ],
+        );
+        let value: Value = serde_json::from_str(&line).expect("valid stream-json");
+        let content = value["message"]["content"]
+            .as_array()
+            .expect("content array");
+        assert_eq!(content.len(), 7);
+        assert_eq!(content[0]["text"], "before ");
+        assert_eq!(content[1]["source"]["data"], "one");
+        assert_eq!(content[2]["text"], "[Image #1]");
+        assert_eq!(content[3]["text"], " middle ");
+        assert_eq!(content[4]["source"]["data"], "two");
+        assert_eq!(content[5]["text"], "[Image #2]");
+        assert_eq!(content[6]["text"], " after");
     }
 
     #[test]

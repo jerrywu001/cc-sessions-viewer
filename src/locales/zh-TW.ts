@@ -297,6 +297,7 @@ export default {
   'chat.composer.system.archive': '歸檔此會話並退出',
   'chat.composer.system.reload-skills': '從磁碟重新載入技能',
   'chat.composer.removeImage': '移除',
+  'chat.composer.pastedImage': '貼圖',
   'chat.composer.dropHint': '放開即可把檔案加入訊息',
   'chat.composer.history': '歷史 {n}/{total}',
   'chat.composer.mention.attach': '引用',

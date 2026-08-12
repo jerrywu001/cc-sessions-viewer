@@ -66,6 +66,28 @@ describe('buildChatHistory', () => {
     expect(h[0].images).toEqual([{ dataUrl, mediaType: 'image/png', data: 'AAAA', name: 'image' }])
   })
 
+  it('preserves text positions when Claude splits text around inline image blocks', () => {
+    const h = buildChatHistory([user([
+      txt('before '),
+      { kind: 'image', isError: false, imageSrc: 'data:image/png;base64,AAAA' },
+      txt('[Image #1] after'),
+    ])])
+    expect(h[0].text).toBe('before [Image #1] after')
+    expect(h[0].images[0].inlinePlaceholder).toBe('[Image #1]')
+  })
+
+  it('binds legacy mixed image attachments by their overall attachment positions', () => {
+    const h = buildChatHistory([user([
+      { kind: 'file', isError: false, filePath: '/work/report.pdf' },
+      { kind: 'image', isError: false, imageSrc: 'data:image/png;base64,ORDINARY' },
+      { kind: 'file', isError: false, filePath: '/work/notes.txt' },
+      { kind: 'image', isError: false, imageSrc: 'data:image/png;base64,PASTED' },
+      txt('请查看附件 [Image #4]'),
+    ])])
+    expect(h[0].images[0].inlinePlaceholder).toBeUndefined()
+    expect(h[0].images[1].inlinePlaceholder).toBe('[Image #4]')
+  })
+
   it('drops non-data (remote URL) images it cannot re-send', () => {
     const h = buildChatHistory([user([{ kind: 'image', isError: false, imageSrc: 'https://x/y.png' }, txt('hi')])])
     expect(h[0].images).toEqual([])

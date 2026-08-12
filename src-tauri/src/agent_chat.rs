@@ -251,6 +251,7 @@ fn remember_user_input(meta: &ChatMeta, text: &str, images: &[ChatImageInput]) {
         blocks.push(crate::types::Block {
             kind: "image".to_string(),
             image_src: Some(format!("data:{};base64,{}", img.media_type, img.data)),
+            inline_placeholder: img.placeholder.clone(),
             ..Default::default()
         });
     }

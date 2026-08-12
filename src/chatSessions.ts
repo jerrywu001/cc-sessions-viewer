@@ -1285,7 +1285,7 @@ export async function sendPrompt(
     await api.agentChatSend(
       chatId,
       sendText,
-      sendImages.map((i) => ({ mediaType: i.mediaType, data: i.data })),
+      sendImages.map((i) => ({ mediaType: i.mediaType, data: i.data, placeholder: i.inlinePlaceholder })),
       session.model,
       sessionEffectiveEffort(session),
       session.permissionMode,
@@ -1394,7 +1394,7 @@ function appendLocalUserMessage(
   const trimmed = text.trim()
   const blocks: Block[] = []
   for (const img of images) {
-    blocks.push({ kind: 'image', imageSrc: img.dataUrl, isError: false })
+    blocks.push({ kind: 'image', imageSrc: img.dataUrl, inlinePlaceholder: img.inlinePlaceholder, isError: false })
   }
   for (const f of files) {
     blocks.push({ kind: 'file', filePath: f.path, isDir: f.isDir, isError: false })

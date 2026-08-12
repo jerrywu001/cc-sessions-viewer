@@ -79,6 +79,7 @@ import { parseQuestionRequest } from '../chatQuestion'
 import { openPathExternal, agentChatSlashCommands } from '../api'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { showTooltipFor, hideTooltip } from '../tooltip'
+import { bindInlineImagePlaceholdersAtAttachmentPositions } from '../inlineImages'
 import { chatSupported } from '../chatComposerOptions'
 import {
   chatHistoryEntryFromMsg,
@@ -573,7 +574,29 @@ function imageSrcUrl(src: string): string {
 }
 
 function imageBlocks(m: Msg): Block[] {
-  return m.blocks.filter((b) => b.kind === 'image' && b.imageSrc)
+  const images: Block[] = []
+  const positions: number[] = []
+  let attachmentPosition = 0
+  for (const block of m.blocks) {
+    if (block.kind === 'image') {
+      attachmentPosition += 1
+      if (block.imageSrc) {
+        images.push(block)
+        positions.push(attachmentPosition)
+      }
+    } else if (block.kind === 'file' && block.filePath) {
+      attachmentPosition += 1
+    }
+  }
+  // Older rollout JSONL records contain the visible `[Image #N]` token in the
+  // text block but do not persist inlinePlaceholder on the image block. The N
+  // counts all attachments (files + images), so bind using the original
+  // attachment positions rather than the image-only array index.
+  const text = m.blocks
+    .filter((b) => b.kind === 'text')
+    .map((b) => b.text ?? '')
+    .join('')
+  return bindInlineImagePlaceholdersAtAttachmentPositions(text, images, positions)
 }
 // 图片缩略图单独展示，但正文仍保留 CLI 写入的 [Image #n] 占位符。
 // 占位符是图片与正文的语义锚点，尤其是同一条消息包含多张图片时不能省略。
@@ -2100,6 +2123,7 @@ function onDocClick(e: MouseEvent) {
               @click="openLightbox(imageBlocks(m).map((x) => imageSrcUrl(x.imageSrc!)), bi)"
             >
               <img :src="imageSrcUrl(b.imageSrc!)" loading="lazy" alt="" />
+              <span v-if="b.inlinePlaceholder" class="msg-image-tag">{{ t('chat.composer.pastedImage') }}</span>
             </button>
           </div>
 

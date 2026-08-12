@@ -2933,6 +2933,7 @@ mark.locate-hl {
   justify-content: flex-end;
 }
 .msg-image-thumb {
+  position: relative;
   display: block;
   padding: 0;
   border: 0;
@@ -2940,6 +2941,7 @@ mark.locate-hl {
   cursor: zoom-in;
   line-height: 0;
   border-radius: 10px;
+  overflow: hidden;
 }
 .msg-image-thumb img {
   display: block;
@@ -2957,6 +2959,21 @@ mark.locate-hl {
   /* 关闭 macOS Live Text 的虚线选区与小箭头；点击放大由外层 button 接管。 */
   pointer-events: none;
   -webkit-touch-callout: none;
+}
+.msg-image-tag {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  max-width: calc(100% - 8px);
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 10px;
+  line-height: 14px;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
 }
 /* 文件附件 chip：圆角描边胶囊，文件图标 + 文件名，点击外部打开。浮在气泡上方。 */
 .msg-files {

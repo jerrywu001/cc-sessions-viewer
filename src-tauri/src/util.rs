@@ -1022,6 +1022,61 @@ pub fn post_process_session_msgs(msgs: &mut [Msg]) {
             new_blocks.push(block);
         }
         msg.blocks = new_blocks;
+        bind_inline_image_placeholders(msg);
+    }
+}
+
+/// 根据真实消息中的附件顺序，把正文里的 `[Image #N]` 绑定到对应图片。
+///
+/// Codex 的历史消息会把普通文件、普通图片和贴图图片一起编号：`N` 是图片在
+/// 当前消息全部 `file/image` 附件中的 1-based 位置，而不是图片数组下标。这里
+/// 只依据当前消息实际解析出的块和正文 token 判断，不依赖文件名、会话示例或固定
+/// 的编号；因此普通图片不会因为正文里另有一个图片 token 而被误标记。
+fn bind_inline_image_placeholders(msg: &mut Msg) {
+    let image_token_re = regex_lite::Regex::new(r"\[Image #(\d+)\]").expect("valid regex");
+    let image_numbers: HashSet<usize> = msg
+        .blocks
+        .iter()
+        .filter(|block| block.kind == "text")
+        .filter_map(|block| block.text.as_deref())
+        .flat_map(|text| {
+            image_token_re.captures_iter(text).filter_map(|caps| {
+                caps.get(1)
+                    .and_then(|value| value.as_str().parse::<usize>().ok())
+            })
+        })
+        .collect();
+    if image_numbers.is_empty() {
+        return;
+    }
+
+    let mut attachment_position = 0usize;
+    let mut used = HashSet::new();
+    for block in &msg.blocks {
+        if block.kind == "image" || block.kind == "file" {
+            if let Some(placeholder) = block.inline_placeholder.as_deref() {
+                used.insert(placeholder.to_string());
+            }
+        }
+    }
+
+    for block in &mut msg.blocks {
+        if block.kind != "image" {
+            if block.kind == "file" {
+                attachment_position += 1;
+            }
+            continue;
+        }
+        attachment_position += 1;
+        if block.inline_placeholder.is_some()
+            || !image_numbers.contains(&attachment_position)
+        {
+            continue;
+        }
+        let placeholder = format!("[Image #{attachment_position}]");
+        if used.insert(placeholder.clone()) {
+            block.inline_placeholder = Some(placeholder);
+        }
     }
 }
 
@@ -1534,6 +1589,40 @@ Only after the original task is complete, process this follow-up in the order re
         post_process_session_msgs(&mut msgs);
         assert_eq!(msgs[0].blocks.len(), 2);
         assert_eq!(msgs[0].blocks[1].text.as_deref(), Some(text));
+    }
+
+    #[test]
+    fn test_post_process_binds_pasted_image_by_all_attachment_position() {
+        let mut msgs = vec![Msg {
+            role: "user".to_string(),
+            blocks: vec![
+                Block {
+                    kind: "file".to_string(),
+                    file_path: Some("/tmp/report.pdf".to_string()),
+                    ..Default::default()
+                },
+                Block {
+                    kind: "image".to_string(),
+                    image_src: Some("data:image/png;base64,ordinary".to_string()),
+                    ..Default::default()
+                },
+                Block {
+                    kind: "image".to_string(),
+                    image_src: Some("data:image/png;base64,pasted".to_string()),
+                    ..Default::default()
+                },
+                text_block("text", "我传了几个附件，然后看一下 [Image #3]"),
+            ],
+            ..Default::default()
+        }];
+
+        post_process_session_msgs(&mut msgs);
+
+        assert_eq!(msgs[0].blocks[1].inline_placeholder, None);
+        assert_eq!(
+            msgs[0].blocks[2].inline_placeholder.as_deref(),
+            Some("[Image #3]")
+        );
     }
 
     #[test]

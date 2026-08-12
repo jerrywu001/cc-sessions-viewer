@@ -89,6 +89,8 @@ export interface Block {
   isDir?: boolean
   diff?: DiffHunk[]
   imageSrc?: string
+  /** Chat 粘贴图片在正文中的 token；历史/本地回显用来保持图片绑定。 */
+  inlinePlaceholder?: string
 }
 
 export interface Msg {
@@ -263,12 +265,16 @@ export interface ChatImageAttachment {
   /** 原始磁盘路径（文件选择器 / 拖拽得到）。粘贴板截图无此字段。
    *  Codex 等 OneShot agent 用 `@"path"` 引用本地文件而非传 base64。 */
   sourcePath?: string
+  /** 粘贴到正文中的稳定占位符（例如 `[Image #1]`）。普通附件没有此字段。 */
+  inlinePlaceholder?: string
 }
 
 /** agent_chat_send 透传给后端的图片输入（与 Rust ChatImageInput 同形）。 */
 export interface ChatImageInput {
   mediaType: string
   data: string
+  /** Claude stdin 用来把图片内容块放回正文语义位置；Codex 会忽略。 */
+  placeholder?: string
 }
 
 export interface ChatTextElement {

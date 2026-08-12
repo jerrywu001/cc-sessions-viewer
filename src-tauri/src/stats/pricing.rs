@@ -589,6 +589,7 @@ pub(crate) fn parse_models_dev_json(body: &str) -> Option<HashMap<String, ModelC
         "kimi-k2.5",
         "kimi-k2.6",
         "kimi-k2.7-code",
+        "kimi-k3",
         "mimo-v2.5",
         "mimo-v2.5-free",
         "mimo-v2.5-pro",
@@ -601,6 +602,7 @@ pub(crate) fn parse_models_dev_json(body: &str) -> Option<HashMap<String, ModelC
         "qwen3.6-plus",
         "qwen3.7-max",
         "qwen3.7-plus",
+        "qwen3.8-max",
     ];
 
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
@@ -1144,6 +1146,44 @@ mod tests {
         );
         // openrouter 的镜像价 ($99) 不能覆盖 anthropic 官方价
         assert!((table.get("claude-magic-9").unwrap().input - 1e-5).abs() < 1e-15);
+    }
+
+    #[test]
+    fn parse_models_dev_json_includes_opencode_kimi_k3() {
+        let body = r#"{
+            "opencode": { "models": {
+                "kimi-k3": {
+                    "cost": { "input": 3, "output": 15, "cache_read": 0.3 },
+                    "limit": { "context": 1048576, "output": 131072 }
+                }
+            }}
+        }"#;
+
+        let table = parse_models_dev_json(body).expect("parsed");
+        let kimi = table.get("kimi-k3").expect("opencode kimi-k3");
+        assert!((kimi.input - 3e-6).abs() < 1e-15);
+        assert!((kimi.output - 15e-6).abs() < 1e-15);
+        assert!((kimi.cache_read - 0.3e-6).abs() < 1e-15);
+        assert_eq!(kimi.context, 1_048_576);
+    }
+
+    #[test]
+    fn parse_models_dev_json_includes_opencode_qwen_3_8_max() {
+        let body = r#"{
+            "alibaba-cn": { "models": {
+                "qwen3.8-max": {
+                    "cost": { "input": 1.77744, "output": 5.33231, "cache_read": 0.22218 },
+                    "limit": { "context": 1000000, "output": 131072 }
+                }
+            }}
+        }"#;
+
+        let table = parse_models_dev_json(body).expect("parsed");
+        let qwen = table.get("qwen3.8-max").expect("opencode qwen3.8-max");
+        assert!((qwen.input - 1.77744e-6).abs() < 1e-15);
+        assert!((qwen.output - 5.33231e-6).abs() < 1e-15);
+        assert!((qwen.cache_read - 0.22218e-6).abs() < 1e-15);
+        assert_eq!(qwen.context, 1_000_000);
     }
 
     #[test]

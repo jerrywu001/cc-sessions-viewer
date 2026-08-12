@@ -299,6 +299,7 @@ export default {
   'chat.composer.system.archive': '归档此会话并退出',
   'chat.composer.system.reload-skills': '从磁盘重新加载技能',
   'chat.composer.removeImage': '移除',
+  'chat.composer.pastedImage': '贴图',
   'chat.composer.dropHint': '松开即可把文件加入消息',
   'chat.composer.history': '历史 {n}/{total}',
   'chat.composer.mention.attach': '引用',

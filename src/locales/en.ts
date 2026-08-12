@@ -298,6 +298,7 @@ export default {
   'chat.composer.system.archive': 'Archive this session and exit',
   'chat.composer.system.reload-skills': 'Reload skills from disk',
   'chat.composer.removeImage': 'Remove',
+  'chat.composer.pastedImage': 'Pasted',
   'chat.composer.dropHint': 'Drop files to add them to your message',
   'chat.composer.history': 'History {n}/{total}',
   'chat.composer.mention.attach': 'attach',

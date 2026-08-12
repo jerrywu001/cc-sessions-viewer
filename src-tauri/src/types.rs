@@ -105,6 +105,9 @@ pub struct ReclaudeInfo {
 pub struct ChatImageInput {
     pub media_type: String,
     pub data: String,
+    /// Claude stdin content blocks 中图片对应的正文占位符；普通附件为空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
 }
 
 /// GUI chat 输入框 `@` 文件浮层的一条目录/文件项。`rel_path` 相对会话 `cwd`（统一用
@@ -295,6 +298,9 @@ pub struct Block {
     pub diff: Option<Vec<DiffHunk>>,
     /// 图片源：通常为 data:<mime>;base64,<...> 的内联 URL 或 http(s) URL。
     pub image_src: Option<String>,
+    /// Chat 粘贴图片在用户正文中的可见占位符。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inline_placeholder: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]

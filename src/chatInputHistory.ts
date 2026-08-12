@@ -5,6 +5,7 @@
 // 纯函数 + 无副作用，便于单测；翻页/光标等有状态逻辑留在组件里。
 import type { Block, Msg, ChatImageAttachment, ChatFileAttachment } from './types'
 import { commandInputFromMarkup, isCaveatOnlyMsg, parseSystemEvent } from './format'
+import { bindInlineImagePlaceholdersAtAttachmentPositions } from './inlineImages'
 
 /** 一条可回填的历史输入。 */
 export interface ChatHistoryEntry {
@@ -29,21 +30,37 @@ function imageFromSrc(src: string | undefined): ChatImageAttachment | null {
 function entryFromBlocks(blocks: Block[]): ChatHistoryEntry | null {
   const texts: string[] = []
   const images: ChatImageAttachment[] = []
+  const imagePositions: number[] = []
   const files: ChatFileAttachment[] = []
+  let attachmentPosition = 0
   for (const b of blocks) {
     if (b.kind === 'text' && b.text) texts.push(b.text)
     else if (b.kind === 'image') {
+      attachmentPosition += 1
       const img = imageFromSrc(b.imageSrc)
-      if (img) images.push(img)
+      if (img) {
+        images.push({ ...img, inlinePlaceholder: b.inlinePlaceholder })
+        imagePositions.push(attachmentPosition)
+      }
     } else if (b.kind === 'file' && b.filePath) {
+      attachmentPosition += 1
       files.push({ path: b.filePath, name: baseName(b.filePath), isDir: !!b.isDir })
     }
   }
-  const joined = texts.join('\n').trim()
+  // Claude 的视觉协议会把正文拆成多个 text block，并在 image block 之间插入图片。
+  // 有可见图片 token 时必须直接拼接，才能恢复 token 的原始字符位置；普通多文本块
+  // 仍沿用历史行为，用换行连接。
+  const joined = (images.length && texts.some((value) => /\[Image #\d+\]/.test(value))
+    ? texts.join('')
+    : texts.join('\n')).trim()
   // slash 命令在转录里是一坨 <command-name>/effort</…> 伪 XML —— 收回成用户敲的「/effort」。
   const text = commandInputFromMarkup(joined) ?? joined
   if (!text && !images.length && !files.length) return null
-  return { text, images, files }
+  return {
+    text,
+    images: bindInlineImagePlaceholdersAtAttachmentPositions(text, images, imagePositions),
+    files,
+  }
 }
 
 /** 把一条真正的用户消息还原成可编辑输入；系统记录、侧链消息等返回 null。 */
