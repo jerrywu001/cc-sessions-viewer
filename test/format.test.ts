@@ -190,6 +190,13 @@ A\boldsymbol c=0.
     expect(renderText('`src/components`')).not.toContain('file-ref')
   })
 
+  it('renders @ file mentions inline without moving them above the bubble', () => {
+    const html = renderText('请检查 @src/components/ChatView.vue 的实现')
+    expect(html).toContain('class="inline-file-mention"')
+    expect(html.indexOf('请检查')).toBeLessThan(html.indexOf('inline-file-mention'))
+    expect(html).toContain('data-file-ref="src/components/ChatView.vue"')
+  })
+
   it('does not treat a URL inside backticks as a file-ref', () => {
     expect(renderText('`https://x.com/a.ts`')).not.toContain('file-ref')
     expect(renderText('`https://x.com/a.ts`')).toContain('<code>https://x.com/a.ts</code>')

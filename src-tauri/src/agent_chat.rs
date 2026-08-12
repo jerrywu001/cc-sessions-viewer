@@ -362,7 +362,16 @@ fn build_piped_command(
     };
     let inner = format!("cd {} && {}", crate::agent_command::posix_quote(cwd), cli);
     let mut cmd = std::process::Command::new(&shell);
-    cmd.arg("-l").arg("-i").arg("-c").arg(&inner);
+    // Claude 的长驻 Chat 是管道子进程，并被放进独立进程组。此时 `-i` 会让 zsh
+    // 启用 job-control；macOS 可能因它没有前台 tty 而发 SIGTTIN，进程直接停在
+    // `T` 状态，Claude 根本不会启动，前端就会永久停在 Working。保留 login shell
+    // 以加载 PATH / nvm 等环境，但这条独立管道不要伪装成交互式 shell。
+    // Codex app-server / one-shot 仍需原来的交互式 login shell（它们不隔离进程组）。
+    cmd.arg("-l");
+    if !isolate_process_group {
+        cmd.arg("-i");
+    }
+    cmd.arg("-c").arg(&inner);
     cmd.env_remove("npm_config_prefix");
     cmd.current_dir(cwd);
     if isolate_process_group {

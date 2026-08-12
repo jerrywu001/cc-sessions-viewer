@@ -33,6 +33,7 @@ import { markProjectsDirty } from './projectsRefresh'
 import { humanizeRestoreError, humanizeSessionError, isRetryableSessionError } from './sessionError'
 import type { ChatHistoryEntry } from './chatInputHistory'
 import { codexPluginMentionTextElements, expandCodexPluginMentionsForPrompt } from './codexPluginMentions'
+import { inlineFileMentionTextElements } from './inlineFileMentions'
 import { isFileChangeResult } from './toolResultRouting'
 import { summarizeTool, type ToolSummary } from './liveToolSummary'
 import type {
@@ -1314,12 +1315,14 @@ async function preparePromptPayload(
   let textElements: ChatTextElement[] = []
 
   if (isStdinAgent) {
-    // Claude（LongLived / stdin）：文件/文件夹用 @"path"，图片走 base64 参数。
+    // Claude（LongLived / stdin）：@ 文件引用已经位于正文 text 中；普通附件
+    // 仍需追加为兼容性的独立路径引用，图片继续走 base64 参数。
     const refs = files.map((f) => `@"${f.path}"`).join(' ')
     sendText = [trimmed, refs].filter(Boolean).join(trimmed && refs ? ' ' : '')
   } else {
     // Codex（OneShot / AppServer）：客户端构造 Codex 专用消息格式，不依赖 server 解析 @"path"。
-    //   文件/图片 → # Files mentioned by the user: 结构（server 会自动注入到 context）
+    //   普通文件/图片附件 → # Files mentioned by the user: 结构（server 会自动注入到 context）
+    //   行内 @ 文件 → 直接保留在正文，并通过 textElements 标注位置
     //   文件夹   → [name](path/) markdown 链接（内联到正文）
     //   图片     → 额外传 base64 给后端，由 codex_turn_params 放入 input_image
     const codexPrompt = isCodexAppServer ? trimmed : expandCodexPluginMentionsForPrompt(trimmed)
@@ -1357,13 +1360,24 @@ async function preparePromptPayload(
       header += `## My request for Codex:\n`
       const userParts = [codexPrompt, ...folderRefs].filter(Boolean).join(' ')
       sendText = header + userParts + '\n'
-      if (isCodexAppServer) textElements = codexPluginMentionTextElements(trimmed, new TextEncoder().encode(header).length)
+      if (isCodexAppServer) {
+        const byteOffset = new TextEncoder().encode(header).length
+        textElements = [
+          ...codexPluginMentionTextElements(trimmed, byteOffset),
+          ...inlineFileMentionTextElements(trimmed, byteOffset),
+        ].sort((a, b) => a.byteRange.start - b.byteRange.start)
+      }
     } else {
       sendText = [codexPrompt, ...folderRefs].filter(Boolean).join(' ')
-      if (isCodexAppServer) textElements = codexPluginMentionTextElements(trimmed)
+      if (isCodexAppServer) {
+        textElements = [
+          ...codexPluginMentionTextElements(trimmed),
+          ...inlineFileMentionTextElements(trimmed),
+        ].sort((a, b) => a.byteRange.start - b.byteRange.start)
+      }
     }
 
-    // Codex app-server 自己从 # Files mentioned 的路径读取文件/图片，不需要传 base64。
+    // Codex app-server 自己从 # Files mentioned 的路径读取普通文件/图片，不需要传 base64。
     sendImages = []
   }
 

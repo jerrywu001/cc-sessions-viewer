@@ -3066,6 +3066,22 @@ code.file-ref {
 code.file-ref:hover {
   text-decoration: underline;
 }
+.inline-file-mention {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: -1px;
+  color: var(--link);
+  background: color-mix(in srgb, var(--link) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--link) 28%, transparent);
+  border-radius: 6px;
+  padding: 1px 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.inline-file-mention:hover {
+  background: color-mix(in srgb, var(--link) 18%, transparent);
+  text-decoration: underline;
+}
 .code-block {
   background: var(--code-bg);
   color: var(--code-fg);

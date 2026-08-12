@@ -1,6 +1,7 @@
 // 轻量文本格式化：把会话内容渲染成可读的 HTML（无第三方依赖）。
 import { t } from './i18n'
 import { renderCodexPluginLinkHtml } from './codexPluginMentions'
+import { inlineFileMentions } from './inlineFileMentions'
 import type { Msg } from './types'
 
 function escapeHtml(s: string): string {
@@ -79,6 +80,7 @@ function inline(text: string): string {
   // (same convention as the link placeholder above) keeps placeholders collision-safe.
   const SENT = String.fromCharCode(1)
   const codes: string[] = []
+  const files: Array<{ token: string; path: string }> = []
   s = s.replace(/`([^`\n]+)`/g, (_m, code) => {
     const idx = codes.push(code) - 1
     return `${SENT}CODE${idx}${SENT}`
@@ -97,6 +99,21 @@ function inline(text: string): string {
   s = s.replace(/~~~([^~\n]+?)~~~/g, (_m, code) => {
     const idx = codes.push(code) - 1
     return `${SENT}CODE${idx}${SENT}`
+  })
+  // File mentions are正文 token rather than standalone attachment blocks. Do
+  // this after extracting code spans so an @path inside backticks remains code.
+  s = s.replace(/.*/g, (line) => {
+    const mentions = inlineFileMentions(line)
+    if (!mentions.length) return line
+    let out = ''
+    let last = 0
+    for (const mention of mentions) {
+      out += line.slice(last, mention.start)
+      const idx = files.push({ token: mention.token, path: mention.path }) - 1
+      out += `${SENT}FILE${idx}${SENT}`
+      last = mention.end
+    }
+    return out + line.slice(last)
   })
   s = escapeHtml(s)
   s = s.replace(URL_RE, (url) => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`)
@@ -130,6 +147,14 @@ function inline(text: string): string {
         return `<code class="file-ref" data-file-ref="${escapeHtmlAttr(raw)}">${escapeHtml(raw)}</code>`
       }
       return `<code>${escapeHtml(raw)}</code>`
+    })
+  }
+  if (files.length) {
+    const fileRe = new RegExp(`${SENT}FILE(\\d+)${SENT}`, 'g')
+    s = s.replace(fileRe, (_m, n) => {
+      const file = files[Number(n)]
+      if (!file) return ''
+      return `<span class="inline-file-mention" data-file-ref="${escapeHtmlAttr(file.path)}" title="${escapeHtmlAttr(file.path)}">${escapeHtml(file.token)}</span>`
     })
   }
   if (links.length) {

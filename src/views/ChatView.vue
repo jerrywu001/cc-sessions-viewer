@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch, defineAsyncComponent } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import type { Agent, Msg, SessionMeta, Block, ChatQuestionRequest } from '../types'
-import { renderText, renderTextUncached, formatTime, formatElapsedSeconds, historicalMessageExecutionMs, isCaveatOnlyMsg, isAskUserQuestionInstructionOnlyMsg, parseSystemEvent, cleanMetaText, metaKindIsPre, parseMetaFields, parseTeammateMessage, stripImagePlaceholders, parseFileRef } from '../format'
+import { renderText, renderTextUncached, formatTime, formatElapsedSeconds, historicalMessageExecutionMs, isCaveatOnlyMsg, isAskUserQuestionInstructionOnlyMsg, parseSystemEvent, cleanMetaText, metaKindIsPre, parseMetaFields, parseTeammateMessage, parseFileRef } from '../format'
 import type { MetaField } from '../format'
 import { prettifyAndHighlightJson } from '../jsonHighlight'
 import { renderAllMermaid, resetMermaidForTheme } from '../mermaid'
@@ -575,10 +575,10 @@ function imageSrcUrl(src: string): string {
 function imageBlocks(m: Msg): Block[] {
   return m.blocks.filter((b) => b.kind === 'image' && b.imageSrc)
 }
-// 带图消息的正文要滤掉 [Image #n] 占位符（缩略图已单独展示）；无图消息原样渲染，
-// 免得误删正文里对图片的文字引用。
+// 图片缩略图单独展示，但正文仍保留 CLI 写入的 [Image #n] 占位符。
+// 占位符是图片与正文的语义锚点，尤其是同一条消息包含多张图片时不能省略。
 function bubbleText(m: Msg, raw: string): string {
-  let text = imageBlocks(m).length ? stripImagePlaceholders(raw) : raw
+  let text = raw
   if (m.blocks.some(isCodexPluginFileBlock)) text = text.replace(/^\[\s*/, '')
   return text
 }
@@ -1188,7 +1188,7 @@ function onScroll() {
 let cmdHoverEl: HTMLElement | null = null
 function onCmdOver(e: MouseEvent) {
   const el = (e.target as HTMLElement)?.closest?.(
-    '.cmd-name[data-cmd-desc], .file-ref[data-file-ref]',
+    '.cmd-name[data-cmd-desc], .file-ref[data-file-ref], .inline-file-mention[data-file-ref]',
   ) as HTMLElement | null
   if (el === cmdHoverEl) return
   cmdHoverEl = el
@@ -1206,7 +1206,7 @@ function onCmdLeave() {
 // 文件引用 code（形如 a/b.ts:12，见 format.ts 的 .file-ref）点击：在外部编辑器打开。
 // 相对 / 部分路径按会话 cwd 解析；末尾 :行[:列] 拆出来传给后端 —— 装了支持跳行的编辑器就跳到该行。
 function onContentClick(e: MouseEvent) {
-  const el = (e.target as HTMLElement)?.closest?.('.file-ref[data-file-ref]') as HTMLElement | null
+  const el = (e.target as HTMLElement)?.closest?.('.file-ref[data-file-ref], .inline-file-mention[data-file-ref]') as HTMLElement | null
   if (!el) return
   const raw = el.dataset.fileRef || ''
   if (!raw) return

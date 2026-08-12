@@ -106,7 +106,7 @@ describe('ChatComposer', () => {
     expect(wrapper.findComponent({ name: 'ChatEffortSlider' }).exists()).toBe(false)
   })
 
-  it('hides effort and rate limits for Claude custom endpoints even when apiKeySource reports none', async () => {
+  it('keeps effort but hides rate limits for Claude custom endpoints even when apiKeySource reports none', async () => {
     claudeRuntimeInfoMock.mockResolvedValueOnce({ hasCustomBaseUrl: true })
     setLang('en')
     const wrapper = mount(ChatComposer, {
@@ -115,7 +115,7 @@ describe('ChatComposer', () => {
     })
     await Promise.resolve()
     await wrapper.vm.$nextTick()
-    expect(wrapper.findComponent({ name: 'ChatEffortSlider' }).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'ChatEffortSlider' }).exists()).toBe(true)
     expect(wrapper.text()).not.toContain('5h')
     expect(wrapper.text()).not.toContain('week')
   })
@@ -333,13 +333,16 @@ describe('ChatComposer', () => {
     expect(wrapper.findComponent({ name: 'ChatEffortSlider' }).exists()).toBe(true)
   })
 
-  it('hides the effort slider while Claude apiKeySource is still unknown', () => {
+  it('shows the effort slider after runtime loading when Claude apiKeySource remains unknown', async () => {
     setLang('en')
     const wrapper = mount(ChatComposer, {
       props: { session: baseSession({ apiKeySource: undefined }) },
       global: { directives: { tooltip: vTooltip } },
     })
-    expect(wrapper.findComponent({ name: 'ChatEffortSlider' }).exists()).toBe(false)
+    // runtime_info 已返回但没有足够信息判断鉴权来源时，不能把正常 Claude 会话的
+    // effort 永久隐藏；只有明确识别为 API key 或自定义端点才隐藏。
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'ChatEffortSlider' }).exists()).toBe(true)
   })
 
   it('hides subscription rate-limit badges until Claude apiKeySource is confirmed as none', () => {
@@ -511,19 +514,123 @@ describe('ChatComposer @ file mention', () => {
     wrapper.unmount()
   })
 
-  it('attaches a file as a chip and strips the @token on click', async () => {
+  it('keeps a selected file as an inline token at the cursor position', async () => {
     const wrapper = mountComposer()
     await typeAt(wrapper, 'see @')
     const rows = wrapper.findAll('.cc-mention-item')
     // 第 3 项是 README.md（文件）。
     await rows[2].trigger('click')
     await wrapper.vm.$nextTick()
-    const chip = wrapper.find('.cc-file-chip')
-    expect(chip.exists()).toBe(true)
-    expect(chip.text()).toContain('README.md')
-    // 浮层关闭、`@token` 被抹掉（正文只剩用户写的话）。
+    expect(wrapper.find('.cc-file-chip').exists()).toBe(false)
+    // 浮层关闭，正文保留原位置的文件引用。
     expect(wrapper.find('.cc-mention').exists()).toBe(false)
-    expect((wrapper.find('textarea').element as HTMLTextAreaElement).value).toBe('see ')
+    expect((wrapper.find('textarea').element as HTMLTextAreaElement).value).toBe('see @README.md')
+  })
+
+  it('does not reopen the mention popup when moving the caret across a committed file token', async () => {
+    const wrapper = mountComposer()
+    await typeAt(wrapper, 'see @')
+    await wrapper.findAll('.cc-mention-item')[2].trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const ta = wrapper.find('textarea')
+    const el = ta.element as HTMLTextAreaElement
+    expect(wrapper.find('.cc-mention').exists()).toBe(false)
+
+    // 选中文件后，左右移动光标不能再次打开 @ 浮层抢占输入。
+    el.selectionStart = el.selectionEnd = el.value.length - 2
+    await ta.trigger('keyup', { key: 'ArrowLeft' })
+    await ta.trigger('keyup', { key: 'ArrowRight' })
+    await new Promise((r) => setTimeout(r, 90))
+    await flushPromises()
+    expect(wrapper.find('.cc-mention').exists()).toBe(false)
+
+    // 点击 token 内部同样应允许光标离开/定位，不重新打开浮层。
+    el.selectionStart = el.selectionEnd = 'see @'.length
+    await ta.trigger('click')
+    expect(wrapper.find('.cc-mention').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('keeps the popup closed when the caret moves into text immediately after a committed token', async () => {
+    const wrapper = mountComposer()
+    await typeAt(wrapper, '@')
+    await wrapper.findAll('.cc-mention-item')[2].trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const ta = wrapper.find('textarea')
+    const el = ta.element as HTMLTextAreaElement
+    // 模拟已提交 token 后存在紧邻标点的正文；这里没有发生编辑，所以仍应视为同一条引用。
+    el.value = '@README.md。'
+    el.selectionStart = el.selectionEnd = el.value.length
+    // 同步 Vue 模型但不触发 input，保持“文本未编辑”的提交状态。
+    await ta.trigger('click')
+    await new Promise((r) => setTimeout(r, 90))
+    expect(wrapper.find('.cc-mention').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('resumes @ search after a committed file token is edited', async () => {
+    const wrapper = mountComposer()
+    await typeAt(wrapper, '@')
+    await wrapper.findAll('.cc-mention-item')[2].trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const ta = wrapper.find('textarea')
+    const el = ta.element as HTMLTextAreaElement
+    el.value = '@README.mdx'
+    el.selectionStart = el.selectionEnd = el.value.length
+    await ta.trigger('input')
+    await new Promise((r) => setTimeout(r, 90))
+    await flushPromises()
+    expect(wrapper.find('.cc-mention').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('allows ordinary text to be typed after a committed file token', async () => {
+    const wrapper = mountComposer()
+    await typeAt(wrapper, '@')
+    await wrapper.findAll('.cc-mention-item')[2].trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const ta = wrapper.find('textarea')
+    const el = ta.element as HTMLTextAreaElement
+    el.selectionStart = el.selectionEnd = el.value.length
+    el.value += ' 的实现'
+    el.selectionStart = el.selectionEnd = el.value.length
+    await ta.trigger('input')
+    await new Promise((r) => setTimeout(r, 90))
+    await flushPromises()
+
+    expect(el.value).toBe('@README.md 的实现')
+    expect(wrapper.find('.cc-mention').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('ignores a late file search response after selecting a mention', async () => {
+    listProjectFilesMock.mockImplementation((_: string, query: string) => {
+      if (query === 'README') {
+        return new Promise((resolve) => setTimeout(() => resolve(MENTIONS), 140))
+      }
+      return Promise.resolve(MENTIONS)
+    })
+    const wrapper = mountComposer()
+    await typeAt(wrapper, '@')
+
+    const ta = wrapper.find('textarea')
+    const el = ta.element as HTMLTextAreaElement
+    el.value = '@README'
+    el.selectionStart = el.selectionEnd = el.value.length
+    await ta.trigger('input')
+    // 旧列表仍在界面上时快速选择，模拟异步搜索尚未返回的情况。
+    await wrapper.findAll('.cc-mention-item')[2].trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.cc-mention').exists()).toBe(false)
+
+    await new Promise((r) => setTimeout(r, 180))
+    await flushPromises()
+    expect(wrapper.find('.cc-mention').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('hides the drill chevron for an empty directory (no children)', async () => {
@@ -567,16 +674,35 @@ describe('ChatComposer @ file mention', () => {
     wrapper.unmount()
   })
 
-  it('attaches a folder chip when Enter is pressed on a directory row', async () => {
+  it('keeps a selected folder as an inline token when Enter is pressed', async () => {
     const wrapper = mountComposer()
     await typeAt(wrapper, '@')
-    // 高亮默认第 0 项（.codex 目录）；Enter 引用为目录 chip，而非提交消息。
+    // 高亮默认第 0 项（.codex 目录）；Enter 引用为正文 token，而非提交消息。
     await wrapper.find('textarea').trigger('keydown', { key: 'Enter' })
     await wrapper.vm.$nextTick()
-    const chip = wrapper.find('.cc-file-chip')
-    expect(chip.exists()).toBe(true)
-    expect(chip.text()).toContain('.codex')
+    expect(wrapper.find('.cc-file-chip').exists()).toBe(false)
+    expect((wrapper.find('textarea').element as HTMLTextAreaElement).value).toBe('@.codex/')
     expect(wrapper.find('.cc-mention').exists()).toBe(false)
+  })
+
+  it('allows ArrowRight to leave a committed folder token', async () => {
+    const wrapper = mountComposer()
+    await typeAt(wrapper, '@')
+    await wrapper.find('textarea').trigger('keydown', { key: 'Enter' })
+    await wrapper.vm.$nextTick()
+
+    const ta = wrapper.find('textarea')
+    const el = ta.element as HTMLTextAreaElement
+    expect(el.value).toBe('@.codex/')
+    el.selectionStart = el.selectionEnd = el.value.length
+    await ta.trigger('keydown', { key: 'ArrowRight' })
+    await ta.trigger('keyup', { key: 'ArrowRight' })
+    await new Promise((r) => setTimeout(r, 90))
+    await flushPromises()
+
+    expect(wrapper.find('.cc-mention').exists()).toBe(false)
+    expect(el.selectionStart).toBe(el.value.length)
+    wrapper.unmount()
   })
 
   it('keeps the mention popup closed after Escape until the token changes', async () => {

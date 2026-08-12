@@ -1040,6 +1040,27 @@ pub fn strip_edge_references(text: &str, refs: &[(usize, usize)]) -> String {
     if refs.is_empty() {
         return text.to_string();
     }
+    let remove = edge_reference_flags(text, refs);
+
+    let mut cleaned = String::new();
+    let mut last = 0;
+    for ((start, end), should_remove) in refs.iter().copied().zip(remove) {
+        if should_remove {
+            cleaned.push_str(&text[last..start]);
+            last = end;
+        }
+    }
+    cleaned.push_str(&text[last..]);
+    cleaned
+}
+
+/// 返回引用是否处在提示词首尾的连续附件区域。
+/// 行内 `@文件` 属于正文语义，只有首尾引用（兼容旧版普通附件协议）才应被
+/// 提升为独立 file block 并从正文移除。
+pub fn edge_reference_flags(text: &str, refs: &[(usize, usize)]) -> Vec<bool> {
+    if refs.is_empty() {
+        return Vec::new();
+    }
     let mut remove = vec![false; refs.len()];
 
     let mut cursor = 0;
@@ -1063,16 +1084,7 @@ pub fn strip_edge_references(text: &str, refs: &[(usize, usize)]) -> String {
         }
     }
 
-    let mut cleaned = String::new();
-    let mut last = 0;
-    for ((start, end), should_remove) in refs.iter().copied().zip(remove) {
-        if should_remove {
-            cleaned.push_str(&text[last..start]);
-            last = end;
-        }
-    }
-    cleaned.push_str(&text[last..]);
-    cleaned
+    remove
 }
 
 fn lift_paths_from_text(text: &str) -> (Vec<Block>, String) {
@@ -1091,29 +1103,9 @@ fn lift_paths_from_text(text: &str) -> (Vec<Block>, String) {
     }
     cleaned_text = strip_edge_references(&cleaned_text, &refs);
 
-    // 2. `@path` / `@"path"` 同样始终生成 tag，但中间位置保留完整原文。
-    let re_at = regex_lite::Regex::new(r#"@"([^"]+)"|@(\S+)"#).expect("valid regex");
-    let mut refs = Vec::new();
-    for caps in re_at.captures_iter(&cleaned_text) {
-        let whole = caps.get(0).unwrap();
-        let (path, reference_end) = match (caps.get(1), caps.get(2)) {
-            (Some(q), _) => (Some(q.as_str().to_string()), whole.end()),
-            (None, Some(u)) => {
-                let path = inline_at_file_path(u.as_str(), None);
-                let end = path
-                    .as_ref()
-                    .map(|path| whole.start() + 1 + path.len())
-                    .unwrap_or(whole.end());
-                (path, end)
-            }
-            _ => (None, whole.end()),
-        };
-        if let Some(p) = path {
-            lift_path_block(&p, &mut lifted);
-            refs.push((whole.start(), reference_end));
-        }
-    }
-    cleaned_text = strip_edge_references(&cleaned_text, &refs);
+    // 2. `@path` / `@"path"` 是正文语义，必须原样保留在原位置。
+    //    旧版实现会把它们提升成顶部 file block；这会让历史消息和实时消息的
+    //    布局不一致，也会让用户输入中的文件位置丢失。
 
     // 2b. 提取 [name](path/) 形式的文件夹/文件 markdown 链接（Codex 文件夹引用格式）
     let re_mdlink = regex_lite::Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").expect("valid regex");
@@ -1174,7 +1166,9 @@ fn lift_paths_from_text(text: &str) -> (Vec<Block>, String) {
         let capture = caps.get(1).unwrap();
         let capture_start = capture.start();
         // 行内 `@/path` 已在步骤 2 识别；正文必须保留其原文，不能被这里再次剥走。
-        if capture_start > 0 && cleaned_text.as_bytes()[capture_start - 1] == b'@' {
+        if (capture_start > 0 && cleaned_text.as_bytes()[capture_start - 1] == b'@')
+            || (capture_start >= 2 && cleaned_text[..capture_start].ends_with("@\""))
+        {
             continue;
         }
         if is_rust_diagnostic_location(&cleaned_text, capture_start) {
@@ -1193,6 +1187,14 @@ fn lift_paths_from_text(text: &str) -> (Vec<Block>, String) {
     for line in cleaned_text.lines() {
         let trimmed_line = line.trim();
         if trimmed_line.is_empty() {
+            remaining_lines.push(line);
+            continue;
+        }
+
+        // `@path` / `@"path"` are正文 token, including a token occupying the
+        // whole line. Do not reinterpret them as the old standalone attachment
+        // syntax.
+        if trimmed_line.starts_with('@') {
             remaining_lines.push(line);
             continue;
         }
@@ -1499,14 +1501,10 @@ Only after the original task is complete, process this follow-up in the order re
     }
 
     #[test]
-    fn test_lift_mid_prompt_at_file_reference_keeps_text_and_adds_file() {
+    fn test_at_file_reference_stays_in_the_original_text_position() {
         let text = "分析@scripts/release/appstore-release.sh的执行过程和调用命令";
         let (blocks, remaining) = lift_paths_from_text(text);
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(
-            blocks[0].file_path.as_deref(),
-            Some("scripts/release/appstore-release.sh")
-        );
+        assert!(blocks.is_empty());
         assert_eq!(remaining, text);
     }
 
@@ -1539,34 +1537,27 @@ Only after the original task is complete, process this follow-up in the order re
     }
 
     #[test]
-    fn test_lift_leading_at_file_reference_but_keeps_prompt_body() {
+    fn test_leading_at_file_reference_stays_in_the_original_text_position() {
         let text = "@scripts/release/appstore-release.sh 分析执行过程和调用命令";
         let (blocks, remaining) = lift_paths_from_text(text);
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].kind, "file");
-        assert_eq!(
-            blocks[0].file_path.as_deref(),
-            Some("scripts/release/appstore-release.sh")
-        );
-        assert_eq!(remaining, "分析执行过程和调用命令");
+        assert!(blocks.is_empty());
+        assert_eq!(remaining, text);
     }
 
     #[test]
-    fn test_lift_trailing_at_file_references_are_not_repeated_in_prompt() {
+    fn test_trailing_at_file_references_stay_in_the_original_text_position() {
         let text = "我加了几个附件，回答我即可 @\"/tmp/one.xlsx\" @\"docs/two.md\" @\".vscode/launch.json\"";
         let (blocks, remaining) = lift_paths_from_text(text);
-        assert_eq!(blocks.len(), 3);
-        assert_eq!(remaining, "我加了几个附件，回答我即可");
+        assert!(blocks.is_empty());
+        assert_eq!(remaining, text);
     }
 
     #[test]
-    fn test_lift_multiple_leading_at_file_references() {
+    fn test_multiple_leading_at_file_references_stay_in_the_original_text_position() {
         let text = "@\"src/a.ts\" @\"src/b.ts\" 比较两个文件";
         let (blocks, remaining) = lift_paths_from_text(text);
-        assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0].file_path.as_deref(), Some("src/a.ts"));
-        assert_eq!(blocks[1].file_path.as_deref(), Some("src/b.ts"));
-        assert_eq!(remaining, "比较两个文件");
+        assert!(blocks.is_empty());
+        assert_eq!(remaining, text);
     }
 
     #[test]

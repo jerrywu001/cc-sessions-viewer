@@ -1009,7 +1009,7 @@ fn agent_chat_list_running() -> Vec<agent_chat::RunningChatInfo> {
 /// one-shot agent（Codex）据此每轮切换；长驻 agent（Claude）这三者在 start 已定型，
 /// 后端忽略（切换走 restart-with-resume）。
 #[tauri::command]
-fn agent_chat_send(
+async fn agent_chat_send(
     id: u64,
     text: String,
     images: Option<Vec<crate::types::ChatImageInput>>,
@@ -1032,15 +1032,24 @@ fn agent_chat_send(
     if !valid_permission_mode(&mode) {
         return Err("Invalid permission mode".to_string());
     }
-    agent_chat::send(
-        id,
-        &text,
-        &images.unwrap_or_default(),
-        model.as_deref(),
-        effort.as_deref(),
-        &mode,
-        &text_elements.unwrap_or_default(),
-    )
+    // Claude 的长驻 stdin 写入可能因为 CLI 正在处理上一轮或接收较大的
+    // base64 图片而短暂阻塞。不能在 Tauri 命令线程直接 write_all，否则整个
+    // WebView 会出现鼠标转圈；Codex app-server 也统一走同一安全路径。
+    let images = images.unwrap_or_default();
+    let text_elements = text_elements.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        agent_chat::send(
+            id,
+            &text,
+            &images,
+            model.as_deref(),
+            effort.as_deref(),
+            &mode,
+            &text_elements,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 将一条已排队消息追加给当前运行的 Codex app-server turn，不创建新 turn、也不中断当前执行。

@@ -983,6 +983,36 @@ describe('chatSessions message queue (type-while-running)', () => {
     })
   })
 
+  it('sends Codex inline file mentions with UTF-8 byte ranges', async () => {
+    const s = await startCodex()
+    enqueuePrompt(s, '请检查 @src/a.ts 和 @"中文 file.md"')
+    await Promise.resolve()
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      'agent_chat_send',
+      expect.objectContaining({
+        id: 2,
+        text: '请检查 @src/a.ts 和 @"中文 file.md"',
+        textElements: [
+          expect.objectContaining({
+            path: 'src/a.ts',
+            byteRange: {
+              start: new TextEncoder().encode('请检查 ').length,
+              end: new TextEncoder().encode('请检查 @src/a.ts').length,
+            },
+          }),
+          expect.objectContaining({
+            path: '中文 file.md',
+            byteRange: {
+              start: new TextEncoder().encode('请检查 @src/a.ts 和 ').length,
+              end: new TextEncoder().encode('请检查 @src/a.ts 和 @"中文 file.md"').length,
+            },
+          }),
+        ],
+      }),
+    )
+  })
+
   it('restarts Codex app-server before sending when permission mode changes', async () => {
     const s = await startCodex()
     s.sessionId = 'thread-1'

@@ -5,7 +5,7 @@
 // 多模态 content 数组）。我们用 event_msg 拿对话文本，用 response_item 抢救图片
 // 和工具调用细节。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -517,25 +517,105 @@ fn first_user_text(fp: &Path) -> String {
     if let Ok(file) = fs::File::open(fp) {
         for line in BufReader::new(file).lines().map_while(Result::ok) {
             if let Ok(v) = serde_json::from_str::<Value>(&line) {
-                if v.get("type").and_then(|x| x.as_str()) == Some("event_msg") {
-                    let p = v.get("payload");
-                    let pt = p
-                        .and_then(|p| p.get("type"))
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("");
-                    if pt == "user_message" {
-                        if let Some(m) = p.and_then(|p| p.get("message")).and_then(|x| x.as_str()) {
-                            let c = clean_title(m);
-                            if !c.is_empty() {
-                                return c;
-                            }
-                        }
+                if let Some(text) = codex_user_text(&v) {
+                    let c = clean_codex_title(&text);
+                    if !c.is_empty() {
+                        return c;
                     }
                 }
             }
         }
     }
     "(untitled session)".to_string()
+}
+
+/// Newer Codex rollouts keep the user message in `response_item.message` and
+/// repeat the normalized version in `event_msg.item_completed.UserMessage`.
+/// Text blocks are the only part relevant to a title or message counter;
+/// image/file blocks must not turn into a title by themselves.
+fn content_text(content: Option<&Value>) -> Option<String> {
+    let parts: Vec<&str> = content?
+        .as_array()?
+        .iter()
+        .filter_map(
+            |block| match block.get("type").and_then(Value::as_str).unwrap_or("") {
+                // UserMessage uses lowercase `text`; AgentMessage and the
+                // response stream use `Text` / `output_text` respectively.
+                "input_text" | "text" | "Text" | "output_text" => {
+                    block.get("text").and_then(Value::as_str)
+                }
+                _ => None,
+            },
+        )
+        .filter(|text| !text.trim().is_empty())
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
+}
+
+fn codex_user_text(value: &Value) -> Option<String> {
+    match (
+        value.get("type").and_then(Value::as_str),
+        value
+            .get("payload")
+            .and_then(|payload| payload.get("type"))
+            .and_then(Value::as_str),
+    ) {
+        (Some("event_msg"), Some("user_message")) => value
+            .get("payload")
+            .and_then(|payload| payload.get("message"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        (Some("event_msg"), Some("item_completed"))
+            if value
+                .get("payload")
+                .and_then(|payload| payload.get("item"))
+                .and_then(|item| item.get("type"))
+                .and_then(Value::as_str)
+                == Some("UserMessage") =>
+        {
+            content_text(
+                value
+                    .get("payload")
+                    .and_then(|payload| payload.get("item"))
+                    .and_then(|item| item.get("content")),
+            )
+        }
+        (Some("response_item"), Some("message"))
+            if value
+                .get("payload")
+                .and_then(|payload| payload.get("role"))
+                .and_then(Value::as_str)
+                == Some("user") =>
+        {
+            content_text(
+                value
+                    .get("payload")
+                    .and_then(|payload| payload.get("content")),
+            )
+        }
+        _ => None,
+    }
+}
+
+fn is_codex_internal_user_text(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("# AGENTS.md instructions")
+        || trimmed.starts_with("<skills_instructions>")
+        || trimmed.starts_with("<environment_context>")
+        || trimmed.starts_with("<system-reminder>")
+        || trimmed.starts_with("<turn_aborted>")
+}
+
+fn clean_codex_title(text: &str) -> String {
+    if is_codex_internal_user_text(text) {
+        return String::new();
+    }
+    let (_, body) = extract_codex_files(text);
+    clean_title(&body)
 }
 
 /// Codex: `{"type":"input_image","image_url":"data:...|http..."}`
@@ -796,6 +876,7 @@ fn agent_message_phase(payload: &Value) -> Option<&str> {
 ///
 /// 图片已从 response_item 捕获时，提示词首尾连续的 `@"path"` / `@path` 附件引用可提前
 /// 移除；中间引用必须完整保留给下方提示词，公共后处理会为它补文件 tag 并负责去重。
+#[allow(dead_code)]
 fn strip_edge_at_paths(text: &str) -> String {
     let re = regex_lite::Regex::new(r#"@"[^"]+"|@\S+"#).expect("valid regex");
     let mut refs = Vec::new();
@@ -955,7 +1036,12 @@ fn scan(
     // 最后一条 `thread_name` 生效。优先用它，没有则回落首条 user_message。
     let mut first_user_title = String::new();
     let mut thread_name: Option<String> = None;
-    let mut message_count = 0usize;
+    let mut old_user_message_count = 0usize;
+    let mut old_agent_message_count = 0usize;
+    let mut completed_user_message_count = 0usize;
+    let mut completed_agent_message_count = 0usize;
+    let mut completed_user_message_ids = HashSet::new();
+    let mut response_user_messages: Vec<String> = Vec::new();
     if let Ok(file) = fs::File::open(fp) {
         for line in BufReader::new(file).lines().map_while(Result::ok) {
             if line.trim().is_empty() {
@@ -965,9 +1051,6 @@ fn scan(
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            if v.get("type").and_then(|x| x.as_str()) != Some("event_msg") {
-                continue;
-            }
             let p = match v.get("payload") {
                 Some(p) => p,
                 None => continue,
@@ -982,22 +1065,88 @@ fn scan(
                 }
                 continue;
             }
-            if pt == "user_message"
-                || (pt == "agent_message" && agent_message_phase(p) != Some("commentary"))
-            {
-                message_count += 1;
-            }
-            if first_user_title.is_empty() && pt == "user_message" {
-                if let Some(msg) = p.get("message").and_then(|x| x.as_str()) {
-                    // 带文件提问时标题取真实请求，而非「# Files mentioned…」文件头。
-                    let (_, body) = extract_codex_files(msg);
-                    let clean = clean_title(&body);
-                    if !clean.is_empty() {
-                        first_user_title = clean;
+            if pt == "user_message" {
+                old_user_message_count += 1;
+                if first_user_title.is_empty() {
+                    if let Some(msg) = codex_user_text(&v) {
+                        let clean = clean_codex_title(&msg);
+                        if !clean.is_empty() {
+                            first_user_title = clean;
+                        }
                     }
+                }
+                continue;
+            }
+            if pt == "agent_message" && agent_message_phase(p) != Some("commentary") {
+                old_agent_message_count += 1;
+                continue;
+            }
+            if pt == "item_completed"
+                && p.get("item")
+                    .and_then(|item| item.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("UserMessage")
+            {
+                let item = p.get("item").unwrap_or(&Value::Null);
+                let item_id = item.get("id").and_then(Value::as_str);
+                if item_id.is_none_or(|id| completed_user_message_ids.insert(id.to_string())) {
+                    completed_user_message_count += 1;
+                }
+                if first_user_title.is_empty() {
+                    if let Some(msg) = codex_user_text(&v) {
+                        let clean = clean_codex_title(&msg);
+                        if !clean.is_empty() {
+                            first_user_title = clean;
+                        }
+                    }
+                }
+                continue;
+            }
+            if pt == "item_completed"
+                && p.get("item")
+                    .and_then(|item| item.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("AgentMessage")
+                && p.get("item")
+                    .and_then(|item| item.get("phase"))
+                    .and_then(Value::as_str)
+                    != Some("commentary")
+            {
+                completed_agent_message_count += 1;
+                continue;
+            }
+            if v.get("type").and_then(Value::as_str) == Some("response_item")
+                && pt == "message"
+                && p.get("role").and_then(Value::as_str) == Some("user")
+            {
+                // 新格式会在后面追加 item_completed.UserMessage；先缓存 response_item
+                // 作为“文件尚未写完”的兜底，避免同一条消息在完整 rollout 中计数两次。
+                if let Some(msg) = codex_user_text(&v) {
+                    response_user_messages.push(msg);
                 }
             }
         }
+    }
+    let (message_count, fallback_title) = if completed_user_message_count > 0 {
+        (
+            completed_user_message_count + completed_agent_message_count,
+            first_user_title.clone(),
+        )
+    } else if old_user_message_count > 0 {
+        (
+            old_user_message_count + old_agent_message_count,
+            first_user_title.clone(),
+        )
+    } else {
+        let title = response_user_messages
+            .iter()
+            .map(|text| clean_codex_title(text))
+            .find(|text| !text.is_empty())
+            .unwrap_or_default();
+        (response_user_messages.len(), title)
+    };
+    if first_user_title.is_empty() {
+        first_user_title = fallback_title;
     }
     let id = if m.id.is_empty() {
         file_name.trim_end_matches(".jsonl").to_string()
@@ -1133,11 +1282,8 @@ fn read_with_title_index(
                 let mut blocks: Vec<Block> = std::mem::take(&mut pending_user_images);
                 // 图片已由 response_item 捕获到 pending_user_images。只去除首尾的附件
                 // 标记；行中文件引用仍要完整显示，post_process 会做附件 tag 去重。
-                let body = if !blocks.is_empty() {
-                    strip_edge_at_paths(&body)
-                } else {
-                    body
-                };
+                // `@文件` 选择结果属于正文语义，必须保留在原位置。只有旧版
+                // 图片协议产生的首尾路径标记才需要清理；普通行内引用不能移位。
                 if first_user_title.is_empty() {
                     let clean = clean_title(&body);
                     if !clean.is_empty() {
@@ -1182,6 +1328,49 @@ fn read_with_title_index(
                 let Some(item) = p.get("item") else {
                     continue;
                 };
+                if item.get("type").and_then(Value::as_str) == Some("UserMessage") {
+                    let text = content_text(item.get("content"));
+                    let visible_text = text
+                        .as_deref()
+                        .map(crate::util::visible_deferred_follow_up)
+                        .unwrap_or_default();
+                    let (file_blocks, body) = extract_codex_files(visible_text);
+                    let mut blocks: Vec<Block> = std::mem::take(&mut pending_user_images);
+                    blocks.extend(file_blocks);
+                    if !body.trim().is_empty() {
+                        blocks.push(text_block("text", &body));
+                    }
+                    if !blocks.is_empty() {
+                        msgs.push(Msg {
+                            uuid: item.get("id").and_then(Value::as_str).map(str::to_owned),
+                            role: "user".to_string(),
+                            timestamp: ts,
+                            model: None,
+                            sidechain: false,
+                            blocks,
+                            meta_kind: None,
+                        });
+                    }
+                    continue;
+                }
+                if item.get("type").and_then(Value::as_str) == Some("AgentMessage") {
+                    let Some(text) = content_text(item.get("content")) else {
+                        continue;
+                    };
+                    let blocks = split_thinking_blocks(&text);
+                    if !blocks.is_empty() {
+                        msgs.push(Msg {
+                            uuid: item.get("id").and_then(Value::as_str).map(str::to_owned),
+                            role: "assistant".to_string(),
+                            timestamp: ts,
+                            model: model_hint.clone(),
+                            sidechain: false,
+                            blocks,
+                            meta_kind: None,
+                        });
+                    }
+                    continue;
+                }
                 if !matches!(
                     item.get("type").and_then(Value::as_str),
                     Some("Plan" | "plan")
@@ -2061,10 +2250,7 @@ fn read_turns(fp: &Path) -> Vec<Turn> {
     // 时的差值还原。None 哨兵：第一帧永远通过（如果一开始 total_tokens=0 的话，
     // 用 0 初始化会把它误判为 dup）。
     let mut prev_cum_total: Option<u64> = None;
-    let mut prev_input: u64 = 0;
-    let mut prev_cached: u64 = 0;
-    let mut prev_output: u64 = 0;
-    let mut prev_reasoning: u64 = 0;
+    let mut prev_usage: Option<CodexUsageFields> = None;
 
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         if line.trim().is_empty() {
@@ -2133,6 +2319,30 @@ fn read_turns(fp: &Path) -> Vec<Turn> {
                 pending_mcp.clear();
                 pending_spawn = false;
             }
+            ("event_msg", "item_completed")
+                if payload
+                    .get("item")
+                    .and_then(|item| item.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("UserMessage") =>
+            {
+                if let Some(prev) = cur.take() {
+                    turns.push(prev);
+                }
+                let text = content_text(payload.get("item").and_then(|item| item.get("content")))
+                    .unwrap_or_default();
+                cur = Some(Turn {
+                    user_message: text,
+                    project_path: project_path.clone(),
+                    session_id: session_id.clone(),
+                    calls: Vec::new(),
+                    timestamp_ms: ts_ms,
+                });
+                pending_tools.clear();
+                pending_bash.clear();
+                pending_mcp.clear();
+                pending_spawn = false;
+            }
             ("event_msg", "agent_message") => {
                 // assistant 文本回复 —— 不单独计 call，等下一个 token_count 把它和
                 // 工具调用一并并入一条 CallRecord 里。
@@ -2182,79 +2392,25 @@ fn read_turns(fp: &Path) -> Vec<Turn> {
                 };
                 let cum_total = tt.get("total_tokens").and_then(Value::as_u64).unwrap_or(0);
 
-                // 同一 cumulative 重复出现 —— 跳过（codex 偶尔会重发；codeburn 同样处理）。
-                if let Some(prev) = prev_cum_total {
-                    if cum_total == prev {
-                        continue;
-                    }
+                // Codex 会在 rollout 中插入“新 task / resume”边界，此时累计值会从较小
+                // 的新基线重新开始。不能把这次重置当作负增量，也不能把新 task 的完整
+                // 快照丢掉；按新的基线继续累计即可。
+                let is_reset = prev_cum_total.is_some_and(|prev| cum_total < prev);
+                if !is_reset && prev_cum_total == Some(cum_total) {
+                    continue;
+                }
+                if is_reset {
+                    prev_usage = None;
                 }
                 prev_cum_total = Some(cum_total);
 
-                // 这一帧的 per-call 用量：优先 last_token_usage（如果上游写了），
-                // 否则用 cumulative 差值还原。
-                let last = info.get("last_token_usage");
-                let (in_t, cached_t, out_t, rea_t);
-                if let Some(l) = last.filter(|x| !x.is_null()) {
-                    in_t = l.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-                    cached_t = l
-                        .get("cached_input_tokens")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0);
-                    out_t = l.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
-                    rea_t = l
-                        .get("reasoning_output_tokens")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0);
-                } else {
-                    let ti = tt.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-                    let tc = tt
-                        .get("cached_input_tokens")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0);
-                    let to = tt.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
-                    let tr = tt
-                        .get("reasoning_output_tokens")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0);
-                    in_t = ti.saturating_sub(prev_input);
-                    cached_t = tc.saturating_sub(prev_cached);
-                    out_t = to.saturating_sub(prev_output);
-                    rea_t = tr.saturating_sub(prev_reasoning);
-                }
-                // 不管走 last_* 还是差值路径，prev_* 都按 cumulative 推进。
-                prev_input = tt
-                    .get("input_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(prev_input);
-                prev_cached = tt
-                    .get("cached_input_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(prev_cached);
-                prev_output = tt
-                    .get("output_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(prev_output);
-                prev_reasoning = tt
-                    .get("reasoning_output_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(prev_reasoning);
+                let current_usage = codex_usage_fields(tt);
+                let usage = codex_usage_delta(current_usage, prev_usage.unwrap_or((0, 0, 0, 0, 0)));
+                prev_usage = Some(current_usage);
 
-                if in_t + cached_t + out_t + rea_t == 0 {
+                if usage.total == 0 {
                     continue;
                 }
-                // codex `input_tokens` 含 cached —— 减出 uncached 部分喂给 aggregator
-                // （aggregator 期望 Anthropic 语义：input 不含 cache_read）
-                let uncached_in = in_t.saturating_sub(cached_t);
-                let usage = UsageSummary {
-                    input_tokens: uncached_in,
-                    output_tokens: out_t,
-                    cache_creation_input_tokens: 0,
-                    cache_creation_1h_input_tokens: 0,
-                    cache_read_input_tokens: cached_t,
-                    reasoning_output_tokens: rea_t,
-                    total: 0,
-                }
-                .finalize();
 
                 let mut call = CallRecord {
                     model: model_hint.clone(),
@@ -2300,8 +2456,8 @@ fn push_call(
     }
 }
 
-/// Codex 把 token 用量写在 event_msg.token_count 事件里，且每次更新都是**累积值**
-/// （`total_token_usage`）—— 所以只需要扫到最后一行非空的就行。
+/// Codex 把 token 用量写在 event_msg.token_count 事件里。通常是累积值，
+/// 但跨 task / resume 时会回到新的基线；这里按快照差分并跨基线累加。
 ///
 /// 形状：
 ///   {"type":"event_msg","payload":{"type":"token_count","info":{
@@ -2315,7 +2471,8 @@ fn usage_summary(fp: &Path) -> Result<UsageSummary, String> {
         Ok(f) => f,
         Err(_) => return Ok(UsageSummary::default()),
     };
-    let mut last = UsageSummary::default();
+    let mut total = UsageSummary::default();
+    let mut previous: Option<CodexUsageFields> = None;
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         let Ok(v) = serde_json::from_str::<Value>(&line) else {
             continue;
@@ -2339,35 +2496,56 @@ fn usage_summary(fp: &Path) -> Result<UsageSummary, String> {
         let Some(t) = info.get("total_token_usage") else {
             continue;
         };
-        last = read_codex_total_usage(t);
+        let current = codex_usage_fields(t);
+        let is_reset = previous.is_some_and(|prev| current.4 < prev.4);
+        if !is_reset && previous == Some(current) {
+            continue;
+        }
+        let delta = codex_usage_delta(
+            current,
+            if is_reset {
+                (0, 0, 0, 0, 0)
+            } else {
+                previous.unwrap_or((0, 0, 0, 0, 0))
+            },
+        );
+        total.add_assign(&delta);
+        previous = Some(current);
     }
-    Ok(last)
+    Ok(total.finalize())
 }
 
-/// Codex 的 `total_token_usage.input_tokens` **包含** cached_input_tokens
-/// （上游 API 报的就是含 cache 的总输入），所以前端展示 "in / cached" 两栏时
-/// 必须减出来 —— 否则汇总里的 in 就把 cache 多算了一遍，cache hit 高（90%+）
-/// 时被夸大到 8~10×（codeburn 同样按减法处理）。
-fn read_codex_total_usage(t: &Value) -> UsageSummary {
-    let total_input = t.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-    let cached = t
-        .get("cached_input_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let output = t.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
-    let reasoning = t
-        .get("reasoning_output_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
+type CodexUsageFields = (u64, u64, u64, u64, u64);
+
+fn codex_usage_fields(t: &Value) -> CodexUsageFields {
+    (
+        t.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
+        t.get("cached_input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        t.get("output_tokens").and_then(Value::as_u64).unwrap_or(0),
+        t.get("reasoning_output_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        t.get("total_tokens").and_then(Value::as_u64).unwrap_or(0),
+    )
+}
+
+/// Convert two cumulative Codex snapshots into one per-call UsageSummary.
+/// `input_tokens` includes cached input, so the uncached portion is differenced
+/// after subtracting the cached delta.
+fn codex_usage_delta(current: CodexUsageFields, previous: CodexUsageFields) -> UsageSummary {
+    let (input, cached, output, reasoning, _) = current;
+    let (prev_input, prev_cached, prev_output, prev_reasoning, _) = previous;
     UsageSummary {
-        // saturating_sub 防御性：极少数情况下 cached > total_input（API 抖动），
-        // 此时把 new-input 当 0 处理，cached 仍然保留。
-        input_tokens: total_input.saturating_sub(cached),
-        output_tokens: output,
+        input_tokens: input
+            .saturating_sub(cached)
+            .saturating_sub(prev_input.saturating_sub(prev_cached)),
+        output_tokens: output.saturating_sub(prev_output),
         cache_creation_input_tokens: 0,
         cache_creation_1h_input_tokens: 0,
-        cache_read_input_tokens: cached,
-        reasoning_output_tokens: reasoning,
+        cache_read_input_tokens: cached.saturating_sub(prev_cached),
+        reasoning_output_tokens: reasoning.saturating_sub(prev_reasoning),
         total: 0,
     }
     .finalize()
@@ -2406,6 +2584,64 @@ mod tests {
         let (files, body) = extract_codex_files("just a normal question\n");
         assert!(files.is_empty());
         assert_eq!(body, "just a normal question\n");
+    }
+
+    #[test]
+    fn read_new_codex_rollout_message_shape() {
+        let lines = [
+            r#"{"timestamp":"2026-08-12T02:52:01.262Z","type":"session_meta","payload":{"id":"new","cwd":"/tmp"}}"#,
+            r#"{"timestamp":"2026-08-12T02:52:02.576Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,abc"},{"type":"input_text","text":"<image name=[Image #1] path=\"/tmp/a.png\">\n</image>\n[Image #1] 给宠物增加右键菜单，看截图"}]}}"#,
+            r#"{"timestamp":"2026-08-12T02:52:02.577Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","id":"u1","content":[{"type":"local_image","path":"/tmp/a.png"},{"type":"text","text":"[Image #1] 给宠物增加右键菜单，看截图"}]}}}"#,
+            r#"{"timestamp":"2026-08-12T02:52:03.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"a1","phase":"final_answer","content":[{"type":"text","text":"已处理"}]}}}"#,
+        ];
+        let p = write_temp("codex-new-message-shape.jsonl", &lines);
+        let msgs = read_with_title_index(p.to_string_lossy().as_ref(), &HashMap::new()).unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[0].blocks[0].kind, "image");
+        assert_eq!(
+            msgs[0].blocks[1].text.as_deref(),
+            Some("[Image #1] 给宠物增加右键菜单，看截图")
+        );
+        assert_eq!(msgs[1].blocks[0].text.as_deref(), Some("已处理"));
+
+        let meta = meta(&p).expect("meta");
+        let session = scan(&p, &meta, &HashMap::new(), CodexThreadFlags::default());
+        assert_eq!(session.title, "[Image #1] 给宠物增加右键菜单，看截图");
+        assert_eq!(session.message_count, 2);
+    }
+
+    #[test]
+    fn read_new_codex_agent_message_text_block_shape() {
+        let p = write_temp(
+            "codex-new-agent-text-shape.jsonl",
+            &[
+                r#"{"timestamp":"2026-08-12T02:52:03.000Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"a1","phase":"final_answer","content":[{"type":"Text","text":"已处理"}]}}}"#,
+            ],
+        );
+        let msgs = read_with_title_index(p.to_string_lossy().as_ref(), &HashMap::new()).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].blocks[0].text.as_deref(), Some("已处理"));
+    }
+
+    #[test]
+    fn read_turns_handles_codex_usage_reset_between_tasks() {
+        crate::stats::pricing::seed_test_prices();
+        let p = write_temp(
+            "codex-usage-reset.jsonl",
+            &[
+                r#"{"type":"session_meta","payload":{"id":"abc","cwd":"/tmp"}}"#,
+                r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#,
+                r#"{"type":"event_msg","payload":{"type":"user_message","message":"one"}}"#,
+                r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"reasoning_output_tokens":0,"total_tokens":110}}}}"#,
+                r#"{"type":"event_msg","payload":{"type":"user_message","message":"two"}}"#,
+                r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":50,"cached_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0,"total_tokens":55},"last_token_usage":{"input_tokens":50,"cached_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0,"total_tokens":55}}}}"#,
+            ],
+        );
+        let turns = read_turns(&p);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].calls[0].usage.total, 110);
+        assert_eq!(turns[1].calls[0].usage.total, 55);
     }
 
     #[test]

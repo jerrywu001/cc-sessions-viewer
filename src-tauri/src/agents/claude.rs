@@ -673,26 +673,14 @@ fn tidy_after_strip(s: &str) -> String {
     out.trim().to_string()
 }
 
-/// 把一条用户消息里所有 text 块中的 `@文件` 引用抬升成独立 file 块（排在正文之前）。开头附件
-/// 引用从正文移除；中间引用则保留原文。只对真实用户消息（非 meta/系统注入）调用。
+/// 保留真实用户正文中的 `@文件` 引用。
+///
+/// `@文件` 是 GUI chat 的正文语义，必须保留在原位置；如果在这里抬升成独立
+/// `file` block，实时消息和历史消息都会把它错误地显示到气泡上方。旧版 Claude
+/// 的 `@` 附件也保留为正文，由前端统一的 token 渲染器兼容展示。
 fn lift_file_refs(blocks: Vec<Block>, cwd: Option<&Path>) -> Vec<Block> {
-    let mut out = Vec::with_capacity(blocks.len());
-    for b in blocks {
-        if b.kind == "text" {
-            if let Some(t) = b.text.as_deref() {
-                let (files, cleaned) = extract_file_refs(t, cwd);
-                if !files.is_empty() {
-                    out.extend(files);
-                    if !cleaned.is_empty() {
-                        out.push(text_block("text", &cleaned));
-                    }
-                    continue;
-                }
-            }
-        }
-        out.push(b);
-    }
-    out
+    let _ = cwd;
+    blocks
 }
 
 /// Claude Code 把若干「系统注入」内容也写成 `type:"user"` 记录，但它们并不是用户
@@ -1564,8 +1552,8 @@ pub(crate) fn record_to_msg(v: &Value) -> Option<Msg> {
     } else {
         None
     };
-    // 真实用户消息：把正文里的 `@文件` 引用抬升成 file 块（点击外部打开），系统/meta
-    // 注入的伪 user 记录不动（它们的 `@...` 多是说明文字，不该当成附件）。
+    // 真实用户消息：保留正文里的 `@文件` 引用，让前端在原位置渲染；系统/meta
+    // 注入的伪 user 记录同样不做文件提升。
     if t == "user" && meta_kind.is_none() {
         let cwd = v.get("cwd").and_then(|x| x.as_str()).map(Path::new);
         blocks = lift_file_refs(blocks, cwd);
@@ -2686,11 +2674,12 @@ mod tests {
             "message": { "content": "@\"/tmp/report.xlsx\"\n看看这个" },
         });
         let msg = record_to_msg(&v).expect("user msg");
-        assert_eq!(msg.blocks.len(), 2);
-        assert_eq!(msg.blocks[0].kind, "file");
-        assert_eq!(msg.blocks[0].file_path.as_deref(), Some("/tmp/report.xlsx"));
-        assert_eq!(msg.blocks[1].kind, "text");
-        assert_eq!(msg.blocks[1].text.as_deref(), Some("看看这个"));
+        assert_eq!(msg.blocks.len(), 1);
+        assert_eq!(msg.blocks[0].kind, "text");
+        assert_eq!(
+            msg.blocks[0].text.as_deref(),
+            Some("@\"/tmp/report.xlsx\"\n看看这个")
+        );
     }
 
     #[test]
@@ -2702,13 +2691,9 @@ mod tests {
             "message": { "content": text },
         });
         let msg = record_to_msg(&v).expect("user msg");
-        assert_eq!(msg.blocks.len(), 2);
-        assert_eq!(msg.blocks[0].kind, "file");
-        assert_eq!(
-            msg.blocks[0].file_path.as_deref(),
-            Some("scripts/release/appstore-release.sh")
-        );
-        assert_eq!(msg.blocks[1].text.as_deref(), Some(text));
+        assert_eq!(msg.blocks.len(), 1);
+        assert_eq!(msg.blocks[0].kind, "text");
+        assert_eq!(msg.blocks[0].text.as_deref(), Some(text));
     }
 
     #[test]

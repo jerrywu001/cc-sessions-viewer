@@ -69,6 +69,7 @@ import {
 import {
   codexPluginMentionRanges,
 } from '../codexPluginMentions'
+import { formatInlineFileMention, inlineFileMentions } from '../inlineFileMentions'
 import { rememberChatGuiPreference } from '../chatGuiPreferences'
 
 const props = defineProps<{ session: ChatSession }>()
@@ -333,8 +334,8 @@ watch(
 )
 // effort 是「按模型」的能力：Haiku 不支持 effort，选中它就不展示滑杆（对齐 Claude 客户端）。
 const showEffortPicker = computed(() =>
-  (agent.value !== 'claude' || effectiveApiKeySource.value === 'none') &&
-  !usingCustomClaudeEndpoint.value &&
+  (agent.value !== 'claude' || effectiveApiKeySource.value === 'none' ||
+    (agent.value === 'claude' && runtimeLoaded.value && effectiveApiKeySource.value === undefined)) &&
   !usingApiKey.value &&
   modelSupportsEffort(agent.value, effectiveModel.value),
 )
@@ -570,8 +571,9 @@ const leadingCommand = computed(() => {
 const pluginHighlightRanges = computed(() =>
   props.session.agent === 'codex' ? codexPluginMentionRanges(text.value) : [],
 )
+const inlineFileMentionRanges = computed(() => inlineFileMentions(text.value))
 const highlightActive = computed(() =>
-  (leadingCommand.value !== null || pluginHighlightRanges.value.length > 0) && !composing.value,
+  (leadingCommand.value !== null || pluginHighlightRanges.value.length > 0 || inlineFileMentionRanges.value.length > 0) && !composing.value,
 )
 // 当前开头命令对应的扫描项（取 argument-hint）。
 const leadingCommandObj = computed<SlashItem | null>(() => {
@@ -605,6 +607,13 @@ const highlightHtml = computed(() => {
     end: range.end,
     html: `<span class="cc-cmd cc-plugin-name" data-cmd-desc="${escapeAttr(range.plugin.description)}">${escapeHtml(text.value.slice(range.start, range.end))}</span>`,
   }))
+  for (const range of inlineFileMentionRanges.value) {
+    ranges.push({
+      start: range.start,
+      end: range.end,
+      html: `<span class="cc-file-mention" data-file-path="${escapeAttr(range.path)}">${escapeHtml(range.token)}</span>`,
+    })
+  }
   const cmd = leadingCommand.value
   let ghostHtml = ''
   if (cmd) {
@@ -727,8 +736,8 @@ function pickSlash(item: SlashItem) {
 
 // ---------- @ 浮层（引用项目文件 / 目录）----------
 // 输入框**任意位置**键入 `@`（前面是行首或空白）即触发：浮层列出会话 cwd 下的目录/文件
-// （空 query→顶层；裸 query→全工作区模糊搜索；带路径 query→逐级浏览）。↑/↓ 选择；↵/点击=「引用」加成 chip；
-// →/chevron=「展开」目录继续下钻；Esc 关。chip 走与系统选择器附件同一条 `@"path"` 通道。
+// （空 query→顶层；裸 query→全工作区模糊搜索；带路径 query→逐级浏览）。↑/↓ 选择；↵/点击=「引用」写回正文；
+// →/chevron=「展开」目录继续下钻；Esc 关。普通附件仍走输入框上方的附件行。
 type FileMentionItem = ProjectFileEntry & { kind?: 'file' }
 type MentionItem = FileMentionItem
 
@@ -798,6 +807,9 @@ let mentionSeq = 0 // 异步请求竞态守卫（只认最新一次）
 let mentionTimer: number | null = null
 let mentionFetched: string | null = null // 已拉取过的 query，避免重复抖动
 let dismissedMentionToken: { at: number; query: string } | null = null // Esc 关闭后，抑制同一 token 被 keyup 立刻重开
+// 通过浮层刚提交的文件 token 不是新的 @ 查询。记录它的范围，避免选中文件后
+// 光标移动事件又把完整的 `@path` 当成正在输入的 query，从而重新抢走焦点。
+let committedMentionToken: { token: string; start: number; end: number } | null = null
 
 /** 从光标处向前找触发用的 `@`：前面须为行首或空白，且 `@`→光标间无空白。命中返回
  *  { at, query }，否则 null（避开 foo@bar / 已被空白结束的 token）。 */
@@ -816,11 +828,36 @@ function activeMention(): { at: number; query: string } | null {
 }
 
 function closeMention() {
+  if (mentionTimer !== null) {
+    clearTimeout(mentionTimer)
+    mentionTimer = null
+  }
+  // 让已经发出的文件列表请求失效，避免选择文件后旧响应重新打开浮层。
+  mentionSeq += 1
   mentionOpen.value = false
   mentionItems.value = []
   mentionStart.value = -1
   mentionQuery.value = ''
   mentionFetched = null
+}
+
+function isCommittedMentionActive(m: { at: number; query: string }): boolean {
+  const committed = committedMentionToken
+  if (!committed) {
+    committedMentionToken = null
+    return false
+  }
+  // 只要已提交 token 本身仍完整存在，就不把它或其后紧邻的普通文字重新当成
+  // 查询。这样光标可以通过右方向键/鼠标离开 token，并继续输入正文。
+  // 如果用户改动了 token 内部，substring 校验失败，后续 @ 搜索恢复正常。
+  return (
+    m.at === committed.start &&
+    inlineFileMentions(text.value).some((range) =>
+      range.start === committed.start &&
+      range.end === committed.end &&
+      range.token === committed.token,
+    )
+  )
 }
 
 function dismissMention() {
@@ -833,6 +870,10 @@ function detectMention() {
   const m = activeMention()
   if (!m) {
     dismissedMentionToken = null
+    if (mentionOpen.value) closeMention()
+    return
+  }
+  if (isCommittedMentionActive(m)) {
     if (mentionOpen.value) closeMention()
     return
   }
@@ -854,6 +895,10 @@ async function fetchMentions(q: string) {
     if (seq !== mentionSeq) return // 过期请求丢弃
     const active = activeMention()
     if (!active) {
+      closeMention()
+      return
+    }
+    if (isCommittedMentionActive(active)) {
       closeMention()
       return
     }
@@ -883,14 +928,6 @@ function moveMention(delta: number) {
   scrollActiveMention()
 }
 
-function addMentionRef(relPath: string, isDir: boolean) {
-  const clean = relPath.replace(/\/+$/, '')
-  if (!clean) return
-  if (files.value.some((f) => f.path === clean)) return
-  // 相对路径既当 path（发送时 @"relpath"，agent 按 cwd 解析）又当展示名（chip 显示完整相对路径）。
-  files.value.push({ path: clean, name: clean, isDir })
-}
-
 /** 把 `@token` 段替换为 insert；keepOpen 时光标停在新串尾部并重新探测（钻取续列）。 */
 function replaceMentionToken(insert: string, keepOpen: boolean) {
   const start = mentionStart.value
@@ -912,17 +949,17 @@ function replaceMentionToken(insert: string, keepOpen: boolean) {
   })
 }
 
-/** 引用 = 把条目加成 chip（文件 / 目录皆可），并从输入里抹掉 `@token`。 */
+/** 引用 = 把条目写回正文 token，保留用户选择时的语义位置。 */
 function commitMention(item: MentionItem) {
-  addMentionRef(item.relPath, item.isDir)
   const start = mentionStart.value
   const end = start + 1 + mentionQuery.value.length
   const head = text.value.slice(0, start)
-  let tail = text.value.slice(end)
-  // token 两侧都是空白时合并掉一个，避免留下双空格。
-  if (head.endsWith(' ') && tail.startsWith(' ')) tail = tail.slice(1)
-  const caret = head.length
-  text.value = head + tail
+  const tail = text.value.slice(end)
+  const clean = item.relPath.replace(/\/+$/, '')
+  const insert = formatInlineFileMention(item.isDir ? `${clean}/` : clean)
+  const caret = head.length + insert.length
+  text.value = head + insert + tail
+  committedMentionToken = { token: insert, start, end: start + insert.length }
   closeMention()
   nextTick(() => {
     const el = taEl.value
@@ -1148,7 +1185,42 @@ function deleteCodexPluginMentionAtCaret(key: 'Backspace' | 'Delete'): boolean {
   return false
 }
 
+function deleteInlineFileMentionAtCaret(key: 'Backspace' | 'Delete'): boolean {
+  const el = taEl.value
+  if (!el || el.selectionStart !== el.selectionEnd) return false
+  const caret = el.selectionStart
+  for (const range of inlineFileMentionRanges.value) {
+    let start = range.start
+    let end = range.end
+    if (key === 'Backspace') {
+      if (!(caret > start && caret <= end)) {
+        if (caret === end + 1 && text.value[end] === ' ') end += 1
+        else continue
+      }
+    } else if (!(caret >= start && caret < end)) {
+      continue
+    }
+    text.value = text.value.slice(0, start) + text.value.slice(end)
+    nextTick(() => {
+      el.selectionStart = el.selectionEnd = start
+      autosize()
+      detectSlash()
+      detectMention()
+    })
+    return true
+  }
+  return false
+}
+
 function onKeydown(e: KeyboardEvent) {
+  // 已经提交的行内文件/文件夹 token 不是正在输入的 @ 查询。keydown 先于
+  // keyup 的光标检测发生，因此这里也要同步清掉可能尚未来得及关闭的旧浮层，
+  // 尤其是文件夹 token 不能被右方向键误判成“继续下钻”。
+  const active = activeMention()
+  if (active && isCommittedMentionActive(active)) {
+    if (mentionOpen.value) closeMention()
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') return
+  }
   if (e.key === 'Escape' && mentionOpen.value) {
     e.preventDefault()
     e.stopPropagation()
@@ -1277,6 +1349,10 @@ function onKeydown(e: KeyboardEvent) {
   }
   // Backspace 整体删除已识别的 slash command token（蓝色高亮部分）。
   // 光标在 token 范围内（含紧跟的空格）且无选区时，一次 Backspace 清掉整个 `/command `。
+  if ((e.key === 'Backspace' || e.key === 'Delete') && !e.isComposing && deleteInlineFileMentionAtCaret(e.key)) {
+    e.preventDefault()
+    return
+  }
   if ((e.key === 'Backspace' || e.key === 'Delete') && !e.isComposing && deleteCodexPluginMentionAtCaret(e.key)) {
     e.preventDefault()
     return
@@ -1687,7 +1763,8 @@ function queuedLabel(q: QueuedMessage): string {
         </div>
       </div>
 
-      <!-- 文件 / 文件夹附件 chip：图标 + 文件名（限宽省略号），可单独移除 -->
+      <!-- 普通文件 / 文件夹附件 chip：图标 + 文件名（限宽省略号），可单独移除。
+           通过 @ 浮层选择的文件属于正文 token，不会出现在这里。 -->
       <div v-if="files.length" class="cc-files">
         <div v-for="(f, i) in files" :key="f.path" class="cc-file-chip" v-tooltip="f.path">
           <component :is="f.isDir ? IconFolder : fileIconFor(f.path)" class="cc-file-ic" />
@@ -2217,6 +2294,19 @@ function queuedLabel(q: QueuedMessage): string {
   pointer-events: auto;
   cursor: default;
 }
+.cc-highlight :deep(.cc-file-mention) {
+  color: var(--link);
+  background: color-mix(in srgb, var(--link) 10%, transparent);
+  /* 镜像层必须和透明 textarea 保持逐字符对齐；padding/border 会改变
+     文本宽度，导致鼠标点击位置与真实光标位置错位。用 outline 装饰，
+     它不参与布局。 */
+  border: none;
+  outline: 1px solid color-mix(in srgb, var(--link) 28%, transparent);
+  outline-offset: 0;
+  border-radius: 6px;
+  padding: 0;
+  pointer-events: none;
+}
 :root.theme-dark .cc-highlight :deep(.cc-cmd) {
   color: #60a5fa;
 }
@@ -2563,6 +2653,14 @@ function queuedLabel(q: QueuedMessage): string {
 .cc-file-x:hover {
   background: var(--surface-hover);
   color: var(--text);
+}
+.cc-file-mention {
+  color: var(--link);
+  background: color-mix(in srgb, var(--link) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--link) 28%, transparent);
+  border-radius: 6px;
+  padding: 1px 4px;
+  cursor: default;
 }
 .cc-file-x :deep(svg) {
   width: 12px;
