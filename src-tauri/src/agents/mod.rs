@@ -593,6 +593,16 @@ pub fn agent_stats(
     Ok(total)
 }
 
+/// 全局搜索的范围。`Id` 只看会话 ID；`Keyword` 看标题 + 用户消息正文（不含 ID）；
+/// `All`（默认）全量匹配。由前端把 scope 传进来。
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchScope {
+    Id,
+    Keyword,
+    #[default]
+    All,
+}
+
 /// 全局搜索的具体实现 —— 拎到 trait 外的自由函数里，参数收 `&dyn SessionSource`，
 /// 这样可以在闭包 / rayon 里随意复制 `&dyn` 引用，绕开 trait 默认方法
 /// 对 `Self: ?Sized` 的限制。
@@ -611,12 +621,14 @@ pub fn search(
     src: &(dyn SessionSource + Sync),
     query: &str,
     project_filter: Option<&str>,
+    scope: Option<SearchScope>,
     cancel: Cancel<'_>,
 ) -> Result<Vec<SearchHit>, String> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
         return Ok(Vec::new());
     }
+    let scope = scope.unwrap_or_default();
     // 没指定项目就扫全部；指定时只搜该项目，跳过其它项目的 list_sessions 调用。
     let projects = src.list_projects(false, false)?;
     let projects: Vec<ProjectInfo> = match project_filter {
@@ -656,7 +668,15 @@ pub fn search(
                 if cancel.cancelled() {
                     return None;
                 }
-                classify_hit(src, &project_key, &project_display, session, &q, cancel)
+                classify_hit(
+                    src,
+                    &project_key,
+                    &project_display,
+                    session,
+                    &q,
+                    scope,
+                    cancel,
+                )
             })
             .collect()
     });
@@ -678,16 +698,27 @@ fn classify_hit(
     project_display: &str,
     session: SessionMeta,
     q: &str,
+    scope: SearchScope,
     cancel: Cancel<'_>,
 ) -> Option<SearchHit> {
-    // 全局搜索范围：只看「会话标题」+「用户发的消息」—— 助手回复 / thinking /
-    // 工具调用 / 工具结果 / 项目路径 / 会话 ID 都不再参与匹配。
+    // 搜索范围由 scope 控制：keyword 只看标题 + 用户消息正文；id 只看会话 ID；
+    // 都没限定时走全部。助手回复 / thinking / 工具调用 / 工具结果 / 项目路径
+    // 始终不参与匹配。
+    let id_search_only = matches!(scope, SearchScope::Id);
+    let keyword_search_only = matches!(scope, SearchScope::Keyword);
     let title_l = session.title.to_lowercase();
+    let id_l = session.id.to_lowercase();
     let mut match_msg_index: Option<usize> = None;
     let mut match_msg_uuid: Option<String> = None;
-    let (field, snippet) = if title_l.contains(q) {
+    let (field, snippet) = if !keyword_search_only && id_l.contains(q) {
+        ("id", session.id.clone())
+    } else if !id_search_only && title_l.contains(q) {
         ("title", session.title.clone())
     } else {
+        // id 范围不读全文：ID 没命中就到此为止。
+        if id_search_only {
+            return None;
+        }
         if cancel.cancelled() {
             return None;
         }

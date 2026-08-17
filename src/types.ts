@@ -110,6 +110,9 @@ export interface Msg {
 
 /** 全局搜索的命中条目（与 Rust 端 SearchHit 同形）。 */
 export type SearchField = 'title' | 'id' | 'path' | 'text'
+
+/** 全局搜索的范围：只看会话 ID，或看标题 + 用户消息正文（不含 ID）。 */
+export type SearchScope = 'id' | 'keyword'
 export interface SearchHit {
   projectKey: string
   projectDisplay: string

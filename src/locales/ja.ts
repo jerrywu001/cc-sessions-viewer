@@ -128,6 +128,10 @@ export default {
   'list.tb.exportSelected': '選択をエクスポート',
 
   'search.global.placeholder': 'セッションを検索',
+  'search.global.placeholderId': 'セッション ID で検索',
+  'search.global.scope.keyword': 'キーワード',
+  'search.global.scope.id': 'セッション ID',
+  'search.global.scope.label': '検索範囲',
   'search.global.empty': '最近の検索はありません',
   'search.global.emptyHint': '現在の agent のセッションタイトルと自分の発言を検索します。',
   'search.global.recent': '最近の検索',

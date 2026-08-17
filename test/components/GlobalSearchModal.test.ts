@@ -85,7 +85,13 @@ describe('GlobalSearchModal', () => {
     await wrapper.find('.gs-input').setValue('hello')
     await new Promise((r) => setTimeout(r, WAIT))
     await flushPromises()
-    expect(searchMock).toHaveBeenCalledWith('claude', 'hello', expect.any(Number))
+    expect(searchMock).toHaveBeenCalledWith(
+      'claude',
+      'hello',
+      expect.any(Number),
+      undefined,
+      'keyword',
+    )
     expect(wrapper.findAll('.gs-group')).toHaveLength(2)
     expect(wrapper.findAll('.gs-row')).toHaveLength(2)
     wrapper.unmount()

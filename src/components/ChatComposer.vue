@@ -294,15 +294,6 @@ const elapsedSec = computed(() => {
 })
 const elapsedLabel = computed(() => formatElapsedSeconds(elapsedSec.value))
 
-/** 网络重试态：有 retry 时状态行显示「请求失败 · 重试中 (n/N)」替代纯耗时。 */
-const retryLabel = computed(() => {
-  const r = props.session.retry
-  if (!r) return ''
-  return r.attempt && r.max
-    ? t('chat.running.retryingN', { n: r.attempt, max: r.max })
-    : t('chat.running.retrying')
-})
-
 async function onRetryResume() {
   if (retryingResume.value || !retryableSessionError.value) return
   retryingResume.value = true
@@ -2046,7 +2037,7 @@ function queuedLabel(q: QueuedMessage): string {
         >{{ b.text }}</span>
         <span v-if="running" class="cc-running" :class="{ retrying: session.retry }">
           <span class="cc-star" :class="session.agent">✳</span>
-          <span v-if="session.retry" class="cc-retry">{{ retryLabel }} · </span>{{ elapsedLabel }}
+          {{ elapsedLabel }}
         </span>
         <ChatModelMenu
           v-if="showModelPicker"
@@ -2890,9 +2881,6 @@ function queuedLabel(q: QueuedMessage): string {
 .cc-running.retrying,
 .cc-running.retrying .cc-star {
   color: #d97706;
-}
-.cc-retry {
-  font-weight: 500;
 }
 /* §10.5 上下文占用 % */
 .cc-ctx {

@@ -130,6 +130,10 @@ export default {
   'list.codex.archived': '已归档会话',
 
   'search.global.placeholder': '搜索会话',
+  'search.global.placeholderId': '按会话 ID 搜索',
+  'search.global.scope.keyword': '关键词',
+  'search.global.scope.id': '会话 ID',
+  'search.global.scope.label': '搜索范围',
   'search.global.empty': '暂无最近搜索',
   'search.global.emptyHint': '在当前 agent 中检索：会话标题与你发出的消息。',
   'search.global.recent': '最近搜索',

@@ -177,6 +177,7 @@ describe('SessionsView', () => {
         'parser',
         expect.any(Number),
         'proj',
+        'keyword',
       )
     })
 

@@ -570,8 +570,8 @@ fn cancel_stats() {
 }
 
 /// 全局搜索：跨当前 agent 的所有项目 / 会话查关键词。
-/// 命中范围在 `agents::search` 里：标题 / id / 项目路径 / 文本（仅 text + thinking 块）；
-/// 工具调用 / 工具结果 / 文件改动默认不参与匹配。
+/// `scope` 控制命中范围：`"id"` 只匹配会话 ID；`"keyword"` 匹配标题 + 用户消息正文；
+/// 缺省时全部匹配。工具调用 / 工具结果 / 文件改动始终不参与匹配。
 /// 空字符串返回空数组（避免一次性把所有会话当结果返回）。
 ///
 /// **可取消**：每次调用都会把 `request_id` 写进全局 SEARCH_GEN；之后任何 `cancel_search()`
@@ -583,6 +583,7 @@ async fn search_sessions(
     query: String,
     request_id: u64,
     project_key: Option<String>,
+    scope: Option<String>,
 ) -> Result<Vec<SearchHit>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         SEARCH_GEN.store(request_id, std::sync::atomic::Ordering::SeqCst);
@@ -591,7 +592,12 @@ async fn search_sessions(
             request_id,
             gen: &SEARCH_GEN,
         };
-        agents::search(&*src, &query, project_key.as_deref(), cancel)
+        let scope = match scope.as_deref() {
+            Some("id") => Some(agents::SearchScope::Id),
+            Some("keyword") => Some(agents::SearchScope::Keyword),
+            _ => None,
+        };
+        agents::search(&*src, &query, project_key.as_deref(), scope, cancel)
     })
     .await
     .map_err(|e| format!("search task panicked: {e}"))?

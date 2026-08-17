@@ -145,14 +145,23 @@ export function nextStatsRequestId(): number {
 /** 跨当前 agent 的项目 / 会话搜索；空字符串返回空数组。
  *  `requestId` 单调递增；后端在循环中比对，更新换代时立刻 bail —— 真正可中断的搜索。
  *  `projectKey` 可选 —— 给会话列表搜索用：只搜当前项目，省掉全局扫描。
+ *  `scope` 可选 —— `'id'` 只匹配会话 ID；`'keyword'` 匹配标题 + 用户消息正文；
+ *  缺省时全量匹配。
  *  实际写：每次新调用前先 `cancelSearch()`，让 CPU 让位给打字。 */
 export const searchSessions = (
   agent: Agent,
   query: string,
   requestId: number,
   projectKey?: string,
+  scope?: 'id' | 'keyword',
 ) =>
-  invoke<SearchHit[]>('search_sessions', { agent, query, requestId, projectKey })
+  invoke<SearchHit[]>('search_sessions', {
+    agent,
+    query,
+    requestId,
+    projectKey,
+    scope,
+  })
 
 /** 立刻取消任何正在跑的全局搜索 —— 仅 bump 后端的代际计数器。 */
 export const cancelSearch = () => invoke<void>('cancel_search')

@@ -150,6 +150,7 @@ async function runProjectSearch(query: string) {
       trimmed,
       reqId,
       props.project.dirName,
+      'keyword',
     )
     if (mySeq !== searchReqSeq) return
     // 后端返回 SearchHit[]；这里只关心 session 元数据，sort/withIdOnly 在 computed 里加。

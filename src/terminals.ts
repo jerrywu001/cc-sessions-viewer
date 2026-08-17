@@ -1625,11 +1625,16 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
     }
     tab.exitCode = e.payload.code
     term.write(`\r\n\x1b[2m[process exited: ${e.payload.code}]\x1b[0m\r\n`)
-    // 非 0 退出且是 codex：识别「配置/provider 加载失败」→ 补一行友好提示。
+    // 非 0 退出且是 codex：识别「配置/provider 加载失败」→ 补一行友好提示，并**保留 tab**
+    // 让用户能看到报错（否则一闪而过就没了）。
     if (e.payload.code !== 0 && tab.agent === 'codex') {
       const hint = codexResumeConfigHint(recentCodexOutput)
       if (hint) term.write(`\r\n\x1b[33m${hint.replace(/\n/g, '\r\n')}\x1b[0m\r\n`)
+      return
     }
+    // 干净退出（如两次 Ctrl+C 正常退出会话）：会话 tab 随之关闭，不复用「保留在列表
+    // 里等用户手动关」的旧语义。`closeTab` 内部对已关闭的 tab 幂等，重复 exit 事件安全。
+    closeTab(tab.uiId)
   })
 
   // Shift 状态追踪：onData 不带修饰键信息，靠 keydown/keyup 标志判断 Shift+Enter→\n。

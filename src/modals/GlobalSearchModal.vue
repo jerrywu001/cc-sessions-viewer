@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import type { Agent, SearchField, SearchHit, SessionMeta } from '../types'
+import type { Agent, SearchField, SearchHit, SearchScope, SessionMeta } from '../types'
 import { searchSessions, cancelSearch, nextSearchRequestId } from '../api'
 import { t } from '../i18n'
 import { shortName, highlightSegments } from '../format'
@@ -35,6 +35,12 @@ const query = ref('')
 const hits = ref<SearchHit[]>([])
 const searching = ref(false)
 const selectedIdx = ref(0)
+const scope = ref<SearchScope>('keyword')
+
+const SCOPE_OPTIONS: { v: SearchScope; key: string }[] = [
+  { v: 'keyword', key: 'search.global.scope.keyword' },
+  { v: 'id', key: 'search.global.scope.id' },
+]
 
 const DEBOUNCE_MS = 350
 const MIN_QUERY_LEN = 2
@@ -68,6 +74,12 @@ watch(
   },
 )
 
+// 切换范围时重跑当前查询（与重新输入一致：打断在跑请求 + 防抖）。
+watch(scope, () => {
+  selectedIdx.value = 0
+  scheduleSearch()
+})
+
 function scheduleSearch() {
   window.clearTimeout(debounceTimer)
 
@@ -93,7 +105,7 @@ function scheduleSearch() {
     const reqId = nextSearchRequestId()
     inFlight = true
     try {
-      const res = await searchSessions(props.agent, trimmed, reqId)
+      const res = await searchSessions(props.agent, trimmed, reqId, undefined, scope.value)
       if (seq !== reqSeq) return
       hits.value = res
     } catch {
@@ -265,13 +277,26 @@ onUnmounted(() => {
             ref="inputEl"
             type="text"
             class="gs-input"
-            :placeholder="t('search.global.placeholder')"
+            :placeholder="scope === 'id' ? t('search.global.placeholderId') : t('search.global.placeholder')"
             spellcheck="false"
             autocomplete="off"
             @input="onInput"
             @compositionstart="onCompositionStart"
             @compositionend="onCompositionEnd"
           />
+          <div class="gs-scope" role="group" :aria-label="t('search.global.scope.label')">
+            <button
+              v-for="o in SCOPE_OPTIONS"
+              :key="o.v"
+              type="button"
+              class="gs-scope-btn"
+              :class="{ active: scope === o.v }"
+              :aria-pressed="scope === o.v"
+              @click="scope = o.v"
+            >
+              {{ t(o.key) }}
+            </button>
+          </div>
           <button v-if="query" class="gs-clear-btn" @click="clearInput">
             <IconClose />
           </button>
@@ -350,7 +375,7 @@ onUnmounted(() => {
                   <span class="gs-row-title">
                     <span v-for="(seg, i) in segs(sessionLabel(h.session))" :key="i" :class="{ 'gs-hl': seg.hit }">{{ seg.text }}</span>
                   </span>
-                  <span v-if="h.matchedField === 'text' || h.matchedField === 'path'" class="gs-row-snippet">
+                  <span v-if="h.matchedField === 'text' || h.matchedField === 'path' || h.matchedField === 'id'" class="gs-row-snippet">
                     <span v-for="(seg, i) in segs(h.snippet)" :key="i" :class="{ 'gs-hl': seg.hit }">{{ seg.text }}</span>
                   </span>
                 </div>
@@ -484,6 +509,38 @@ onUnmounted(() => {
 .gs-clear-btn :deep(svg) {
   width: 14px;
   height: 14px;
+}
+
+/* ---- Scope segmented control ---- */
+.gs-scope {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.gs-scope-btn {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--border);
+  padding: 3px 10px;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.gs-scope-btn:last-child {
+  border-right: 0;
+}
+.gs-scope-btn:hover {
+  background: var(--surface-hover);
+}
+.gs-scope-btn.active {
+  background: var(--surface-hover);
+  color: var(--text);
+  font-weight: 600;
 }
 
 /* ---- Body ---- */

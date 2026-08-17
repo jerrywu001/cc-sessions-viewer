@@ -128,6 +128,10 @@ export default {
   'list.tb.exportSelected': 'Export selected',
 
   'search.global.placeholder': 'Search sessions',
+  'search.global.placeholderId': 'Search by session ID',
+  'search.global.scope.keyword': 'Keyword',
+  'search.global.scope.id': 'Session ID',
+  'search.global.scope.label': 'Search scope',
   'search.global.empty': 'No recent searches',
   'search.global.emptyHint': 'Searches the current agent — session titles and your own messages.',
   'search.global.recent': 'Recent searches',

@@ -128,6 +128,10 @@ export default {
   'list.tb.exportSelected': '匯出所選',
 
   'search.global.placeholder': '搜尋會話',
+  'search.global.placeholderId': '按會話 ID 搜尋',
+  'search.global.scope.keyword': '關鍵字',
+  'search.global.scope.id': '會話 ID',
+  'search.global.scope.label': '搜尋範圍',
   'search.global.empty': '尚無最近搜尋',
   'search.global.emptyHint': '在目前 agent 中檢索：會話標題與你發出的訊息。',
   'search.global.recent': '最近搜尋',
