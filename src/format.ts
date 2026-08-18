@@ -447,7 +447,7 @@ function renderTableHtml(
 const HR_RE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/
 
 const BULLET_ITEM_RE = /^\s*[-*]\s+(.+?)\s*$/
-const ORDERED_ITEM_RE = /^\s*\d+[.)]\s+(.+?)\s*$/
+const ORDERED_ITEM_RE = /^(\s*)(\d+)[.)]\s+(.+?)\s*$/
 const TASK_ITEM_RE = /^\[([xX ])\]\s+(.+)$/
 const DEF_TERM_RE = /^\S/
 const DEF_LINE_RE = /^:\s+(.+)$/
@@ -460,13 +460,14 @@ function isOrderedItem(line: string): boolean {
   return ORDERED_ITEM_RE.test(line)
 }
 
-function bulletItemText(line: string): string {
-  const m = BULLET_ITEM_RE.exec(line)
-  return m?.[1] ?? line.trim()
+function orderedItemParts(line: string): { indent: number; number: number; text: string } | null {
+  const m = ORDERED_ITEM_RE.exec(line)
+  if (!m) return null
+  return { indent: m[1].length, number: Number(m[2]), text: m[3] }
 }
 
-function orderedItemText(line: string): string {
-  const m = ORDERED_ITEM_RE.exec(line)
+function bulletItemText(line: string): string {
+  const m = BULLET_ITEM_RE.exec(line)
   return m?.[1] ?? line.trim()
 }
 
@@ -487,9 +488,22 @@ function renderBulletListHtml(items: string[]): string {
   return `<ul class="md-list">${body}</ul>`
 }
 
-function renderOrderedListHtml(items: string[]): string {
-  const body = items.map(renderListItemHtml).join('')
-  return `<ol class="md-list md-list-ol">${body}</ol>`
+type OrderedListItem = {
+  number: number
+  text: string
+  nestedBullets: string[]
+}
+
+function renderOrderedListHtml(items: OrderedListItem[]): string {
+  const first = items[0]?.number
+  const start = first && first !== 1 ? ` start="${first}"` : ''
+  const body = items.map((item) => {
+    const nested = item.nestedBullets.length
+      ? renderBulletListHtml(item.nestedBullets)
+      : ''
+    return `<li>${inline(item.text)}${nested}</li>`
+  }).join('')
+  return `<ol class="md-list md-list-ol"${start}>${body}</ol>`
 }
 
 type MdSegment =
@@ -564,11 +578,38 @@ function extractMarkdownBlocks(text: string): MdSegment[] {
     }
     if (isOrderedItem(line)) {
       flushBuf()
-      const items: string[] = [orderedItemText(line)]
-      let j = i + 1
-      while (j < lines.length && isOrderedItem(lines[j])) {
-        items.push(orderedItemText(lines[j]))
+      const first = orderedItemParts(line)!
+      const items: OrderedListItem[] = []
+      let j = i
+      while (j < lines.length) {
+        const item = orderedItemParts(lines[j])
+        if (!item || item.indent !== first.indent) break
         j++
+        const nestedBullets: string[] = []
+        // Indented bullet lines belong to the preceding ordered item. Blank
+        // lines are allowed between a list item and its nested list.
+        while (j < lines.length) {
+          if (lines[j].trim() === '' && j + 1 < lines.length) {
+            const nextBullet = lines[j + 1].match(/^(\s*)[-*]\s+(.+?)\s*$/)
+            if (nextBullet && nextBullet[1].length > first.indent) {
+              j++
+              continue
+            }
+          }
+          const nested = lines[j].match(/^(\s*)[-*]\s+(.+?)\s*$/)
+          if (!nested || nested[1].length <= first.indent) break
+          nestedBullets.push(nested[2])
+          j++
+        }
+        items.push({ number: item.number, text: item.text, nestedBullets })
+        while (
+          j < lines.length &&
+          lines[j].trim() === '' &&
+          j + 1 < lines.length &&
+          orderedItemParts(lines[j + 1])?.indent === first.indent
+        ) {
+          j++
+        }
       }
       segs.push({ kind: 'list', html: renderOrderedListHtml(items) })
       i = j

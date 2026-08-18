@@ -282,6 +282,21 @@ A\boldsymbol c=0.
     expect(html).not.toContain('<div class="text-run">- tool_use directly rendered')
   })
 
+  it('keeps indented bullets inside ordered items so repeated 1 markers continue numbering', () => {
+    const html = renderText(
+      '1. First requirement\n\n   - first detail\n   - second detail\n\n1. Second requirement\n\n   - third detail',
+    )
+    expect(html).toContain('<ol class="md-list md-list-ol"><li>First requirement<ul class="md-list">')
+    expect(html).toContain('<li>Second requirement<ul class="md-list">')
+    expect(html.match(/<ol class="md-list md-list-ol"/g)?.length).toBe(1)
+  })
+
+  it('preserves a non-one starting number for an ordered list', () => {
+    expect(renderText('3. Third\n4. Fourth')).toContain(
+      '<ol class="md-list md-list-ol" start="3">',
+    )
+  })
+
   it('renders absolute local markdown links as clickable file links', () => {
     const html = renderText(
       'See [src/views/ChatView.vue](/Users/wuchao/apps/claude-session-viewer/src/views/ChatView.vue:97).',
@@ -676,7 +691,11 @@ describe('formatElapsedSeconds', () => {
 })
 
 describe('historicalMessageExecutionMs', () => {
-  const msg = (role: Msg['role'], timestamp: string, kind: string = 'text'): Msg => ({
+  const msg = (
+    role: Msg['role'],
+    timestamp: string,
+    kind: Msg['blocks'][number]['kind'] = 'text',
+  ): Msg => ({
     role,
     timestamp,
     sidechain: false,
