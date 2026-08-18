@@ -9,7 +9,7 @@ import { renderAllMermaid, resetMermaidForTheme } from '../mermaid'
 import { renderAllMath } from '../mathRender'
 import { highlightAllCodeBlocks, rehighlightAllCodeBlocks } from '../shikiHighlight'
 import { decorateCodeBlocks } from '../codeCopy'
-import { theme, showToolCalls } from '../settings'
+import { theme, showToolCalls, showChatRail, chatRailCount } from '../settings'
 import { t } from '../i18n'
 import ToolResult from '../components/ToolResult.vue'
 import CollapsibleBox from '../components/CollapsibleBox.vue'
@@ -87,6 +87,7 @@ import {
   type ChatHistoryEntry,
 } from '../chatInputHistory'
 import GitBranchControl from '../components/GitBranchControl.vue'
+import ChatRail from '../components/ChatRail.vue'
 
 const props = defineProps<{
   agent: Agent
@@ -1203,7 +1204,63 @@ function onScroll() {
     // 装饰(高亮/mermaid)由「真实滚动」驱动,而非 virtualRows 的响应式变化 —— 否则装饰改行高
     // → measureElement 重测 → virtualRows 变 → 又装饰,即使静止也空转打满 CPU。滚动停 = 不再装饰。
     scheduleDecorate()
+    refreshRailActive()
   })
+}
+
+// ---- 左侧导轨的滚动 spy：算出「屏幕中部是哪一轮用户提问」→ ChatRail 高亮 ----
+// 优先用虚拟器当前挂载行的真实屏幕坐标。长会话中，大量窗口外行还只是 estimateSize，
+// 直接拿虚拟偏移会漂移；真实 DOM 的中心点能让 61 条导轨窗口持续跟住视口。
+const railActiveIndex = ref<number | null>(null)
+function refreshRailActive() {
+  if (!railReady.value) return
+  const el = scrollEl.value
+  if (!el) return
+  const entries = promptEntries.value
+  if (!entries.length) {
+    railActiveIndex.value = null
+    return
+  }
+
+  const scrollRect = el.getBoundingClientRect()
+  const screenCenter = scrollRect.top + scrollRect.height / 2
+  let visibleCurrent: number | null = null
+  let visibleDistance = Number.POSITIVE_INFINITY
+  for (const row of el.querySelectorAll<HTMLElement>('.msg-vrow[data-index]')) {
+    const index = Number(row.dataset.index)
+    if (!promptIndexSet.value.has(index)) continue
+    const rect = row.getBoundingClientRect()
+    if (rect.height === 0) continue
+    const distance = Math.abs(rect.top + rect.height / 2 - screenCenter)
+    if (distance < visibleDistance) {
+      visibleDistance = distance
+      visibleCurrent = index
+    }
+  }
+  if (visibleCurrent !== null) {
+    railActiveIndex.value = visibleCurrent
+    return
+  }
+
+  // 极短暂的虚拟列表换窗期间，中心附近可能尚未挂出 DOM；此时回退到虚拟偏移，
+  // 让导轨不闪空，下一帧真实行挂载后会立刻覆盖这个近似值。
+  // start 本就含 scrollMargin（虚拟器把 margin 加进首行 start）。取视口中线，
+  // 导轨窗口会随滚动实时围绕这条用户消息重心排布。
+  const line = el.scrollTop + el.clientHeight / 2 + listScrollMargin.value
+  let cur: number | null = null
+  let closestDistance = Number.POSITIVE_INFINITY
+  for (const p of entries) {
+    const off = rowVirtualizer.value.getOffsetForIndex(p.idx, 'start')
+    if (off == null) continue
+    const distance = Math.abs(off[0] - line)
+    if (distance < closestDistance) {
+      closestDistance = distance
+      cur = p.idx
+    }
+    // offsets 单调递增；第一个越过中线的条目与前一个条目二选一后即可停止。
+    if (off[0] >= line) break
+  }
+  railActiveIndex.value = cur ?? entries[0].idx
 }
 // 悬浮 tip：事件委托挂在滚动容器上（v-html 动态节点挂不上指令）。两类目标共用：
 // 命令 token（.cmd-name，描述来自 data-cmd-desc）与文件引用（.file-ref，固定提示「打开文件」）。
@@ -1578,6 +1635,7 @@ watch(
     lastVisibleKey = '' // 消息集变了,让下次滚动重新装饰
     nextTick(() => {
       decorateVisible()
+      refreshRailActive()
       if (search.value) applySearch()
       // 聊天进行中：变化前贴底 → 钉到最新消息（钉一小段，扛住高亮/图片异步撑高）。
       if (props.liveSession && wasAtBottomBeforeUpdate) {
@@ -1677,6 +1735,7 @@ onMounted(() => {
   nextTick(() => {
     measureListMargin() // 量列表相对滚动容器顶端的偏移,scrollToIndex 才对得准
     decorateVisible()
+    scheduleRailReady()
     // live GUI chat：进入时（含入口 3 切换 / 列表续聊的预载历史）钉到底部一会儿，
     // 露出最新上下文 + composer，扛住代码高亮/图片异步撑高。
     if (props.liveSession) {
@@ -1698,6 +1757,7 @@ watch(
   },
 )
 onUnmounted(() => {
+  cancelRailReady()
   setSearchNavigator(null)
   window.clearTimeout(searchDebounce)
   window.clearTimeout(finishedTurnTimer)
@@ -1729,27 +1789,119 @@ interface PromptEntry {
   seq: number
   uuid?: string
   text: string
+  summary: string
   time: string
 }
+
+function isPromptMessage(m: Msg): boolean {
+  return (
+    m.role === 'user' &&
+    !m.metaKind &&
+    !isToolOnly(m) &&
+    !isCaveatOnlyMsg(m) &&
+    !isAskUserQuestionInstructionOnlyMsg(m) &&
+    !systemEventLabel(m)
+  )
+}
+
+function plainMessageText(m: Msg): string {
+  return m.blocks
+    .filter((b) => b.kind === 'text' && b.text)
+    .map((b) => (b.text ?? '').replace(/<[^>]*>/g, '').trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+}
+
+function assistantSummaryAfter(index: number): string {
+  for (let i = index + 1; i < props.messages.length; i++) {
+    const message = props.messages[i]
+    if (isPromptMessage(message)) break
+    if (effectiveRole(message) !== 'assistant') continue
+    const text = plainMessageText(message)
+    if (text) return text
+  }
+  return ''
+}
+
 const promptEntries = computed<PromptEntry[]>(() => {
   const entries: PromptEntry[] = []
   for (let i = 0; i < props.messages.length; i++) {
     const m = props.messages[i]
-    if (
-      m.role !== 'user' ||
-      m.metaKind ||
-      isToolOnly(m) ||
-      isCaveatOnlyMsg(m) ||
-      isAskUserQuestionInstructionOnlyMsg(m) ||
-      systemEventLabel(m)
-    ) continue
-    const textBlock = m.blocks.find((b) => b.kind === 'text' && b.text)
-    const raw = textBlock?.text ?? ''
-    const plain = raw.replace(/<[^>]*>/g, '').trim()
-    const text = plain.length > 80 ? plain.slice(0, 80) + '…' : plain || `#${entries.length + 1}`
-    entries.push({ idx: i, seq: entries.length + 1, uuid: m.uuid, text, time: formatTime(m.timestamp) })
+    if (!isPromptMessage(m)) continue
+    const text = plainMessageText(m) || `#${entries.length + 1}`
+    entries.push({
+      idx: i,
+      seq: entries.length + 1,
+      uuid: m.uuid,
+      text,
+      summary: assistantSummaryAfter(i),
+      time: formatTime(m.timestamp),
+    })
   }
   return entries
+})
+const promptIndexSet = computed(() => new Set(promptEntries.value.map((entry) => entry.idx)))
+
+// 导轨是辅助视图，不参与会话首屏渲染；会话内容稳定后再在浏览器空闲时挂载和计算。
+const railReady = ref(false)
+let railIdleHandle: number | null = null
+let railFallbackTimer: ReturnType<typeof setTimeout> | null = null
+
+function cancelRailReady() {
+  if (railIdleHandle !== null) {
+    const idleWindow = window as Window & { cancelIdleCallback?: (handle: number) => void }
+    idleWindow.cancelIdleCallback?.(railIdleHandle)
+    railIdleHandle = null
+  }
+  if (railFallbackTimer !== null) {
+    clearTimeout(railFallbackTimer)
+    railFallbackTimer = null
+  }
+}
+
+function scheduleRailReady() {
+  cancelRailReady()
+  railReady.value = false
+  nextTick(() => {
+    const enable = () => {
+      railIdleHandle = null
+      railFallbackTimer = null
+      railReady.value = true
+      refreshRailActive()
+    }
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number
+    }
+    if (idleWindow.requestIdleCallback) {
+      railIdleHandle = idleWindow.requestIdleCallback(enable, { timeout: 500 })
+    } else {
+      railFallbackTimer = setTimeout(enable, 120)
+    }
+  })
+}
+
+watch(
+  () => `${props.session.path}:${props.session.id}`,
+  () => scheduleRailReady(),
+)
+
+const railEntries = computed(() => {
+  const entries = promptEntries.value
+  const windowSize = Math.min(chatRailCount.value, entries.length)
+  if (entries.length <= windowSize) return entries
+  const radius = Math.floor((windowSize - 1) / 2)
+
+  // 让当前屏幕中部的用户消息稳定落在 61 个刻度的中间；滚到首尾时向另一侧补齐。
+  const center = Math.max(
+    0,
+    entries.findIndex((entry) => entry.idx === railActiveIndex.value),
+  )
+  const start = Math.min(
+    Math.max(0, center - radius),
+    entries.length - windowSize,
+  )
+  return entries.slice(start, start + windowSize)
 })
 const filteredPromptEntries = computed(() => {
   const q = locateFilter.value.trim().toLowerCase()
@@ -2013,8 +2165,15 @@ function onDocClick(e: MouseEvent) {
     </button>
   </div>
 
-  <div ref="scrollEl" class="chat-scroll" :class="{ 'has-composer': !!liveSession }">
-    <div ref="innerEl" class="chat-inner">
+  <div class="chat-body">
+    <ChatRail
+      :entries="showChatRail && railReady ? railEntries : []"
+      :active-index="railActiveIndex"
+      @jump="flashMessage"
+    />
+    <div class="chat-main">
+      <div ref="scrollEl" class="chat-scroll" :class="{ 'has-composer': !!liveSession }">
+        <div ref="innerEl" class="chat-inner">
       <!-- 虚拟滚动列表：只有可见窗口 + overscan 的行真正挂 DOM。外层 .chat-vlist 撑满整段
            虚拟总高（滚动条几何）；每个 .msg-vrow 绝对定位到自己的 translateY,并绑 measureRow
            动态测高。内层用单元素 v-for 把当前行的消息重新命名回 `m`,行体保持原样。 -->
@@ -2384,6 +2543,17 @@ function onDocClick(e: MouseEvent) {
       <div v-if="!messages.length && !liveSession" class="empty" style="height: 200px">
         <div>{{ t('chat.empty') }}</div>
       </div>
+      </div>
+      </div>
+      <!-- live GUI chat：底部输入框（Claude 客户端样式）—— 放 chat-main 内，与消息列同宽对齐 -->
+      <ChatComposer
+        v-if="liveSession"
+        :session="liveSession"
+        @open-export="openExportFromComposer"
+        @rename="$emit('rename')"
+        @fork="$emit('fork')"
+        @archive="$emit('archive')"
+      />
     </div>
   </div>
 
@@ -2432,16 +2602,6 @@ function onDocClick(e: MouseEvent) {
       </button>
     </div>
   </div>
-
-  <!-- live GUI chat：底部输入框（Claude 客户端样式） -->
-  <ChatComposer
-    v-if="liveSession"
-    :session="liveSession"
-    @open-export="openExportFromComposer"
-    @rename="$emit('rename')"
-    @fork="$emit('fork')"
-    @archive="$emit('archive')"
-  />
 
   <VueEasyLightbox
     :visible="lightboxVisible"

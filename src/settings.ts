@@ -25,6 +25,8 @@ const QUICK_OPEN_KEY = 'quickOpenTarget:v1'
 const USE_RECLAUDE_KEY = 'useReclaude:v1'
 const SHOW_TOOL_CALLS_KEY = 'showToolCalls:v1'
 const CHAT_SPACING_KEY = 'chatSpacing:v1'
+const SHOW_CHAT_RAIL_KEY = 'showChatRail:v1'
+const CHAT_RAIL_COUNT_KEY = 'chatRailCount:v1'
 const BACKGROUND_IMAGE_PATH_KEY = 'backgroundImagePath:v1'
 const BACKGROUND_IMAGE_OPACITY_KEY = 'backgroundImageOpacity:v1'
 const BACKGROUND_BORDER_OPACITY_KEY = 'backgroundBorderOpacity:v1'
@@ -85,6 +87,33 @@ export const showToolCalls = ref(localStorage.getItem(SHOW_TOOL_CALLS_KEY) === '
 export function setShowToolCalls(v: boolean) {
   showToolCalls.value = v
   localStorage.setItem(SHOW_TOOL_CALLS_KEY, v ? '1' : '0')
+}
+
+export const showChatRail = ref(localStorage.getItem(SHOW_CHAT_RAIL_KEY) !== '0')
+export function setShowChatRail(v: boolean) {
+  showChatRail.value = v
+  localStorage.setItem(SHOW_CHAT_RAIL_KEY, v ? '1' : '0')
+}
+
+export type ChatRailCount = number
+const CHAT_RAIL_COUNT_DEFAULT = 41
+const CHAT_RAIL_COUNT_MIN = 21
+const CHAT_RAIL_COUNT_MAX = 71
+
+function isChatRailCount(value: number): value is ChatRailCount {
+  return Number.isInteger(value) && value >= CHAT_RAIL_COUNT_MIN && value <= CHAT_RAIL_COUNT_MAX
+}
+
+function readChatRailCount(): ChatRailCount {
+  const value = Number(localStorage.getItem(CHAT_RAIL_COUNT_KEY))
+  return isChatRailCount(value) ? value : CHAT_RAIL_COUNT_DEFAULT
+}
+
+export const chatRailCount = ref<ChatRailCount>(readChatRailCount())
+export function setChatRailCount(value: number) {
+  const next = isChatRailCount(value) ? value : CHAT_RAIL_COUNT_DEFAULT
+  chatRailCount.value = next
+  localStorage.setItem(CHAT_RAIL_COUNT_KEY, String(next))
 }
 
 export type ChatSpacing = number
@@ -484,3 +513,36 @@ export const statsRange = ref<StatsRange>(readStatsRange())
 
 watch(statsScope, (v) => localStorage.setItem(STATS_SCOPE_KEY, v))
 watch(statsRange, (v) => localStorage.setItem(STATS_RANGE_KEY, v))
+
+/** Restore every persisted preference owned by this module and clear app cache. */
+export function resetSettings() {
+  setLang(detectSystemLang())
+  setTheme('system')
+  setUseExternalTerminal(false)
+  setAutoRestoreTerminalTabs(false)
+  localStorage.removeItem(TERMINAL_APP_KEY)
+  terminalApp.value = 'terminal'
+  setCodexShowInternalSessions(false)
+  setCodexShowArchivedSessions(true)
+  setUseReclaude(false)
+  setShowToolCalls(false)
+  setShowChatRail(true)
+  setChatRailCount(CHAT_RAIL_COUNT_DEFAULT)
+  setChatSpacing(CHAT_SPACING_DEFAULT)
+  setBackgroundImagePath(null)
+  setBackgroundImageOpacity(BACKGROUND_IMAGE_OPACITY_DEFAULT)
+  setBackgroundBorderOpacity(BACKGROUND_BORDER_OPACITY_DEFAULT)
+  setQuickOpenTarget('session')
+  launchArgs.value = { claude: '', codex: '', agy: '', opencode: '' }
+  localStorage.removeItem(LAUNCH_ARGS_KEY)
+  enabledAgents.value = { claude: true, codex: true, agy: true, opencode: true }
+  localStorage.removeItem(ENABLED_AGENTS_KEY)
+  setFontScale(FONT_SCALE_DEFAULT)
+  applyFontScale()
+  setFontFamily(FONT_FAMILY_DEFAULT)
+  applyFontFamily()
+  statsScope.value = 'all'
+  statsRange.value = 'months3'
+  localStorage.removeItem('settingsActiveTab:v1')
+  clearAppCache()
+}

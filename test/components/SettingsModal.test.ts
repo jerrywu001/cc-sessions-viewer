@@ -47,15 +47,19 @@ import {
   backgroundImageOpacity,
   backgroundImagePath,
   chatSpacing,
+  chatRailCount,
   setBackgroundBorderOpacity,
   setBackgroundImageOpacity,
   setBackgroundImagePath,
   setChatSpacing,
+  setChatRailCount,
   setLang,
   setShowToolCalls,
+  setShowChatRail,
   setTheme,
   setUseReclaude,
   showToolCalls,
+  showChatRail,
   theme,
   useReclaude,
 } from '../../src/settings'
@@ -191,6 +195,8 @@ beforeEach(() => {
   setDesktopPetSize(112)
   setShowToolCalls(false)
   setChatSpacing(100)
+  setChatRailCount(41)
+  setShowChatRail(true)
   setUseReclaude(false)
   setBackgroundImagePath(null)
   setBackgroundImageOpacity(40)
@@ -218,28 +224,17 @@ afterEach(() => {
 type Props = InstanceType<typeof SettingsModal>['$props']
 const factory = (props: Partial<Props> = {}) =>
   mount(SettingsModal, {
-    props: { cacheBytes: 0, ...props } as Props,
+    props: { ...props } as Props,
     global: { directives: { tooltip: vTooltip } },
     attachTo: document.body,
   })
 
 describe('SettingsModal', () => {
-  it('shows a human-readable cache size', () => {
-    expect(factory({ cacheBytes: 2048 }).find('.set-section-tail').text()).toBe('2.0 KB')
-  })
-
-  it('shows "0 B" and the clear button is always enabled', () => {
-    const wrapper = factory({ cacheBytes: 0 })
-    expect(wrapper.find('.set-section-tail').text()).toBe('0 B')
-    expect(wrapper.find('.btn.danger').attributes('disabled')).toBeUndefined()
-  })
-
-  it('enables the clear button and emits clearCache when there is cached data', async () => {
-    const wrapper = factory({ cacheBytes: 4096 })
-    const clearBtn = wrapper.find('.btn.danger')
-    expect(clearBtn.attributes('disabled')).toBeUndefined()
-    await clearBtn.trigger('click')
-    expect(wrapper.emitted('clearCache')).toHaveLength(1)
+  it('shows the restore-defaults action and emits resetSettings', async () => {
+    const wrapper = factory()
+    const resetBtn = wrapper.get('[data-reset-settings]')
+    await resetBtn.trigger('click')
+    expect(wrapper.emitted('resetSettings')).toHaveLength(1)
   })
 
   it('emits close only from the X button, not the overlay backdrop', async () => {
@@ -305,6 +300,26 @@ describe('SettingsModal', () => {
     expect(chatSpacing.value).toBe(30)
     expect(localStorage.getItem('chatSpacing:v1')).toBe('30')
     expect(document.documentElement.style.getPropertyValue('--chat-spacing-scale')).toBe('0.3')
+  })
+
+  it('persists the prompt navigation toggle and marker count', async () => {
+    const wrapper = factory()
+    const toggle = wrapper
+      .findAll('.set-row')
+      .find((candidate) => candidate.find('.set-row-title').text() === 'Show prompt navigation')
+    expect(toggle).toBeDefined()
+    await toggle!.trigger('click')
+    expect(showChatRail.value).toBe(false)
+    expect(localStorage.getItem('showChatRail:v1')).toBe('0')
+
+    const slider = wrapper.get('[data-chat-rail-count-slider]')
+    expect(slider.attributes('min')).toBe('21')
+    expect(slider.attributes('max')).toBe('71')
+    expect(slider.attributes('step')).toBe('1')
+    expect(chatRailCount.value).toBe(41)
+    await slider.setValue('42')
+    expect(chatRailCount.value).toBe(42)
+    expect(localStorage.getItem('chatRailCount:v1')).toBe('42')
   })
 
   it('selects, previews, adjusts, and removes a background image', async () => {

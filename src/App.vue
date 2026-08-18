@@ -6,7 +6,7 @@ import { shortName } from './format'
 import { t } from './i18n'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import {
-  clearAppCache,
+  resetSettings,
   codexShowArchivedSessions,
   codexShowInternalSessions,
   lang,
@@ -55,7 +55,9 @@ import { refreshTurnHookStatus } from './turnHookStatus'
 import {
   acknowledgeDesktopPetTask,
   resolveDesktopPetSession,
+  resetDesktopPetSettings,
   restoreDesktopPet as restoreDesktopPetWindow,
+  updateDesktopPetWindow,
   type DesktopPetResolvedSession,
   type DesktopTask,
 } from './desktopPet'
@@ -703,13 +705,6 @@ function setProjState(p: ProjectInfo, state: ProjState) {
   projPrefs.value = { ...projPrefs.value }
   localStorage.setItem(PREFS_KEY, JSON.stringify(projPrefs.value))
 }
-
-// 缓存包括项目置顶/沉底和手动排序偏好，字节数等于其 JSON 序列化后的 UTF-8 长度。
-const cacheBytes = computed(() => {
-  const json = JSON.stringify({ prefs: projPrefs.value, order: projectOrders.value })
-  if (json === '{"prefs":{},"order":{}}') return 0
-  return new TextEncoder().encode(json).length
-})
 
 // ---------- 项目右键菜单 ----------
 interface CtxMenu {
@@ -3431,18 +3426,25 @@ const windowMenus = computed<WindowMenuGroup[]>(() => [
   },
 ])
 
-function onClearCache() {
+function onResetSettings() {
   ask({
-    title: t('dialog.clearCache.title'),
-    message: t('dialog.clearCache.body'),
-    okText: t('dialog.clearCache.ok'),
+    title: t('dialog.resetSettings.title'),
+    message: t('dialog.resetSettings.body'),
+    okText: t('dialog.resetSettings.ok'),
     danger: true,
     onOk: () => {
-      clearAppCache()
+      resetSettings()
+      resetDesktopPetSettings()
+      void updateDesktopPetWindow(false).catch(() => {})
       projPrefs.value = {}
       projectOrders.value = {}
+      localStorage.removeItem(SIDEBAR_WIDTH_KEY)
+      sidebarWidth.value = clampSidebarWidth(248)
+      localStorage.removeItem(WINDOW_CLOSE_PREF_KEY)
+      windowClosePrompt.value = { show: false, remember: false }
+      settingsTab.value = 'general'
       api.detectTerminals().then(applyTerminalDefault).catch(() => {})
-      notify(t('toast.cacheCleared'))
+      notify(t('toast.settingsReset'))
     },
   })
 }
@@ -4413,10 +4415,9 @@ provide<PaneActions>(PaneActionsKey, {
     <Transition name="fade">
       <SettingsModal
         v-if="showSettings"
-        :cache-bytes="cacheBytes"
         :initial-tab="settingsTab"
         @close="showSettings = false; settingsTab = undefined"
-        @clear-cache="onClearCache"
+        @reset-settings="onResetSettings"
         @clear-tabs="onClearTabs"
       />
     </Transition>

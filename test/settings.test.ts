@@ -12,12 +12,15 @@ import {
   backgroundImagePath,
   backgroundIsVideo,
   chatSpacing,
+  chatRailCount,
   clearAppCache,
+  resetSettings,
   lang,
   setBackgroundBorderOpacity,
   setBackgroundImageOpacity,
   setBackgroundImagePath,
   setChatSpacing,
+  setChatRailCount,
   setLang,
   setTheme,
   theme,
@@ -49,6 +52,7 @@ afterEach(() => {
   setBackgroundImageOpacity(40)
   setBackgroundBorderOpacity(26)
   setChatSpacing(100)
+  setChatRailCount(51)
   setLang('en')
   setTheme('system')
 })
@@ -97,6 +101,48 @@ describe('chat spacing', () => {
     expect(chatSpacing.value).toBe(70)
     expect(localStorage.getItem('chatSpacing:v1')).toBe('70')
     expect(document.documentElement.style.getPropertyValue('--chat-spacing-scale')).toBe('0.7')
+  })
+})
+
+describe('chat rail', () => {
+  async function freshChatRailCount(stored?: string) {
+    localStorage.clear()
+    if (stored !== undefined) localStorage.setItem('chatRailCount:v1', stored)
+    vi.resetModules()
+    return import('../src/settings')
+  }
+
+  it('defaults to 41 markers and restores only values in the supported range', async () => {
+    const defaults = await freshChatRailCount()
+    expect(defaults.chatRailCount.value).toBe(41)
+
+    const restored = await freshChatRailCount('71')
+    expect(restored.chatRailCount.value).toBe(71)
+
+    const fallback = await freshChatRailCount('72')
+    expect(fallback.chatRailCount.value).toBe(41)
+  })
+
+  it('persists marker count changes', () => {
+    setChatRailCount(42)
+    expect(chatRailCount.value).toBe(42)
+    expect(localStorage.getItem('chatRailCount:v1')).toBe('42')
+  })
+
+  it('restores application defaults and clears cached project preferences', () => {
+    setTheme('dark')
+    setChatRailCount(71)
+    setChatSpacing(150)
+    setBackgroundImagePath('/tmp/wallpaper.webp')
+    localStorage.setItem('projPrefs:v1', '{"project":{"state":"pinned"}}')
+
+    resetSettings()
+
+    expect(theme.value).toBe('system')
+    expect(chatRailCount.value).toBe(41)
+    expect(chatSpacing.value).toBe(100)
+    expect(backgroundImagePath.value).toBeNull()
+    expect(localStorage.getItem('projPrefs:v1')).toBeNull()
   })
 })
 

@@ -2558,6 +2558,149 @@ mark.locate-hl {
   font-variant-numeric: tabular-nums;
 }
 
+/* 左侧「快速用户消息导航」导轨（参考 Codex 官方客户端 turn rail）。
+   默认是垂直居中的窄刻度；悬浮或键盘聚焦某一项时，该刻度向右变宽并展开对应用户消息。
+   预览是该 button 的溢出内容，不会把消息列挤窄。 */
+.chat-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+.chat-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chat-rail {
+  position: relative;
+  flex: 0 0 auto;
+  width: 38px;
+  z-index: 20;
+}
+/* 长会话时保留独立滚动；短会话时整个刻度组垂直居中。 */
+.chat-rail-list {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  max-height: calc(100% - 24px);
+  width: 20px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  transform: translateY(-50%);
+}
+.chat-rail-list::-webkit-scrollbar {
+  display: none;
+}
+.chat-rail-item {
+  display: flex;
+  align-items: center;
+  /* 波浪以刻度中心为基准向左右展开。 */
+  justify-content: center;
+  position: relative;
+  width: 20px;
+  height: 13px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.chat-rail-dot {
+  width: var(--rail-dot-width, 5px);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--text-mute);
+  opacity: 0.65;
+  transition: width 180ms cubic-bezier(0.2, 0, 0, 1), background 140ms ease, opacity 140ms ease;
+}
+.chat-rail-item.active .chat-rail-dot {
+  width: var(--rail-dot-width, 25px);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--text);
+  opacity: 1;
+}
+/* 单条用户消息的展开预览。width + opacity + transform 一同过渡，形成官方客户端的横向展开感。 */
+.chat-rail-preview {
+  position: absolute;
+  left: 50px;
+  top: var(--rail-preview-y, 50%);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  width: 0;
+  max-width: min(322px, calc(100vw - 48px));
+  max-height: 118px;
+  padding: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--surface-hover) 88%, var(--text) 12%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: left;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-8px, -50%);
+  transform-origin: left center;
+  cursor: pointer;
+  transition: width 180ms cubic-bezier(0.2, 0, 0, 1), padding 180ms cubic-bezier(0.2, 0, 0, 1), opacity 120ms ease, transform 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+/* Light surfaces should stay crisp over a custom wallpaper. Mixing the
+   hover gray with text produces a muddy mid-gray card, especially in light
+   mode; keep the preview opaque and let the shadow provide separation. */
+:root:not(.theme-dark):not(.theme-dracula) .chat-rail-preview {
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--text) 13%, transparent);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14), 0 1px 3px rgba(0, 0, 0, 0.10);
+}
+.chat-rail-item.hovered .chat-rail-dot,
+.chat-rail-item:focus-visible .chat-rail-dot {
+  background: var(--text-dim);
+  opacity: 1;
+}
+.chat-rail-item:focus-visible:not(.hovered) .chat-rail-dot {
+  width: 25px;
+}
+.chat-rail:has(.chat-rail-item.hovered) .chat-rail-preview,
+.chat-rail:has(.chat-rail-item:focus-visible) .chat-rail-preview {
+  width: min(322px, calc(100vw - 48px));
+  padding: 11px 12px;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(0, -50%);
+}
+.chat-rail-preview-title {
+  width: 100%;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-rail-preview-summary {
+  width: 100%;
+  overflow: hidden;
+  color: var(--text-mute);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  text-overflow: ellipsis;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-rail-dot,
+  .chat-rail-preview {
+    transition: none;
+  }
+}
+
 .chat-scroll {
   flex: 1;
   overflow-y: auto;

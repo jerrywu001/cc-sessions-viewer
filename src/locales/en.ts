@@ -463,6 +463,7 @@ export default {
   'chat.tb.search.none': 'No matches',
   'chat.tb.locate': 'Jump to prompt',
   'chat.tb.locate.placeholder': 'Jump to prompt…',
+  'chat.rail.label': 'Prompt navigation',
   'chat.tb.tools.collapse': 'Collapse all tool calls',
   'chat.tb.tools.expand': 'Expand all tool calls',
   'chat.tb.export.md': 'Export as Markdown',
@@ -517,10 +518,10 @@ export default {
   'dialog.batchDeleteProject.body': '{n} projects ({sessions} sessions) will be moved to Trash.',
   'dialog.batchDeleteProject.ok': 'Move all to Trash',
   'dialog.rename.title': 'Rename session',
-  'dialog.clearCache.title': 'Clear cache',
-  'dialog.clearCache.body':
-    'This clears pin / sink preferences. Sessions and Trash are not affected.',
-  'dialog.clearCache.ok': 'Clear',
+  'dialog.resetSettings.title': 'Restore default settings',
+  'dialog.resetSettings.body':
+    'All application settings and cached preferences will be restored to their defaults. Sessions and Trash are not affected.',
+  'dialog.resetSettings.ok': 'Restore defaults',
   'dialog.clearTabs.title': 'Clear all tabs',
   'dialog.clearTabs.body':
     'This will close all tabs (terminals, session views, GUI chats, Git Diff) and clear saved tab state. Session files are not affected.',
@@ -555,7 +556,7 @@ export default {
   'toast.exportFail': 'Export failed: {e}',
   'toast.exportNoSession': 'Open a session first to export it',
   'toast.chatUnsupported': 'New chat isn’t supported for this agent yet',
-  'toast.cacheCleared': 'Cache cleared',
+  'toast.settingsReset': 'Default settings restored',
   'toast.copied': 'Copied',
   'toast.copyFail': 'Copy failed: {e}',
   'toast.loadProjectsFail': 'Failed to load projects: {e}',
@@ -696,6 +697,10 @@ export default {
   'settings.showToolCalls': 'Show tool calls',
   'settings.showToolCallsDesc':
     'Show process tools such as Bash, Read, and Grep. File changes and prompts that need your input are always shown.',
+  'settings.showChatRail': 'Show prompt navigation',
+  'settings.showChatRailDesc': 'Show the interactive prompt rail beside the conversation.',
+  'settings.chatRailCount': 'Navigation markers',
+  'settings.chatRailCountDesc': 'Set the maximum number of prompt markers kept around the current message.',
   'settings.chatSpacing': 'Information spacing',
   'settings.chatSpacingDesc': 'Adjust vertical spacing between messages, thinking, and tool blocks.',
   'settings.chatSpacingCompact': 'Compact',
@@ -775,10 +780,9 @@ export default {
   'settings.clearTabs': 'Clear all tabs',
   'settings.clearTabsDesc':
     'Closes all tabs (terminals, session views, GUI chats, Git Diff) and clears saved tab state. Session files are not affected.',
-  'settings.clearCache': 'Clear cache',
-  'settings.clearCacheDesc':
-    'Clears pin / sink preferences. Sessions and Trash are not affected.',
-  'settings.cacheSize': 'Cache: {size}',
+  'settings.resetDefaults': 'Restore default settings',
+  'settings.resetDefaultsDesc':
+    'Restore all application settings and clear cached preferences. Sessions and Trash are not affected.',
   'settings.checkUpdate': 'Check for updates',
   'settings.checking': 'Checking…',
   'settings.upToDate': "You're on the latest version (v{v})",

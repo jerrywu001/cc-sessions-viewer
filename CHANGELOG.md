@@ -6,6 +6,26 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ---
 
+## [v0.3.19]
+
+### Features
+
+- **Global search scope selector** — the global search overlay gains a Session ID / Keyword scope dropdown. Keyword mode ranks matches by message text and excludes raw session IDs; ID mode searches session IDs directly and skips the message body, so pinning down a specific transcript by its ID is precise instead of noisy.
+- **Prompt navigation rail** — the conversation view now shows a Codex-style turn rail down the left edge, with one marker per user prompt. Hovering or tabbing to a marker expands a floating preview of that prompt (its text plus the assistant's opening reply), and clicking it jumps straight to the message. The rail keeps the current prompt centered in a configurable marker window so long sessions stay navigable.
+
+### Improvements
+
+- **Restore default settings** — the "Clear cache" action is replaced by "Restore default settings", which now resets every application preference (chat spacing, prompt rail, background, launch args, enabled agents, desktop pet, sidebar width, window close prompt, and more) in one step instead of only clearing pin / sink prefs.
+- **Configurable navigation markers** — Settings → Chat gains a "Navigation markers" slider (21–71, default 41) controlling how many prompt markers the rail keeps around the current message.
+
+### Bug Fixes
+
+- **Session lifecycle UI tidy** — removed the duplicated retry label from the Chat composer status row, and the embedded session tab now closes cleanly on a graceful exit (e.g. double Ctrl+C) instead of lingering after the process has ended.
+
+### Tests
+
+- Added coverage for the search scope selector, the prompt navigation rail (marker rendering, active highlight, and jump behavior), the configurable marker count, and the restore-defaults path.
+
 ## [v0.3.18]
 
 ### Bug Fixes

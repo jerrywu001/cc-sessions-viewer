@@ -38,6 +38,10 @@ import {
   setUseReclaude,
   showToolCalls,
   setShowToolCalls,
+  showChatRail,
+  setShowChatRail,
+  chatRailCount,
+  setChatRailCount,
   chatSpacing,
   setChatSpacing,
   backgroundImagePath,
@@ -52,7 +56,6 @@ import {
   type TerminalApp,
   type QuickOpenTarget,
 } from '../settings'
-import { formatSize } from '../format'
 import {
   IconClose,
   IconRefresh,
@@ -189,8 +192,8 @@ const shortcutGroups = [
 const agentLabel = (a: Agent) =>
   a === 'codex' ? 'Codex' : a === 'agy' ? 'Antigravity CLI' : a === 'opencode' ? 'opencode' : 'Claude'
 
-const props = defineProps<{ cacheBytes: number; initialTab?: SettingsTab }>()
-const emit = defineEmits<{ close: []; clearCache: []; clearTabs: [] }>()
+const props = defineProps<{ initialTab?: SettingsTab }>()
+const emit = defineEmits<{ close: []; resetSettings: []; clearTabs: [] }>()
 
 function readLastSettingsTab(): SettingsTab {
   const value = localStorage.getItem(SETTINGS_ACTIVE_TAB_KEY)
@@ -204,10 +207,6 @@ watch(activeTab, () => {
   localStorage.setItem(SETTINGS_ACTIVE_TAB_KEY, activeTab.value)
   if (bodyEl.value) bodyEl.value.scrollTop = 0
 })
-
-const cacheLabel = computed(() =>
-  props.cacheBytes > 0 ? formatSize(props.cacheBytes) : '0 B',
-)
 
 const version = ref('—')
 const updateMsg = ref('')
@@ -471,6 +470,10 @@ function onChatSpacingSlider(e: Event) {
   setChatSpacing(Number((e.target as HTMLInputElement).value))
 }
 
+function onChatRailCountSlider(e: Event) {
+  setChatRailCount(Number((e.target as HTMLInputElement).value))
+}
+
 function onBackgroundImageOpacitySlider(e: Event) {
   setBackgroundImageOpacity(Number((e.target as HTMLInputElement).value))
 }
@@ -724,6 +727,33 @@ async function installTurnHooks() {
                 <span class="set-toggle-thumb" />
               </span>
             </label>
+            <label class="set-row set-row-clickable" @click.prevent="setShowChatRail(!showChatRail)">
+              <div class="set-row-text">
+                <div class="set-row-title">{{ t('settings.showChatRail') }}</div>
+                <p class="set-row-desc">{{ t('settings.showChatRailDesc') }}</p>
+              </div>
+              <span class="set-toggle-track set-row-control" :class="{ on: showChatRail }">
+                <span class="set-toggle-thumb" />
+              </span>
+            </label>
+            <div class="set-row set-row-nosep">
+              <div class="set-row-text">
+                <div class="set-row-title">{{ t('settings.chatRailCount') }}</div>
+                <p class="set-row-desc">{{ t('settings.chatRailCountDesc') }}</p>
+              </div>
+              <div class="set-font-slider set-row-control">
+                <span class="set-slider-endpoint">21</span>
+                <input
+                  data-chat-rail-count-slider
+                  type="range" min="21" max="71" step="1"
+                  :value="chatRailCount"
+                  :aria-label="t('settings.chatRailCount')"
+                  @input="onChatRailCountSlider"
+                  class="set-slider"
+                >
+                <span class="set-font-value">{{ chatRailCount }}</span>
+              </div>
+            </div>
             <div class="set-row">
               <div class="set-row-text">
                 <div class="set-row-title">{{ t('settings.chatSpacing') }}</div>
@@ -748,24 +778,27 @@ async function installTurnHooks() {
           <div class="set-group">
             <div class="set-row">
               <div class="set-row-text">
-                <div class="set-row-title">
-                  {{ t('settings.section.data') }}
-                  <span class="set-section-tail">{{ cacheLabel }}</span>
-                </div>
-                <p class="set-row-desc">{{ t('settings.clearCacheDesc') }}</p>
-              </div>
-              <button class="btn danger set-row-control" :disabled="false" @click="emit('clearCache')">
-                {{ t('settings.clearCache') }}
-              </button>
-            </div>
-
-            <div class="set-row">
-              <div class="set-row-text">
                 <div class="set-row-title">{{ t('settings.section.tabs') }}</div>
                 <p class="set-row-desc">{{ t('settings.clearTabsDesc') }}</p>
               </div>
               <button class="btn danger set-row-control" @click="emit('clearTabs')">
                 {{ t('settings.clearTabs') }}
+              </button>
+            </div>
+          </div>
+
+          <div class="set-group">
+            <div class="set-row">
+              <div class="set-row-text">
+                <div class="set-row-title">{{ t('settings.resetDefaults') }}</div>
+                <p class="set-row-desc">{{ t('settings.resetDefaultsDesc') }}</p>
+              </div>
+              <button
+                class="btn danger set-row-control"
+                data-reset-settings
+                @click="emit('resetSettings')"
+              >
+                {{ t('settings.resetDefaults') }}
               </button>
             </div>
           </div>

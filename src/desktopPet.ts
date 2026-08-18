@@ -62,12 +62,13 @@ export function dominantDesktopTaskState(tasks: DesktopTask[]): DesktopTaskState
 export const DESKTOP_PET_MIN_SIZE = 80
 export const DESKTOP_PET_MAX_SIZE = 224
 export const DESKTOP_PET_DEFAULT_SIZE = 112
+export const DESKTOP_PET_DEFAULT_CHARACTER = 'codex:codex'
 
 const ENABLED_KEY = 'desktopPetEnabled:v1'
 const CHARACTER_KEY = 'desktopPetCharacter:v1'
 const SIZE_KEY = 'desktopPetSize:v1'
 const POSITION_KEY = 'desktopPetPosition:v1'
-const DEFAULT_CHARACTER = 'codex:codex'
+const DEFAULT_CHARACTER = DESKTOP_PET_DEFAULT_CHARACTER
 
 function readCharacter(): DesktopPetCharacter {
   const value = localStorage.getItem(CHARACTER_KEY)
@@ -126,6 +127,13 @@ export function setDesktopPetPosition(position: DesktopPetPosition | null) {
   desktopPetPosition.value = position
   if (position) localStorage.setItem(POSITION_KEY, JSON.stringify(position))
   else localStorage.removeItem(POSITION_KEY)
+}
+
+export function resetDesktopPetSettings() {
+  setDesktopPetEnabled(false)
+  setDesktopPetCharacter(DESKTOP_PET_DEFAULT_CHARACTER)
+  setDesktopPetSize(DESKTOP_PET_DEFAULT_SIZE)
+  setDesktopPetPosition(null)
 }
 
 export async function loadDesktopPetCatalog() {
