@@ -127,7 +127,7 @@ impl SessionStorageKind {
         }
     }
 
-    pub fn from_str(value: &str) -> Self {
+    pub fn from_storage_label(value: &str) -> Self {
         if value == "directory" {
             Self::Directory
         } else {

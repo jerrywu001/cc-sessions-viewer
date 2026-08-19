@@ -262,7 +262,7 @@ fn read_meta(path: &Path) -> Value {
 fn storage_kind_from_meta(meta: &Value, data_path: &Path) -> SessionStorageKind {
     meta.get("storageKind")
         .and_then(Value::as_str)
-        .map(SessionStorageKind::from_str)
+        .map(SessionStorageKind::from_storage_label)
         .unwrap_or_else(|| {
             if data_path.is_dir() {
                 SessionStorageKind::Directory
