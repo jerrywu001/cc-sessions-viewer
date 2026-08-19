@@ -28,6 +28,7 @@ pub struct GrokSource;
 
 const UPDATES_FILE: &str = "updates.jsonl";
 const SUMMARY_FILE: &str = "summary.json";
+const SUMMARY_LOCK_STALE_AFTER: Duration = Duration::from_secs(5 * 60);
 
 pub fn config_path() -> PathBuf {
     grok_home().join("config.toml")
@@ -1340,20 +1341,57 @@ impl Drop for SummaryLock {
     }
 }
 
+fn is_stale_empty_summary_lock(metadata: &fs::Metadata, now: std::time::SystemTime) -> bool {
+    metadata.len() == 0
+        && metadata
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= SUMMARY_LOCK_STALE_AFTER)
+}
+
+fn stale_summary_lock(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|metadata| is_stale_empty_summary_lock(&metadata, std::time::SystemTime::now()))
+        .unwrap_or(false)
+}
+
 fn acquire_summary_lock(session_dir: &Path) -> Result<SummaryLock, String> {
     let path = session_dir.join("summary.json.lock");
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                "Grok Build session metadata is currently locked; try again after the active write finishes"
-                    .to_string()
-            } else {
-                format!("Failed to lock Grok Build session metadata: {error}")
+    let mut file = loop {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => break file,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists
+                    && stale_summary_lock(&path) =>
+            {
+                // A crashed Grok process can leave an empty lock indefinitely.
+                // Remove only an old empty lock; active writes remain protected.
+                if fs::remove_file(&path).is_ok() {
+                    continue;
+                }
+                return Err(
+                    "Grok Build session metadata is currently locked; try again after the active write finishes"
+                        .to_string(),
+                );
             }
-        })?;
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(
+                    "Grok Build session metadata is currently locked; try again after the active write finishes"
+                        .to_string(),
+                );
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Failed to lock Grok Build session metadata: {error}"
+                ));
+            }
+        }
+    };
     let _ = writeln!(file, "viewer-pid={}", std::process::id());
     let _ = file.sync_all();
     Ok(SummaryLock { path })
@@ -2441,6 +2479,28 @@ mod tests {
             read_summary(session)["generated_title"],
             "successful rename"
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stale_empty_summary_lock_is_reclaimable_but_viewer_lock_is_not() {
+        let root = scratch("stale-rename-lock");
+        let updates = create_session(
+            &root,
+            "%2Ftmp%2Fdemo",
+            "session-a",
+            serde_json::json!({"info":{"id":"session-a","cwd":"/tmp/demo"}}),
+            &[],
+        );
+        let session = updates.parent().unwrap();
+        let lock_path = session.join("summary.json.lock");
+        fs::write(&lock_path, b"").unwrap();
+        let stale_metadata = fs::metadata(&lock_path).unwrap();
+        let old = std::time::SystemTime::now() + SUMMARY_LOCK_STALE_AFTER;
+        assert!(is_stale_empty_summary_lock(&stale_metadata, old));
+        fs::write(&lock_path, b"viewer-pid=123\n").unwrap();
+        let viewer_metadata = fs::metadata(&lock_path).unwrap();
+        assert!(!is_stale_empty_summary_lock(&viewer_metadata, old));
         let _ = fs::remove_dir_all(root);
     }
 }
