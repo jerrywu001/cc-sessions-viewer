@@ -1,6 +1,6 @@
 [package]
 name = "cc-sessions-viewer"
-version = "0.3.19"
+version = "0.3.20"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
