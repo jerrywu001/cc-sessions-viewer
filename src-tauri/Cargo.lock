@@ -458,7 +458,7 @@ dependencies = [
 
 [[package]]
 name = "cc-sessions-viewer"
-version = "0.3.18"
+version = "0.3.19"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -484,6 +484,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "toml_edit 0.20.2",
  "ureq",
  "uuid",
  "windows-sys 0.61.2",

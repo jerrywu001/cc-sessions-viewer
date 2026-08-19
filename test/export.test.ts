@@ -15,6 +15,7 @@ import {
   buildExportEnvelope,
   exportHtml,
   exportJson,
+  exportJsonToDir,
   exportMarkdown,
   messagesToHtml,
   messagesToMarkdown,
@@ -76,6 +77,12 @@ describe('messagesToMarkdown', () => {
     const md = messagesToMarkdown(session(), [msg('user', [text('Hello world')])], 'claude')
     expect(md).toContain('## Me')
     expect(md).toContain('Hello world')
+  })
+
+  it('labels Grok Build assistant messages rather than Claude', async () => {
+    const messages = [msg('assistant', [text('Grok Build response')])]
+    expect(messagesToMarkdown(session(), messages, 'grok')).toContain('## Grok Build')
+    expect(await messagesToHtml(session(), messages, 'grok')).toContain('Grok Build')
   })
 
   it('renders a thinking block inside a <details> element', () => {
@@ -495,6 +502,21 @@ describe('exportMarkdown / exportHtml', () => {
     expect(parsed.session.id).toBe('sess-1')
     expect(parsed.messages).toHaveLength(2)
     expect(parsed.messages[0].blocks[0].text).toBe('hi')
+  })
+
+  it('preserves Grok Build in JSON and batch exports', async () => {
+    saveMock.mockResolvedValue('/Users/me/grok.json')
+    writeFileMock.mockResolvedValue('/exports/My Session-sess-1.json')
+    const messages = [msg('assistant', [text('Grok Build response')])]
+
+    await exportJson(session(), messages, 'grok')
+    expect(JSON.parse(writeFileMock.mock.calls[0][1]).agent).toBe('grok')
+
+    await exportJsonToDir(session(), messages, 'grok', '/exports')
+    expect(writeFileMock).toHaveBeenLastCalledWith(
+      '/exports/My Session-sess-1.json',
+      expect.stringContaining('"agent": "grok"'),
+    )
   })
 })
 

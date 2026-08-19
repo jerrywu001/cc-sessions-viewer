@@ -50,6 +50,7 @@
   --brand-codex: #047857;
   --brand-agy: #7c3aed;
   --brand-opencode: #52525b;
+  --brand-grok: #111827;
   --brand: var(--brand-claude);
   --brand-soft: rgba(194, 65, 12, 0.10);
   --danger: #b91c1c;
@@ -119,6 +120,7 @@
   --brand-codex: #10b981;
   --brand-agy: #8b5cf6;
   --brand-opencode: #a1a1aa;
+  --brand-grok: #e5e7eb;
   --brand: var(--brand-claude);
   --brand-soft: rgba(249, 115, 22, 0.14);
   --danger: #f87171;
@@ -237,6 +239,13 @@
 }
 :root:not(.theme-dark) .app.agent-opencode {
   --brand-soft: rgba(82, 82, 91, 0.10);
+}
+.app.agent-grok {
+  --brand: var(--brand-grok);
+  --brand-soft: color-mix(in srgb, var(--brand-grok) 12%, transparent);
+}
+:root:not(.theme-dark) .app.agent-grok {
+  --brand-soft: rgba(17, 24, 39, 0.08);
 }
 :root .xterm-rows .xterm-dim {
   color: #999 !important;
@@ -640,6 +649,10 @@ button {
 .topbar-global-search {
   max-width: 420px;
   justify-self: start;
+  /* --surface-2 is pure black in the dark theme, which makes this entry
+     point disappear against the top bar. Give the control its own layer. */
+  background: var(--surface-hover);
+  border-color: var(--border);
 }
 
 @media (max-width: 980px) {
@@ -688,6 +701,19 @@ button {
 .ct-search.active {
   border-color: var(--border);
   background: var(--surface);
+}
+/* Search controls sit directly on the wallpaper in custom-background mode.
+   Keep a solid reading layer so the scope label and query remain legible. */
+:root.has-custom-background .ct-search {
+  background: var(--surface);
+  border-color: var(--border);
+}
+/* In the plain dark theme --surface-2 is pure black, nearly identical to the
+   top bar. Keep the search control one layer above it without changing light
+   or Dracula themes. */
+:root.theme-dark:not(.has-custom-background) .ct-search {
+  background: var(--surface-hover);
+  border-color: var(--border);
 }
 /* Custom scope dropdown — same Geist-style menu as the export download
    dropdown in ChatView. Replaces the native <select> so its open panel
@@ -1130,6 +1156,10 @@ body.is-sidebar-resizing {
 .agent-badge.opencode {
   background: color-mix(in srgb, var(--brand-opencode) 14%, transparent);
   color: var(--brand-opencode);
+}
+.agent-badge.grok {
+  background: color-mix(in srgb, var(--brand-grok) 14%, transparent);
+  color: var(--brand-grok);
 }
 
 /* ---------- Project list ---------- */
@@ -2977,6 +3007,9 @@ mark.locate-hl {
 }
 .role-tag .agent-icon.opencode {
   color: var(--brand-opencode);
+}
+.role-tag .agent-icon.grok {
+  color: var(--brand-grok);
 }
 .sidechain-badge {
   background: var(--surface-2);
@@ -4870,6 +4903,9 @@ body.is-tab-reordering * {
   --terminal-inverse-bg: #f4f4f4;
   --terminal-inverse-fg: #171717;
 }
+:root.has-custom-background .terminal-grok-tui .xterm-screen {
+  opacity: 0.88;
+}
 .theme-dark .terminal-codex-tui {
   --terminal-inverse-bg: #1f1f1f;
   --terminal-inverse-fg: #ededed;
@@ -5380,6 +5416,12 @@ body.is-tab-reordering * {
   justify-content: space-between;
   gap: 16px;
 }
+.set-hook-list-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+}
 .set-hook-list-title {
   color: var(--text);
   font-size: 13px;
@@ -5400,6 +5442,26 @@ body.is-tab-reordering * {
   font-size: 10.5px;
   white-space: nowrap;
 }
+.set-hook-list-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 25px;
+  height: 25px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-mute);
+  cursor: pointer;
+}
+.set-hook-list-refresh:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.set-hook-list-refresh:disabled { cursor: default; }
+.set-hook-list-refresh svg { width: 14px; height: 14px; }
+.set-hook-list-refresh.spinning svg { animation: spin 0.8s linear infinite; }
 .set-hook-list-error {
   margin: 7px 0 0;
   color: var(--danger);
@@ -6199,6 +6261,13 @@ body.is-tab-reordering * {
   font-size: 12px;
   line-height: 1.4;
 }
+.set-background-success {
+  margin: 0;
+  padding-top: 6px;
+  color: var(--success, #2f9e62);
+  font-size: 12px;
+  line-height: 1.4;
+}
 .set-background-library {
   margin-top: 4px;
   padding-top: 14px;
@@ -6233,6 +6302,22 @@ body.is-tab-reordering * {
   color: var(--text);
 }
 .set-background-library-open svg { width: 14px; height: 14px; }
+.set-background-library-export {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  color: var(--text-mute);
+  font-size: 12px;
+  line-height: 16px;
+}
+.set-background-library-export:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.set-background-library-export:disabled { cursor: default; opacity: 0.45; }
+.set-background-library-export svg { width: 14px; height: 14px; }
 .set-background-library-refresh {
   display: inline-flex;
   align-items: center;
@@ -8105,6 +8190,36 @@ body.is-tab-reordering * {
   color: var(--text-mute);
   font-style: italic;
 }
+.stats-hero-warnings {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.stats-hero-status + .stats-hero-warnings {
+  margin-left: 4px;
+}
+.stats-hero-warning {
+  color: var(--warning, #b7791f);
+  font-weight: 500;
+}
+.stats-hero-warning.estimated {
+  color: var(--accent);
+}
+.stats-pricing-missing {
+  margin-top: -6px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--warning, #b7791f) 28%, var(--border));
+  border-radius: 7px;
+  color: var(--warning, #b7791f);
+  background: color-mix(in srgb, var(--warning, #b7791f) 6%, transparent);
+  font-size: 11.5px;
+}
+.stats-pricing-missing.estimated {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
 
 /* KPI 卡片栅格：4 列、自适应；窄屏 2 列、超窄 1 列 */
 .kpi-grid {
@@ -8388,6 +8503,7 @@ body.is-tab-reordering * {
    .pricing-scroll 自己是滚动容器，且 position:relative —— sticky 工具栏 + jumpTo
    按 section.offsetTop 跳都依赖它作为定位参考系。 */
 /* PricingView 顶层包裹 —— 继承 view-layer 的 flex 列布局，list-head + 主体上下叠。 */
+.export-history-root,
 .pricing-root {
   flex: 1;
   min-height: 0;
@@ -8418,6 +8534,12 @@ body.is-tab-reordering * {
   gap: 12px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 12px;
+}
+/* The sticky toolbar is part of the wallpaper-facing content layer. Keep the
+   search field and provider anchors opaque, but let the space around them
+   reveal the custom background. */
+:root.has-custom-background .pricing-toolbar {
+  background: transparent;
 }
 .pricing-anchors {
   display: inline-flex;
@@ -8624,6 +8746,23 @@ body.is-tab-reordering * {
 .pricing-row-head .pricing-cell-model {
   color: var(--text-mute);
   font-family: inherit;
+}
+
+/* 自定义壁纸下让项目和实时价格行透出少量背景，同时保留足够对比度。 */
+:root.has-custom-background .proj-item:hover {
+  background: color-mix(in srgb, var(--surface-hover) 58%, transparent);
+}
+:root.has-custom-background .proj-item.active {
+  background: color-mix(in srgb, var(--surface-active) 68%, transparent);
+}
+:root.has-custom-background .proj-item.selected {
+  background: color-mix(in srgb, var(--accent-soft) 72%, transparent);
+}
+:root.has-custom-background body.is-project-reordering .proj-item.dragging {
+  background: transparent;
+}
+:root.has-custom-background .pricing-row:hover:not(.pricing-row-head) {
+  background: color-mix(in srgb, var(--surface-hover) 58%, transparent);
 }
 /* lucide spinner —— Loading 占位用的连续旋转。 */
 .pricing-scroll .spin,

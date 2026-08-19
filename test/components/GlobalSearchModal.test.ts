@@ -49,9 +49,9 @@ function hit(over: Partial<SearchHit> = {}): SearchHit {
 
 const WAIT = 500
 
-const factory = (show = true) =>
+const factory = (show = true, agent: 'claude' | 'codex' | 'agy' | 'opencode' | 'grok' = 'claude') =>
   mount(GlobalSearchModal, {
-    props: { show, agent: 'claude' },
+    props: { show, agent },
     attachTo: document.body,
     global: { directives: { tooltip: vTooltip } },
   })
@@ -67,8 +67,10 @@ describe('GlobalSearchModal', () => {
   })
 
   it('shows the empty state with no input', () => {
-    const wrapper = factory()
+    const wrapper = factory(true, 'grok')
     expect(wrapper.text()).toContain('No recent searches')
+    expect(wrapper.text()).toContain('Searches Grok Build')
+    expect(wrapper.find('.gs-input').attributes('placeholder')).toBe('Search Grok Build sessions')
     wrapper.unmount()
   })
 

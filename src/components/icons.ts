@@ -45,6 +45,7 @@ import IconFoldRaw from '~icons/lucide/chevrons-down-up'
 import IconUnfoldRaw from '~icons/lucide/chevrons-up-down'
 import IconMinimizeRaw from '~icons/lucide/minus'
 import IconDownloadRaw from '~icons/lucide/download'
+import IconUploadRaw from '~icons/lucide/upload'
 import IconMarkdownRaw from '~icons/lucide/file-text'
 import IconFileRaw from '~icons/lucide/file'
 import IconFileDiffRaw from '~icons/lucide/file-diff'
@@ -136,6 +137,7 @@ export const IconFold = IconFoldRaw
 export const IconUnfold = IconUnfoldRaw
 export const IconMinimize = IconMinimizeRaw
 export const IconDownload = IconDownloadRaw
+export const IconUpload = IconUploadRaw
 export const IconMarkdown = IconMarkdownRaw
 export const IconFile = IconFileRaw
 export const IconFileDiff = IconFileDiffRaw
@@ -372,6 +374,24 @@ const IconOpencodeRaw = defineComponent({
   },
 })
 
+// Official Grok favicon, rasterized from grok.com/images/favicon.svg at one
+// third of its original 512 px dimensions and optimized for the app bundle.
+const IconGrokRaw = defineComponent({
+  name: 'IconGrok',
+  setup() {
+    return () =>
+      h('img', {
+        src: '/grok-icon.png',
+        width: 16,
+        height: 16,
+        alt: 'Grok Build',
+        'aria-hidden': 'true',
+        class: 'iconify',
+        style: 'vertical-align: middle',
+      })
+  },
+})
+
 // Brand marks for the agents, pulled from iconify at build time so
 // runtime stays offline-friendly. Sources: `material-icon-theme:claude`,
 // our own `assets/codex.svg`, and inline render for agy / opencode.
@@ -381,6 +401,7 @@ export const IconClaude = IconClaudeRaw
 export const IconCodex = IconCodexRaw
 export const IconAgy = IconAgyRaw
 export const IconOpencode = IconOpencodeRaw
+export const IconGrok = IconGrokRaw
 
 /**
  * Global dictionary of agent → brand-mark icon component. Use as
@@ -393,6 +414,7 @@ export const agentIcons: Record<Agent, Component> = {
   codex: IconCodexRaw,
   agy: IconAgyRaw,
   opencode: IconOpencodeRaw,
+  grok: IconGrokRaw,
 }
 
 // ---- 文件附件按扩展名分型的图标 ----

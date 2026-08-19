@@ -14,7 +14,7 @@
 use rayon::prelude::*;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
@@ -103,7 +103,57 @@ const SNIPPET_WIN: usize = 60;
 pub mod agy;
 pub mod claude;
 pub mod codex;
+pub mod grok;
 pub mod opencode;
+
+/// A session's on-disk storage boundary.
+///
+/// Most agents store one session in one JSONL file. Grok stores the transcript
+/// plus metadata and auxiliary state in a directory, while still exposing
+/// `updates.jsonl` as the path used by the reader and file watcher. Keeping the
+/// boundary explicit prevents trash / hard-delete code from moving only the
+/// visible transcript and leaving a broken session behind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionStorageKind {
+    File,
+    Directory,
+}
+
+impl SessionStorageKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Directory => "directory",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        if value == "directory" {
+            Self::Directory
+        } else {
+            Self::File
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionStorageUnit {
+    /// The file or directory that must move as one unit.
+    pub root_path: PathBuf,
+    /// The transcript path relative to `root_path`. Empty for file-backed
+    /// sessions; `updates.jsonl` for Grok.
+    pub entry_relative_path: PathBuf,
+    pub kind: SessionStorageKind,
+}
+
+impl SessionStorageUnit {
+    pub fn entry_path(&self) -> PathBuf {
+        match self.kind {
+            SessionStorageKind::File => self.root_path.clone(),
+            SessionStorageKind::Directory => self.root_path.join(&self.entry_relative_path),
+        }
+    }
+}
 
 /// 程序化聊天（GUI chat）里，agent 子进程 stdout 的一行被归一成的事件。
 /// 各 agent 的 [`SessionSource::parse_chat_line`] 把自家 stream-json / JSON 行翻成这套
@@ -460,6 +510,65 @@ pub trait SessionSource: Send + Sync {
         }
         if !crate::util::is_jsonl(path) {
             return Err("Not a JSONL file".to_string());
+        }
+        Ok(())
+    }
+
+    /// Resolve the complete storage unit for delete / restore operations.
+    /// File-backed agents inherit the existing one-JSONL behavior. Directory-
+    /// backed agents override this and return their session root.
+    fn session_storage_unit(&self, path: &Path) -> Result<SessionStorageUnit, String> {
+        self.validate_session_path(path)?;
+        Ok(SessionStorageUnit {
+            root_path: path.to_path_buf(),
+            entry_relative_path: PathBuf::new(),
+            kind: SessionStorageKind::File,
+        })
+    }
+
+    /// Validate a destination recovered from trash metadata before creating
+    /// directories or moving data. Agent implementations with a known storage
+    /// root (notably Grok) should enforce that root here.
+    fn validate_restore_target(
+        &self,
+        entry_path: &Path,
+        root_path: &Path,
+        kind: SessionStorageKind,
+    ) -> Result<(), String> {
+        if !entry_path.is_absolute() || !root_path.is_absolute() {
+            return Err("Restore target must be an absolute path".to_string());
+        }
+        if kind != SessionStorageKind::File || entry_path != root_path {
+            return Err("Invalid file-backed session restore target".to_string());
+        }
+        if !crate::util::is_jsonl(entry_path) {
+            return Err("Restore target is not a JSONL file".to_string());
+        }
+        Ok(())
+    }
+
+    /// Permanently remove the complete storage unit. The default keeps the
+    /// historical file behavior and removes an empty parent directory; Grok's
+    /// directory unit is removed recursively.
+    fn hard_delete_session(&self, path: &Path) -> Result<(), String> {
+        let unit = self.session_storage_unit(path)?;
+        match unit.kind {
+            SessionStorageKind::File => {
+                std::fs::remove_file(&unit.root_path)
+                    .map_err(|e| format!("Failed to delete session: {e}"))?;
+                if let Some(parent) = unit.root_path.parent() {
+                    let empty = std::fs::read_dir(parent)
+                        .map(|mut entries| entries.next().is_none())
+                        .unwrap_or(false);
+                    if empty {
+                        let _ = std::fs::remove_dir(parent);
+                    }
+                }
+            }
+            SessionStorageKind::Directory => {
+                std::fs::remove_dir_all(&unit.root_path)
+                    .map_err(|e| format!("Failed to delete session directory: {e}"))?;
+            }
         }
         Ok(())
     }
@@ -899,6 +1008,7 @@ pub fn source(agent: &str) -> Result<Box<dyn SessionSource>, String> {
         "agy" => Ok(Box::new(agy::AgySource)),
         "claude" => Ok(Box::new(claude::ClaudeSource)),
         "codex" => Ok(Box::new(codex::CodexSource)),
+        "grok" => Ok(Box::new(grok::GrokSource)),
         "opencode" => Ok(Box::new(opencode::OpencodeSource)),
         other => Err(format!("Unknown agent: {other}")),
     }

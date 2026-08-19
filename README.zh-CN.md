@@ -11,7 +11,7 @@
 
 [English](README.md) · **中文** · [日本語](README.ja.md) · [CHANGELOG](CHANGELOG.md)
 
-<p align="center">一个专为 <strong>Claude Code</strong>、<strong>Codex</strong>、<strong>Antigravity CLI</strong> 和 <strong>opencode</strong> 打造的原生桌面浏览器。<br/>在一处读取、搜索并管理四个 CLI 的本地会话记录。</p>
+<p align="center">一个专为 <strong>Claude Code</strong>、<strong>Codex</strong>、<strong>Grok Build</strong>、<strong>Antigravity CLI</strong> 和 <strong>opencode</strong> 打造的原生桌面浏览器。<br/>在一处读取、搜索并管理五个 CLI 的本地会话记录。</p>
 
 </div>
 
@@ -23,7 +23,8 @@ https://github.com/user-attachments/assets/9bcb92a8-e5b8-40e5-b492-af252162309b
 
 - **忠实还原** — 完整呈现思考链路、工具调用配对、结构化 Diff 与内嵌截图
 - **全局搜索** — 跨项目秒搜（⌘⇧F）直达具体消息
-- **应用内对话** — 在内置聊天里新开或续聊会话，实时切换模型、推理强度（含 Opus **Ultracode**）与权限模式，无需打开终端
+- **应用内对话** — 在内置聊天里新开或续聊 Claude Code、Codex 会话，实时切换模型、推理强度（含 Opus **Ultracode**）与权限模式，无需打开终端
+- **Grok Build 历史与 TUI** — 浏览、搜索、导出、统计、重命名、回收站恢复和续跑本地 Grok 会话；明确不提供 Grok GUI Chat
 - **一键恢复** — 在窗口内嵌终端或外部终端中直接恢复/新建会话——支持 **Terminal.app**、**cmux**、**iTerm2**、**Ghostty** 和 **Warp**
 - **Shell 终端标签** — 在 agent 会话旁开启纯 shell 标签页，直接在项目目录执行任意命令；标签状态跨重启保留
 - **分屏** — 把任意项目拆成左右并排或上下堆叠的多个分屏，每个分屏有独立的标签栏；标签可在分屏内重新排序，也可拖到其他分屏，每个操作都有快捷键（见 设置 → 快捷键）。每个项目的分屏布局跨重启保留
@@ -33,7 +34,7 @@ https://github.com/user-attachments/assets/9bcb92a8-e5b8-40e5-b492-af252162309b
 - **视图历史** — 每个项目独立、可搜索的「打开过的视图」历史，支持收藏；一键回到任意历史的只读或对话视图
 - **深度统计** — 基于 LiteLLM 实时价目聚合 Token 消耗与成本，按项目/模型/工具多维分析
 - **菜单栏统计** — macOS 托盘图标一览各 agent 的 Today / 7d / 30d 花费与 Token 量
-- **实时模型价格** — 可浏览的 Claude / Codex 价格表，数据源自动更新
+- **实时模型价格** — 可浏览的 Claude、Codex 与 Grok / xAI 价格表，数据源自动更新
 - **灵活导出** — 单会话或批量导出为离线可读的 Markdown / HTML / 无损 JSON
 - **书签** — 将任意文件夹固定到侧栏快速访问，按 agent 独立管理
 - **重命名与删除** — 会话重命名同步回 CLI，软删除移入共享回收站并支持还原

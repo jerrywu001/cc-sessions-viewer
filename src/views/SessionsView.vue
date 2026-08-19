@@ -42,6 +42,7 @@ import NewMenu from '../components/NewMenu.vue'
 import GitBranchControl from '../components/GitBranchControl.vue'
 import { PaneActionsKey } from '../paneActions'
 import { chatSupported } from '../chatComposerOptions'
+import { agentSupports } from '../agentMeta'
 
 const pa = inject(PaneActionsKey)!
 
@@ -104,9 +105,10 @@ watch(
   },
   { immediate: true },
 )
-// worktree 仅对 Claude/Codex 开放（opencode/agy 按 git 仓库归属会话，worktree 会话会塌回主仓库）。
+// worktree 对按 cwd 归属会话的 Claude/Codex/Grok Build 开放；opencode/agy 会把 worktree
+// 会话塌回主仓库，因此整体隐藏。
 const agentSupportsWorktrees = computed(
-  () => props.agent === 'claude' || props.agent === 'codex',
+  () => agentSupports(props.agent, 'worktree'),
 )
 const canCreateWorktree = computed(
   () =>

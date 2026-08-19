@@ -24,13 +24,19 @@ type StatusTab = {
   turnState: TerminalTurnState
   turnStateSource: TerminalTurnSignalSource | null
   turnStateUpdatedAt: number
+  turnSignalId?: string | null
   agent: Agent
   sessionPath: string
 }
 
 const pendingTurnStates = new Map<
   string,
-  { state: TerminalTurnEventState; source: TerminalTurnSignalSource; updatedAt: number }
+  {
+    state: TerminalTurnEventState
+    source: TerminalTurnSignalSource
+    signalId?: string
+    updatedAt: number
+  }
 >()
 
 export function normalizeSessionPath(path: string): string {
@@ -238,7 +244,18 @@ export function applyTurnSignal(
   state: TerminalTurnEventState,
   source: TerminalTurnSignalSource,
   isActive: boolean,
+  signalId?: string,
 ) {
+  // Grok turn-end hooks are deliberately asynchronous: a cancelled previous
+  // turn can report after the next prompt has already started. Associate hook
+  // signals with the opaque promptId so that stale completion never clears a
+  // newer working tab. Signals without an id (such as idle backstops) settle
+  // unconditionally as prescribed by Grok's hook contract.
+  if (source === 'hook' && signalId) {
+    if (state === 'started') tab.turnSignalId = signalId
+    else if (tab.turnSignalId && tab.turnSignalId !== signalId) return
+    else tab.turnSignalId = signalId
+  }
   if (state === 'started') {
     setTurnState(tab, 'working', source)
     return
@@ -268,11 +285,13 @@ export function rememberPendingTurnState(
   sessionPath: string,
   state: TerminalTurnEventState,
   source: TerminalTurnSignalSource,
+  signalId?: string,
 ) {
   if (!sessionPath) return
   pendingTurnStates.set(turnStateKey(agent, sessionPath), {
     state,
     source,
+    signalId,
     updatedAt: Date.now(),
   })
   if (pendingTurnStates.size > 200) {
@@ -286,7 +305,7 @@ export function applyPendingTurnState(tab: StatusTab, isActive: boolean) {
   const key = turnStateKey(tab.agent, tab.sessionPath)
   const pending = pendingTurnStates.get(key)
   if (!pending) return
-  applyTurnSignal(tab, pending.state, pending.source, isActive)
+  applyTurnSignal(tab, pending.state, pending.source, isActive, pending.signalId)
   tab.turnStateUpdatedAt = pending.updatedAt
   pendingTurnStates.delete(key)
 }

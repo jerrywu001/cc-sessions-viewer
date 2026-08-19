@@ -125,6 +125,25 @@ describe('terminal input status inference', () => {
 
     expect(tab.turnState).toBe('working')
   })
+
+  it('ignores a delayed Grok completion from an older prompt', () => {
+    const tab = {
+      processState: 'alive' as const,
+      status: 'running' as const,
+      turnState: 'working' as const,
+      turnStateSource: 'hook' as const,
+      turnStateUpdatedAt: 0,
+      turnSignalId: 'prompt-new',
+      agent: 'grok' as const,
+      sessionPath: '/tmp/session/updates.jsonl',
+    }
+
+    applyTurnSignal(tab, 'completed', 'hook', true, 'prompt-old')
+    expect(tab.turnState).toBe('working')
+
+    applyTurnSignal(tab, 'completed', 'hook', true, 'prompt-new')
+    expect(tab.turnState).toBe('idle')
+  })
 })
 
 describe('cursor-aware terminal input state', () => {

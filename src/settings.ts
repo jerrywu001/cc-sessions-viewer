@@ -260,7 +260,7 @@ doApplyBackgroundBorderOpacity(backgroundBorderOpacity.value)
 // ---------- 双击 / 新建快捷键默认打开什么 ----------
 // 双击 tab 条空白处、⌘N / ⌘T 默认都开「会话(session)」。这里让用户改成开
 // 「终端(terminal, 纯 shell)」或「chat(GUI live chat, 等价右键 New chat)」。
-// 注意：chat 目前只有 claude 支持，codex 选了也会被调用方拦下来提示。
+// 选择了不支持 GUI Chat 的 agent（例如 Grok）时，调用方会显示明确提示。
 export type QuickOpenTarget = 'session' | 'terminal' | 'chat'
 function readQuickOpenTarget(): QuickOpenTarget {
   const v = localStorage.getItem(QUICK_OPEN_KEY)
@@ -272,16 +272,22 @@ export function setQuickOpenTarget(v: QuickOpenTarget) {
   localStorage.setItem(QUICK_OPEN_KEY, v)
 }
 
-export type LaunchArgs = { claude: string; codex: string; agy: string; opencode: string }
+export type LaunchArgs = { claude: string; codex: string; agy: string; opencode: string; grok: string }
 function readLaunchArgs(): LaunchArgs {
   try {
     const v = localStorage.getItem(LAUNCH_ARGS_KEY)
     if (v) {
       const parsed = JSON.parse(v) as Partial<LaunchArgs>
-      return { claude: parsed.claude ?? '', codex: parsed.codex ?? '', agy: parsed.agy ?? '', opencode: parsed.opencode ?? '' }
+      return {
+        claude: parsed.claude ?? '',
+        codex: parsed.codex ?? '',
+        agy: parsed.agy ?? '',
+        opencode: parsed.opencode ?? '',
+        grok: parsed.grok ?? '',
+      }
     }
   } catch { /* ignore */ }
-  return { claude: '', codex: '', agy: '', opencode: '' }
+  return { claude: '', codex: '', agy: '', opencode: '', grok: '' }
 }
 export const launchArgs = ref<LaunchArgs>(readLaunchArgs())
 
@@ -292,12 +298,12 @@ export function setLaunchArgs(agent: keyof LaunchArgs, args: string) {
 
 // ---------- Agent 显隐开关 ----------
 // 只用 cc 的用户可以把 codex 关掉，让侧栏/主页的 agent 切换更清爽。
-// 固定顺序 claude → codex → agy → opencode；至少保留一个启用，否则整个 app 无内容可看。
-export const ALL_AGENTS: Agent[] = ['claude', 'codex', 'agy', 'opencode']
+// 固定顺序 claude → codex → grok → agy → opencode；至少保留一个启用，否则整个 app 无内容可看。
+export const ALL_AGENTS: Agent[] = ['claude', 'codex', 'grok', 'agy', 'opencode']
 type EnabledAgents = Record<Agent, boolean>
 
 function readEnabledAgents(): EnabledAgents {
-  const all: EnabledAgents = { claude: true, codex: true, agy: true, opencode: true }
+  const defaults: EnabledAgents = { claude: true, codex: true, grok: true, agy: false, opencode: false }
   try {
     const v = localStorage.getItem(ENABLED_AGENTS_KEY)
     if (v) {
@@ -305,14 +311,15 @@ function readEnabledAgents(): EnabledAgents {
       const merged: EnabledAgents = {
         claude: parsed.claude ?? true,
         codex: parsed.codex ?? true,
+        grok: parsed.grok ?? true,
         agy: parsed.agy ?? true,
         opencode: parsed.opencode ?? true,
       }
-      // 防御：localStorage 里若全是 false（脏数据/手改）就回退到全开。
+      // 防御：localStorage 里若全是 false（脏数据/手改）就回退到默认开启项。
       if (ALL_AGENTS.some((a) => merged[a])) return merged
     }
   } catch { /* ignore */ }
-  return all
+  return defaults
 }
 
 export const enabledAgents = ref<EnabledAgents>(readEnabledAgents())
@@ -481,7 +488,7 @@ export function clearAppCache() {
   localStorage.removeItem(LAUNCH_ARGS_KEY)
   terminalApp.value = 'terminal'
   useExternalTerminal.value = false
-  launchArgs.value = { claude: '', codex: '', agy: '', opencode: '' }
+  launchArgs.value = { claude: '', codex: '', agy: '', opencode: '', grok: '' }
 }
 
 // ---------- Statistics 页的 scope / range 持久化 ----------
@@ -491,7 +498,9 @@ export function clearAppCache() {
 
 function readStatsScope(): StatsScope {
   const v = localStorage.getItem(STATS_SCOPE_KEY)
-  return v === 'claude' || v === 'codex' || v === 'all' ? v : 'all'
+  return v === 'claude' || v === 'codex' || v === 'grok' || v === 'opencode' || v === 'all'
+    ? v
+    : 'all'
 }
 function readStatsRange(): StatsRange {
   const v = localStorage.getItem(STATS_RANGE_KEY) || ''
@@ -533,9 +542,9 @@ export function resetSettings() {
   setBackgroundImageOpacity(BACKGROUND_IMAGE_OPACITY_DEFAULT)
   setBackgroundBorderOpacity(BACKGROUND_BORDER_OPACITY_DEFAULT)
   setQuickOpenTarget('session')
-  launchArgs.value = { claude: '', codex: '', agy: '', opencode: '' }
+  launchArgs.value = { claude: '', codex: '', agy: '', opencode: '', grok: '' }
   localStorage.removeItem(LAUNCH_ARGS_KEY)
-  enabledAgents.value = { claude: true, codex: true, agy: true, opencode: true }
+  enabledAgents.value = { claude: true, codex: true, grok: true, agy: false, opencode: false }
   localStorage.removeItem(ENABLED_AGENTS_KEY)
   setFontScale(FONT_SCALE_DEFAULT)
   applyFontScale()

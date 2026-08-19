@@ -38,6 +38,8 @@ pub struct Aggregator {
     call_count: u64,
     usage: UsageSummary,
     cost_usd: f64,
+    unpriced_call_count: u64,
+    estimated_call_count: u64,
 
     /// project key = dir_name；display 走 ProjectStats.display_path
     projects: HashMap<String, ProjectStats>,
@@ -146,9 +148,19 @@ impl Aggregator {
                         continue;
                     }
                 }
-                self.call_count += 1;
-                sess_call_count += 1;
-                turn_calls_kept += 1;
+                // Default 是 1。Grok 显式写入 modelCalls 增量，使 calls 维度按
+                // 真实次数累加；0 专门留给只承载工具信息的非计费合成记录。
+                // token / cost / tools 仍只处理这条汇总 record 一次。
+                let call_weight = call.call_count;
+                self.call_count += call_weight;
+                sess_call_count += call_weight;
+                turn_calls_kept += call_weight;
+                if call.pricing_missing {
+                    self.unpriced_call_count += call_weight;
+                }
+                if call.pricing_estimated {
+                    self.estimated_call_count += call_weight;
+                }
                 turn_cost += call.cost_usd;
                 turn_usage.add_assign(&call.usage);
                 self.usage.add_assign(&call.usage);
@@ -166,7 +178,13 @@ impl Aggregator {
                                 label: pricing::short_name(&call.model),
                                 ..Default::default()
                             });
-                    entry.call_count += 1;
+                    entry.call_count += call_weight;
+                    if call.pricing_missing {
+                        entry.unpriced_call_count += call_weight;
+                    }
+                    if call.pricing_estimated {
+                        entry.estimated_call_count += call_weight;
+                    }
                     entry.usage.add_assign(&call.usage);
                     entry.cost_usd += call.cost_usd;
                 }
@@ -335,6 +353,8 @@ impl Aggregator {
             days_active: daily.len(),
             usage: total_usage,
             cost_usd: self.cost_usd,
+            unpriced_call_count: self.unpriced_call_count,
+            estimated_call_count: self.estimated_call_count,
             cache_hit_rate: cache_hit_rate(&total_usage),
             projects,
             daily_activity: daily,
@@ -427,6 +447,110 @@ mod tests {
         assert!(s.cost_usd > 0.0);
         assert_eq!(s.usage.total, 1_500_000);
         assert_eq!(s.days_active, 1);
+    }
+
+    #[test]
+    fn call_count_weight_does_not_duplicate_usage_cost_or_tools() {
+        pricing::seed_test_prices();
+        let usage = UsageSummary {
+            input_tokens: 1_000,
+            output_tokens: 500,
+            ..Default::default()
+        }
+        .finalize();
+        let cost = pricing::cost_usd("claude-sonnet-4-6", &usage);
+        let turns = vec![Turn {
+            user_message: "weighted aggregate".to_string(),
+            project_path: "/work/p".to_string(),
+            session_id: "sess".to_string(),
+            calls: vec![CallRecord {
+                call_count: 4,
+                model: "claude-sonnet-4-6".to_string(),
+                usage,
+                cost_usd: cost,
+                tools: vec!["Read".to_string()],
+                ..Default::default()
+            }],
+            timestamp_ms: 0,
+        }];
+        let mut agg = Aggregator::new();
+        agg.feed_session(&feed(&turns, 1_700_000_000_000));
+        let s = agg.snapshot("all");
+
+        assert_eq!(s.call_count, 4);
+        assert_eq!(s.projects[0].call_count, 4);
+        assert_eq!(s.daily_activity[0].call_count, 4);
+        assert_eq!(s.top_sessions[0].call_count, 4);
+        assert_eq!(s.by_model[0].call_count, 4);
+        assert_eq!(s.by_activity[0].call_count, 4);
+        assert_eq!(s.usage, usage);
+        assert!((s.cost_usd - cost).abs() < 1e-12);
+        assert_eq!(s.by_tool[0].count, 1);
+    }
+
+    #[test]
+    fn unpriced_weight_is_explicit_at_total_and_model_level() {
+        let usage = UsageSummary {
+            input_tokens: 100,
+            output_tokens: 20,
+            ..Default::default()
+        }
+        .finalize();
+        let turns = vec![Turn {
+            user_message: "custom model".to_string(),
+            project_path: "/work/p".to_string(),
+            session_id: "sess".to_string(),
+            calls: vec![CallRecord {
+                call_count: 3,
+                model: "custom-grok".to_string(),
+                usage,
+                pricing_missing: true,
+                ..Default::default()
+            }],
+            timestamp_ms: 0,
+        }];
+        let mut agg = Aggregator::new();
+        agg.feed_session(&feed(&turns, 1_700_000_000_000));
+        let s = agg.snapshot("grok");
+
+        assert_eq!(s.call_count, 3);
+        assert_eq!(s.unpriced_call_count, 3);
+        assert_eq!(s.by_model[0].unpriced_call_count, 3);
+        assert_eq!(s.cost_usd, 0.0);
+    }
+
+    #[test]
+    fn estimated_weight_is_explicit_at_total_and_model_level() {
+        let usage = UsageSummary {
+            input_tokens: 100,
+            output_tokens: 20,
+            ..Default::default()
+        }
+        .finalize();
+        let turns = vec![Turn {
+            user_message: "third-party Grok model".to_string(),
+            project_path: "/work/p".to_string(),
+            session_id: "sess".to_string(),
+            calls: vec![CallRecord {
+                call_count: 2,
+                model: "third-party/grok".to_string(),
+                usage,
+                cost_usd: 0.25,
+                pricing_estimated: true,
+                ..Default::default()
+            }],
+            timestamp_ms: 0,
+        }];
+        let mut agg = Aggregator::new();
+        agg.feed_session(&feed(&turns, 1_700_000_000_000));
+        let s = agg.snapshot("grok");
+
+        assert_eq!(s.call_count, 2);
+        assert_eq!(s.estimated_call_count, 2);
+        assert_eq!(s.unpriced_call_count, 0);
+        assert_eq!(s.by_model[0].estimated_call_count, 2);
+        assert_eq!(s.by_model[0].unpriced_call_count, 0);
+        assert!((s.cost_usd - 0.25).abs() < 1e-12);
     }
 
     #[test]

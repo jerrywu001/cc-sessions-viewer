@@ -52,10 +52,15 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => { input += chunk; });
 process.stdin.on('end', () => {
   try {
-    if (!signalPath || !state || !['claude', 'codex', 'agy'].includes(agent)) return;
+    if (!signalPath || !state || !['claude', 'codex', 'agy', 'grok'].includes(agent)) return;
     const data = input.trim() ? JSON.parse(input) : {};
     const transcriptPath = data.transcript_path || data.transcriptPath || '';
-    if (!transcriptPath) return;
+    const sessionId = data.sessionId || data.session_id || '';
+    const cwd = data.cwd || data.workspaceRoot || '';
+    const promptId = data.promptId || data.prompt_id || '';
+    if (agent === 'grok' && data.subagentType) return;
+    if (agent === 'grok' && state === 'completed' && data.reason && data.reason !== 'end_turn') return;
+    if (!transcriptPath && !(agent === 'grok' && sessionId)) return;
     if (state === 'started' && shouldSkipStarted(data)) return;
     const turnState = agent === 'agy' ? agyTurnState(state, data) : state;
     if (!turnState) return;
@@ -64,6 +69,9 @@ process.stdin.on('end', () => {
       path: transcriptPath,
       state: turnState,
       source: 'hook',
+      ...(promptId ? { promptId } : {}),
+      ...(sessionId ? { sessionId } : {}),
+      ...(cwd ? { cwd } : {}),
     };
     fs.mkdirSync(path.dirname(signalPath), { recursive: true });
     fs.appendFileSync(signalPath, JSON.stringify(payload) + '\n', 'utf8');

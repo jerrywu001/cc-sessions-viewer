@@ -127,6 +127,100 @@ export function shouldUseStableTerminalCursor(
   return /Win/i.test(platform) && agent === 'codex' && !isShell && turnState === 'working'
 }
 
+function isCapsLockEvent(event: KeyboardEvent): boolean {
+  // Chromium on macOS may expose Caps Lock as keyCode 20 while IME composition
+  // is active, with an empty or non-standard `key`/`code` value.
+  return event.key === 'CapsLock' || event.code === 'CapsLock' || event.keyCode === 20
+}
+
+export function shouldBufferTerminalImeSwitch(
+  event: KeyboardEvent,
+  platform = navigator.platform,
+): boolean {
+  if (isCapsLockEvent(event)) return true
+  // Windows Microsoft Pinyin can use a bare Shift to switch Chinese/English.
+  return /Win/i.test(platform)
+    && (event.key === 'Shift' || event.code === 'ShiftLeft' || event.code === 'ShiftRight' || event.keyCode === 16)
+    && !event.ctrlKey
+    && !event.altKey
+    && !event.metaKey
+}
+
+/**
+ * 中文输入法在切换到英文时会结束当前 composition，并在同一轮事件循环里同时
+ * 触发 xterm 的 composition 提交和 insertText。xterm 6 会把二者都作为 terminal data
+ * 发出，导致预编辑文本（如 `grok`）重复写入 PTY。只在 compositionend 的下一轮事件
+ * 循环中忽略第二次完全相同的数据，正常选词、英文输入及粘贴均不受影响。
+ */
+export function createTerminalImeInputDeduper() {
+  // Caps Lock / Windows Shift 输入法切换有时会让 xterm 在 compositionend 后延迟一小段时间再发第二份
+  // 数据；0ms 只覆盖同一轮事件，实际仍可能出现 `grokgrok`。
+  const IME_DEDUP_WINDOW_MS = 120
+  let awaitingCompositionInput = false
+  let forwardedData: string | undefined
+  let clearTimer: ReturnType<typeof setTimeout> | undefined
+  let capsBuffer = ''
+  let capsTimer: ReturnType<typeof setTimeout> | undefined
+  let flushHandler: ((data: string) => void) | undefined
+
+  const clear = () => {
+    awaitingCompositionInput = false
+    forwardedData = undefined
+    clearTimer = undefined
+  }
+
+  const flushCapsBuffer = () => {
+    if (capsTimer !== undefined) clearTimeout(capsTimer)
+    capsTimer = undefined
+    const data = normalizeCompositionData(capsBuffer)
+    capsBuffer = ''
+    if (data) flushHandler?.(data)
+  }
+
+  const normalizeCompositionData = (data: string) => {
+    if (!/^[A-Za-z](?:[ A-Za-z]*[A-Za-z])?$/.test(data)) return data
+    const compact = data.replace(/\s+/g, '')
+    const half = compact.length / 2
+    return half > 0 && Number.isInteger(half) && compact.slice(0, half) === compact.slice(half)
+      ? compact.slice(0, half)
+      : compact
+  }
+
+  return {
+    setFlushHandler(handler: (data: string) => void) {
+      flushHandler = handler
+    },
+    onInputMethodSwitch() {
+      if (capsTimer !== undefined) clearTimeout(capsTimer)
+      capsBuffer = ''
+      capsTimer = setTimeout(flushCapsBuffer, IME_DEDUP_WINDOW_MS)
+    },
+    onCompositionEnd() {
+      if (clearTimer !== undefined) clearTimeout(clearTimer)
+      awaitingCompositionInput = true
+      forwardedData = undefined
+      // 覆盖 xterm 自己的延迟提交，以及 Caps Lock 触发的紧邻第二次提交。
+      clearTimer = setTimeout(clear, IME_DEDUP_WINDOW_MS)
+    },
+    consume(data: string): string | null {
+      if (capsTimer !== undefined) {
+        capsBuffer += data
+        return null
+      }
+      const normalized = normalizeCompositionData(data)
+      if (!awaitingCompositionInput) return normalized
+      if (forwardedData === undefined) {
+        forwardedData = normalized
+        // 只修复输入法合成串中的分隔空格（如 `g ro k`）；普通英文输入仍原样透传。
+        return normalized
+      }
+      const isDuplicate = normalized === forwardedData
+      clear()
+      return isDuplicate ? null : normalized
+    },
+  }
+}
+
 async function copyTerminalSelectionText(text: string) {
   try {
     await navigator.clipboard?.writeText?.(text)
@@ -255,6 +349,8 @@ export interface TerminalTab {
   turnState: TerminalTurnState
   turnStateSource: TerminalTurnSignalSource | null
   turnStateUpdatedAt: number
+  /** Grok promptId for rejecting delayed hook reports from an older turn. */
+  turnSignalId?: string | null
   lastOutputAt: number
   pendingAnsiBytes: Uint8Array | null
   lastSessionActivityAt: number
@@ -989,7 +1085,7 @@ function hslToRgb([h, s, l]: [number, number, number]): Rgb {
   ]
 }
 
-// codex 的前景永远是一整套「深色主题」调色板 —— 它在 Windows 上既不发 OSC 11 查背景色
+  // codex 的前景永远是一整套「深色主题」调色板 —— 它在 Windows 上既不发 OSC 11 查背景色
 // （codex-cli 0.144.4 实测不查，见 src-tauri/examples/codex_color_probe.rs），也不认
 // COLORFGBG，只能假定背景是深的。实测它只用这些前景：
 //   正文 #cccccc / #bbbbbb、次要 #909090、暗与分隔线 #5a5a5a #2f2f2f #1f1f1f、
@@ -1016,9 +1112,15 @@ const BG16_TO_DEFAULT: Record<ColorScheme, string[]> = {
   dark: ['47', '107'],
 }
 
-function rewriteExtColor(params: string[], scheme: ColorScheme, mirrorFg: boolean): string[] {
+function rewriteExtColor(
+  params: string[],
+  scheme: ColorScheme,
+  mirrorFg: boolean,
+  stripBackground: boolean,
+): string[] {
   const [kind, mode, ...rest] = params
   if (kind === '48') {
+    if (stripBackground) return ['49']
     const unreadable =
       mode === '5'
         ? scheme === 'light'
@@ -1042,7 +1144,12 @@ function readExtColor(parts: string[], i: number): { params: string[]; next: num
   return { params: parts.slice(i, i + len), next: i + len }
 }
 
-function normalizeSgrSemicolon(params: string, scheme: ColorScheme, mirrorFg: boolean): string {
+function normalizeSgrSemicolon(
+  params: string,
+  scheme: ColorScheme,
+  mirrorFg: boolean,
+  stripBackground: boolean,
+): string {
   const parts = params === '' ? ['0'] : params.split(';')
   const out: string[] = []
 
@@ -1057,12 +1164,15 @@ function normalizeSgrSemicolon(params: string, scheme: ColorScheme, mirrorFg: bo
     if (part === '38' || part === '48') {
       const ext = readExtColor(parts, i)
       if (ext) {
-        out.push(...rewriteExtColor(ext.params, scheme, mirrorFg))
+        out.push(...rewriteExtColor(ext.params, scheme, mirrorFg, stripBackground))
         i = ext.next - 1
         continue
       }
     }
-    if (BG16_TO_DEFAULT[scheme].includes(part)) {
+    const code = Number(part)
+    const isBackgroundCode =
+      Number.isInteger(code) && ((code >= 40 && code <= 47) || (code >= 100 && code <= 107))
+    if (stripBackground ? isBackgroundCode : BG16_TO_DEFAULT[scheme].includes(part)) {
       out.push('49')
       continue
     }
@@ -1073,12 +1183,17 @@ function normalizeSgrSemicolon(params: string, scheme: ColorScheme, mirrorFg: bo
   return out.join(';')
 }
 
-function normalizeSgrColon(params: string, scheme: ColorScheme, mirrorFg: boolean): string {
+function normalizeSgrColon(
+  params: string,
+  scheme: ColorScheme,
+  mirrorFg: boolean,
+  stripBackground: boolean,
+): string {
   return params.replace(
     /(^|;)(38|48):(?:5:(\d+)|2:(\d+):(\d+):(\d+))(?=;|$)/g,
     (match, sep: string, kind: string, idx?: string, r?: string, g?: string, b?: string) => {
       const ext = idx === undefined ? [kind, '2', r!, g!, b!] : [kind, '5', idx]
-      const rewritten = rewriteExtColor(ext, scheme, mirrorFg)
+      const rewritten = rewriteExtColor(ext, scheme, mirrorFg, stripBackground)
       return rewritten === ext ? match : `${sep}${rewritten.join(':')}`
     },
   )
@@ -1096,16 +1211,20 @@ function normalizeSgrColon(params: string, scheme: ColorScheme, mirrorFg: boolea
 /// 想给 mac 打开前，先在 mac 上跑 codex_color_probe 确认它到底发的是哪套色。
 ///
 /// 背景归一化和这个开关无关，两个平台一直都做（是历史行为）。
+/// `stripBackground` 用于 CLI 用 ANSI 背景铺满整个 TUI 的情况；把所有显式背景
+/// 恢复为终端默认背景，才能继承当前应用主题（或透出自定义壁纸）。
 export function codexSgrNormalizer(
   scheme: ColorScheme,
   codexPaintsDarkPalette: boolean,
+  stripBackground = false,
 ): (params: string) => string | null {
   const mirrorFg = scheme === 'light' && codexPaintsDarkPalette
   return (params: string) => {
     const normalized = normalizeSgrColon(
-      normalizeSgrSemicolon(params, scheme, mirrorFg),
+      normalizeSgrSemicolon(params, scheme, mirrorFg, stripBackground),
       scheme,
       mirrorFg,
+      stripBackground,
     )
     return normalized === params ? null : normalized
   }
@@ -1341,11 +1460,12 @@ export function markTabTurnStarted(
   agent: Agent,
   sessionPath: string,
   source: TerminalTurnSignalSource,
+  signalId?: string,
 ) {
   const targets = tabsBySession(agent, sessionPath)
-  if (!targets.length) rememberPendingTurnState(agent, sessionPath, 'started', source)
+  if (!targets.length) rememberPendingTurnState(agent, sessionPath, 'started', source, signalId)
   for (const tab of targets) {
-    applyTurnSignal(tab, 'started', source, activeUiId.value === tab.uiId)
+    applyTurnSignal(tab, 'started', source, activeUiId.value === tab.uiId, signalId)
   }
 }
 
@@ -1353,11 +1473,12 @@ export function markTabTurnCompleted(
   agent: Agent,
   sessionPath: string,
   source: TerminalTurnSignalSource,
+  signalId?: string,
 ) {
   const targets = tabsBySession(agent, sessionPath)
-  if (!targets.length) rememberPendingTurnState(agent, sessionPath, 'completed', source)
+  if (!targets.length) rememberPendingTurnState(agent, sessionPath, 'completed', source, signalId)
   for (const tab of targets) {
-    applyTurnSignal(tab, 'completed', source, activeUiId.value === tab.uiId)
+    applyTurnSignal(tab, 'completed', source, activeUiId.value === tab.uiId, signalId)
   }
 }
 
@@ -1365,11 +1486,12 @@ export function markTabTurnBlocked(
   agent: Agent,
   sessionPath: string,
   source: TerminalTurnSignalSource,
+  signalId?: string,
 ) {
   const targets = tabsBySession(agent, sessionPath)
-  if (!targets.length) rememberPendingTurnState(agent, sessionPath, 'blocked', source)
+  if (!targets.length) rememberPendingTurnState(agent, sessionPath, 'blocked', source, signalId)
   for (const tab of targets) {
-    applyTurnSignal(tab, 'blocked', source, activeUiId.value === tab.uiId)
+    applyTurnSignal(tab, 'blocked', source, activeUiId.value === tab.uiId, signalId)
   }
 }
 
@@ -1377,11 +1499,12 @@ export function markTabTurnFailed(
   agent: Agent,
   sessionPath: string,
   source: TerminalTurnSignalSource,
+  signalId?: string,
 ) {
   const targets = tabsBySession(agent, sessionPath)
-  if (!targets.length) rememberPendingTurnState(agent, sessionPath, 'failed', source)
+  if (!targets.length) rememberPendingTurnState(agent, sessionPath, 'failed', source, signalId)
   for (const tab of targets) {
-    applyTurnSignal(tab, 'failed', source, activeUiId.value === tab.uiId)
+    applyTurnSignal(tab, 'failed', source, activeUiId.value === tab.uiId, signalId)
   }
 }
 
@@ -1450,7 +1573,12 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
   term.loadAddon(fitAddon)
 
   const container = markRaw(document.createElement('div'))
-  container.className = opts.agent === 'codex' ? 'terminal-host terminal-codex-tui' : 'terminal-host'
+  container.className =
+    opts.agent === 'codex'
+      ? 'terminal-host terminal-codex-tui'
+      : opts.agent === 'grok'
+        ? 'terminal-host terminal-grok-tui'
+        : 'terminal-host'
   // 提示 xterm 即将 attach；真正的 open(container) 推迟到 slot 把 container 放入
   // 可见 DOM 树之后，否则在 detached 节点上 open 会拿不到尺寸。
   term.open(container)
@@ -1506,13 +1634,16 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
       suppressRenderedTerminalCursor(tab)
     }
   })
+  const imeInputDeduper = createTerminalImeInputDeduper()
   term.textarea?.addEventListener('compositionstart', () => {
     tab.container.classList.add('terminal-ime-composing')
   })
   term.textarea?.addEventListener('compositionend', () => {
     tab.container.classList.remove('terminal-ime-composing')
+    imeInputDeduper.onCompositionEnd()
   })
   term.attachCustomKeyEventHandler((ev) => {
+    if (ev.type === 'keydown' && shouldBufferTerminalImeSwitch(ev)) imeInputDeduper.onInputMethodSwitch()
     if (handleWindowsTerminalSelectionCopy(term, ev)) return false
     if (
       handleWindowsTerminalSelectionDelete(
@@ -1605,13 +1736,23 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
     if (e.payload.id !== ptyId) return
     tab.lastOutputAt = Date.now()
     const bytes = base64ToBytes(e.payload.base64)
+    const customBackground = Boolean(backgroundImagePath.value)
     if (tab.agent === 'codex') {
-      recentCodexOutput = (recentCodexOutput + hintDecoder.decode(bytes, { stream: true })).slice(-6000)
+      if (tab.agent === 'codex') {
+        recentCodexOutput = (recentCodexOutput + hintDecoder.decode(bytes, { stream: true })).slice(-6000)
+      }
       // 只有 Windows 上确认 codex 会误用深色调色板；mac/Linux 未验证，保持原样不镜像。
-      const normalizer = codexSgrNormalizer(terminalColorScheme(), _isWindows)
+      const normalizer = codexSgrNormalizer(
+        terminalColorScheme(),
+        tab.agent === 'codex' && _isWindows,
+        customBackground,
+      )
       const normalized = normalizeAnsiBackground(bytes, tab.pendingAnsiBytes, normalizer)
       tab.pendingAnsiBytes = normalized.pending
-      term.write(normalized.bytes, () => syncRepairCodexUserMessageColors(tab))
+      term.write(
+        normalized.bytes,
+        tab.agent === 'codex' ? () => syncRepairCodexUserMessageColors(tab) : undefined,
+      )
     } else {
       tab.pendingAnsiBytes = null
       term.write(bytes)
@@ -1642,9 +1783,9 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
   term.textarea?.addEventListener('keydown', (e) => { shiftHeld = e.shiftKey }, true)
   term.textarea?.addEventListener('keyup', () => { shiftHeld = false }, true)
 
-  // xterm → 后端（注：spawning / exited 时屏蔽，避免空 ptyId 或写已死管道）
-  tab.onDataDisp = term.onData((data) => {
+  const writeTerminalInput = (rawData: string) => {
     if (tab.ptyId === null || tab.processState !== 'alive') return
+    let data = rawData
     // Shift+Enter: xterm 发 \r，替换为 \n（与原生终端行为一致）。
     if (data === '\r' && shiftHeld) data = '\n'
     if (isTerminalCancelInput(data)) {
@@ -1665,6 +1806,15 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
     }
     const bytes = new TextEncoder().encode(data)
     api.ptyWrite(tab.ptyId, bytesToBase64(bytes)).catch(() => {})
+  }
+  imeInputDeduper.setFlushHandler(writeTerminalInput)
+
+  // xterm → 后端（注：spawning / exited 时屏蔽，避免空 ptyId 或写已死管道）
+  tab.onDataDisp = term.onData((data) => {
+    if (tab.ptyId === null || tab.processState !== 'alive') return
+    const imeData = imeInputDeduper.consume(data)
+    if (imeData === null) return
+    writeTerminalInput(imeData)
   })
 
   term.focus()
@@ -1734,7 +1884,9 @@ export async function openShellTab(opts: {
   }) as TerminalTab
   tabs.value.push(tab)
   activateTabInPane(tab)
+  const imeInputDeduper = createTerminalImeInputDeduper()
   term.attachCustomKeyEventHandler((ev) => {
+    if (ev.type === 'keydown' && shouldBufferTerminalImeSwitch(ev)) imeInputDeduper.onInputMethodSwitch()
     if (handleWindowsTerminalSelectionCopy(term, ev)) return false
     if (ev.type !== 'keydown' || ev.altKey) return true
     const key = ev.key.toLowerCase()
@@ -1789,11 +1941,21 @@ export async function openShellTab(opts: {
     term.write(`\r\n\x1b[2m[process exited: ${e.payload.code}]\x1b[0m\r\n`)
   })
 
-  tab.onDataDisp = term.onData((data) => {
+  term.textarea?.addEventListener('compositionend', () => imeInputDeduper.onCompositionEnd())
+
+  const writeShellInput = (data: string) => {
     if (tab.ptyId === null || tab.processState !== 'alive') return
     if (data === '\r' && shiftHeld) data = '\n'
     const bytes = new TextEncoder().encode(data)
     api.ptyWrite(tab.ptyId, bytesToBase64(bytes)).catch(() => {})
+  }
+  imeInputDeduper.setFlushHandler(writeShellInput)
+
+  tab.onDataDisp = term.onData((data) => {
+    if (tab.ptyId === null || tab.processState !== 'alive') return
+    const imeData = imeInputDeduper.consume(data)
+    if (imeData === null) return
+    writeShellInput(imeData)
   })
 
   term.focus()

@@ -33,6 +33,7 @@ describe('Sidebar', () => {
   it('shows the agent name in the sub-header', () => {
     expect(factory({ agent: 'claude' }).find('.sidebar-sub').text()).toContain('Claude')
     expect(factory({ agent: 'codex' }).find('.sidebar-sub').text()).toContain('Codex')
+    expect(factory({ agent: 'grok' }).find('.sidebar-sub').text()).toContain('Grok Build')
   })
 
   it('renders one row per project', () => {

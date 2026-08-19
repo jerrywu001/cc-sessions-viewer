@@ -588,6 +588,7 @@ fn brand_color(agent: &str) -> (f64, f64, f64) {
     match agent {
         "claude" => (204.0 / 255.0, 124.0 / 255.0, 94.0 / 255.0),
         "codex" => (73.0 / 255.0, 163.0 / 255.0, 176.0 / 255.0),
+        "grok" => (92.0 / 255.0, 92.0 / 255.0, 99.0 / 255.0),
         "agy" => (139.0 / 255.0, 92.0 / 255.0, 246.0 / 255.0),
         "opencode" => (113.0 / 255.0, 113.0 / 255.0, 122.0 / 255.0),
         _ => (0.5, 0.5, 0.5),
@@ -601,6 +602,7 @@ fn make_agent_card(
     let name = match a.agent.as_str() {
         "claude" => "Claude Code",
         "codex" => "Codex CLI",
+        "grok" => "Grok Build",
         "agy" => "Antigravity CLI",
         "opencode" => "opencode",
         _ => &a.agent,
@@ -719,7 +721,11 @@ fn make_agent_card(
 
         tf!("Today", 10.0, false, &secondary, col1_x, 64.0, col_w);
         tf!(
-            &fmt_cost(a.today_cost),
+            &fmt_cost(
+                a.today_cost,
+                a.today_unpriced_calls,
+                a.today_estimated_calls,
+            ),
             18.0,
             true,
             &primary,
@@ -739,7 +745,7 @@ fn make_agent_card(
 
         tf!("7 Days", 10.0, false, &secondary, col2_x, 64.0, col_w);
         tf!(
-            &fmt_cost(a.week_cost),
+            &fmt_cost(a.week_cost, a.week_unpriced_calls, a.week_estimated_calls,),
             18.0,
             true,
             &primary,
@@ -759,7 +765,11 @@ fn make_agent_card(
 
         tf!("30 Days", 10.0, false, &secondary, col3_x, 64.0, col_w);
         tf!(
-            &fmt_cost(a.month_cost),
+            &fmt_cost(
+                a.month_cost,
+                a.month_unpriced_calls,
+                a.month_estimated_calls,
+            ),
             18.0,
             true,
             &primary,
@@ -844,13 +854,28 @@ fn make_tf(
 
 // ── Formatting ──
 
-fn fmt_cost(v: f64) -> String {
-    if v <= 0.0 {
+fn fmt_cost(v: f64, unpriced_calls: u64, estimated_calls: u64) -> String {
+    if unpriced_calls > 0 {
+        if v <= 0.0 {
+            return "Unknown".to_string();
+        }
+        return format!(
+            "{}{}+",
+            fmt_cost(v, 0, 0),
+            if estimated_calls > 0 { "~" } else { "" }
+        );
+    }
+    let formatted = if v <= 0.0 {
         "$0".into()
     } else if v < 0.01 {
         "<$0.01".into()
     } else {
         format!("${v:.2}")
+    };
+    if estimated_calls > 0 {
+        format!("{formatted}~")
+    } else {
+        formatted
     }
 }
 
@@ -878,4 +903,18 @@ fn fmt_num(n: u64) -> String {
         r.push(c);
     }
     r.chars().rev().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fmt_cost;
+
+    #[test]
+    fn tray_cost_distinguishes_free_partial_and_unknown_prices() {
+        assert_eq!(fmt_cost(0.0, 0, 0), "$0");
+        assert_eq!(fmt_cost(0.0, 2, 0), "Unknown");
+        assert_eq!(fmt_cost(1.25, 2, 0), "$1.25+");
+        assert_eq!(fmt_cost(1.25, 0, 2), "$1.25~");
+        assert_eq!(fmt_cost(1.25, 1, 2), "$1.25~+");
+    }
 }

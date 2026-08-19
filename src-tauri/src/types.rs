@@ -327,7 +327,8 @@ pub struct TrashItem {
     pub agent: String,
     pub project_label: String,
     pub original_path: String,
-    /// 回收站里 JSONL 的绝对路径，供「在回收站里直接查看会话详情」读取。
+    /// 回收站里可读取 transcript 的绝对路径。文件型会话直接指向 JSONL；
+    /// Grok 目录型会话指向目录内的 updates.jsonl。
     pub trash_path: String,
     pub deleted_at: u64,
     pub title: String,
@@ -461,6 +462,10 @@ pub struct ModelStat {
     pub call_count: u64,
     pub usage: UsageSummary,
     pub cost_usd: f64,
+    /// 该模型中没有可用价格的真实 API 调用数；0 表示所有调用均已定价（包括免费价）。
+    pub unpriced_call_count: u64,
+    /// 该模型中使用 Grok 官方旗舰价格兜底估算的真实 API 调用数。
+    pub estimated_call_count: u64,
     /// cache_read / (input + cache_read + cache_creation)。0..=1。
     pub cache_hit_rate: f64,
 }
@@ -510,6 +515,10 @@ pub struct AgentStats {
     pub days_active: usize,
     pub usage: UsageSummary,
     pub cost_usd: f64,
+    /// 没有命中价格表的真实 API 调用数。cost_usd 仍保留已知部分的合计。
+    pub unpriced_call_count: u64,
+    /// 使用 Grok 官方旗舰价估算的真实 API 调用数；不等于第三方实际账单。
+    pub estimated_call_count: u64,
     /// 顶层 cache 命中率（cache_read / (input + cache_read + cache_creation)）。
     pub cache_hit_rate: f64,
     /// 按 cost_usd 降序的项目列表。
@@ -565,10 +574,16 @@ pub struct TrayAgentSummary {
     pub agent: String,
     pub today_tokens: u64,
     pub today_cost: f64,
+    pub today_unpriced_calls: u64,
+    pub today_estimated_calls: u64,
     pub week_tokens: u64,
     pub week_cost: f64,
+    pub week_unpriced_calls: u64,
+    pub week_estimated_calls: u64,
     pub month_tokens: u64,
     pub month_cost: f64,
+    pub month_unpriced_calls: u64,
+    pub month_estimated_calls: u64,
     pub session_count: usize,
 }
 
@@ -578,10 +593,16 @@ pub struct TrayStats {
     pub agents: Vec<TrayAgentSummary>,
     pub total_today_tokens: u64,
     pub total_today_cost: f64,
+    pub total_today_unpriced_calls: u64,
+    pub total_today_estimated_calls: u64,
     pub total_week_tokens: u64,
     pub total_week_cost: f64,
+    pub total_week_unpriced_calls: u64,
+    pub total_week_estimated_calls: u64,
     pub total_month_tokens: u64,
     pub total_month_cost: f64,
+    pub total_month_unpriced_calls: u64,
+    pub total_month_estimated_calls: u64,
 }
 
 // ---- CLI 环境检测 ----
@@ -625,4 +646,31 @@ pub struct CliUpgradeResult {
     pub success: bool,
     pub new_version: Option<String>,
     pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_version_info_serialization() {
+        let info = CliVersionInfo {
+            cli: "grok".to_string(),
+            npm_package: "".to_string(),
+            current_version: Some("1.0.4".to_string()),
+            latest_version: Some("1.0.5".to_string()),
+            upgradable: true,
+            installed: true,
+            error: None,
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        eprintln!("Serialized JSON: {}", json);
+
+        // Verify camelCase conversion
+        assert!(json.contains("\"latestVersion\":\"1.0.5\""));
+        assert!(json.contains("\"currentVersion\":\"1.0.4\""));
+        assert!(!json.contains("latest_version"));
+        assert!(!json.contains("current_version"));
+    }
 }

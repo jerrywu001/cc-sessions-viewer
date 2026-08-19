@@ -4,6 +4,7 @@ import type { Agent, SearchField, SearchHit, SearchScope, SessionMeta } from '..
 import { searchSessions, cancelSearch, nextSearchRequestId } from '../api'
 import { t } from '../i18n'
 import { shortName, highlightSegments } from '../format'
+import { agentLabel } from '../agentMeta'
 import {
   recentSearches,
   pushRecent,
@@ -277,7 +278,11 @@ onUnmounted(() => {
             ref="inputEl"
             type="text"
             class="gs-input"
-            :placeholder="scope === 'id' ? t('search.global.placeholderId') : t('search.global.placeholder')"
+            :placeholder="
+              scope === 'id'
+                ? t('search.global.placeholderId', { agent: agentLabel(agent) })
+                : t('search.global.placeholder', { agent: agentLabel(agent) })
+            "
             spellcheck="false"
             autocomplete="off"
             @input="onInput"
@@ -308,7 +313,7 @@ onUnmounted(() => {
           <template v-if="showNoRecent">
             <div class="gs-placeholder">
               <p class="gs-placeholder-text">{{ t('search.global.empty') }}</p>
-              <p class="gs-placeholder-hint">{{ t('search.global.emptyHint') }}</p>
+              <p class="gs-placeholder-hint">{{ t('search.global.emptyHint', { agent: agentLabel(agent) }) }}</p>
             </div>
           </template>
 

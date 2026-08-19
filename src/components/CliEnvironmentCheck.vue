@@ -25,6 +25,7 @@ const cliLabels: Record<string, string> = {
   codex: 'Codex',
   agy: 'Antigravity CLI',
   opencode: 'opencode',
+  grok: 'Grok Build CLI',
 }
 
 const cliUrls: Record<string, string> = {
@@ -32,6 +33,7 @@ const cliUrls: Record<string, string> = {
   codex: 'https://developers.openai.com/codex/cli',
   agy: 'https://antigravity.google/docs/cli/getting-started',
   opencode: 'https://opencode.ai/docs/',
+  grok: 'https://docs.x.ai/docs/grok-cli',
 }
 
 const pmLabels: Record<string, string> = {
@@ -76,7 +78,9 @@ function showInstallFallbackLink(cli: string) {
 }
 
 onMounted(() => {
-  if (!cliVersions.value.length) refresh()
+  // CLI versions can change outside the app (for example after installing a
+  // different Grok build), so never reuse the previous tab result on mount.
+  refresh()
 })
 </script>
 

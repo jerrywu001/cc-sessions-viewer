@@ -104,7 +104,7 @@ const session = (over: Partial<SessionMeta> = {}): SessionMeta => ({
 })
 
 type Props = InstanceType<typeof SessionsView>['$props']
-const factory = (sessions: SessionMeta[] = [session()]) =>
+const factory = (sessions: SessionMeta[] = [session()], props: Partial<Props> = {}) =>
   mount(SessionsView, {
     props: {
       agent: 'claude',
@@ -113,6 +113,7 @@ const factory = (sessions: SessionMeta[] = [session()]) =>
       sessionTotal: sessions.length,
       loading: false,
       loadingMore: false,
+      ...props,
     } as Props,
     global: {
       directives: { tooltip: vTooltip },
@@ -255,6 +256,22 @@ describe('SessionsView', () => {
       const items = wrapper.findAll('.new-menu-item')
       await items[1].trigger('click')
       expect(wrapper.emitted('new-gui-session')).toHaveLength(1)
+    })
+
+    it('does not render the GUI Chat menu item for Grok Build', async () => {
+      const wrapper = factory([session()], { agent: 'grok' })
+      await flushPromises()
+      await findByLabel(wrapper, 'New session').trigger('click')
+      expect(wrapper.find('.new-menu-wrap .new-menu').text()).not.toContain('New Chat (GUI)')
+      expect(wrapper.emitted('new-gui-session')).toBeUndefined()
+    })
+
+    it('shows the app worktree action for a Grok Build project', async () => {
+      const wrapper = factory([session()], { agent: 'grok' })
+      await flushPromises()
+      expect(
+        wrapper.find('.list-head-actions .icon-btn[aria-label="Create worktree"]').exists(),
+      ).toBe(true)
     })
 
     it('emits "new-shell" when the terminal menu item is clicked', async () => {
@@ -429,6 +446,13 @@ describe('SessionsView', () => {
       expect(wrapper.find('.title-rename-ic').exists()).toBe(true)
       // chat(claude) / resume / reveal / export / pin / sink / delete
       expect(wrapper.findAll('.session-actions .icon-btn')).toHaveLength(7)
+    })
+
+    it('keeps history actions but hides Open Chat for Grok Build sessions', () => {
+      const wrapper = factory([session()], { agent: 'grok' })
+      expect(wrapper.find('.title-rename-ic').exists()).toBe(true)
+      // resume / reveal / export / pin / sink / delete；不含 GUI Open Chat。
+      expect(wrapper.findAll('.session-actions .icon-btn')).toHaveLength(6)
     })
   })
 

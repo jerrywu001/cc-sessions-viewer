@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
-const { appVersionMock, backgroundMediaDirectoryMock, checkAppUpdateMock, deleteBackgroundMediaMock, emitToMock, importBackgroundMediaMock, installTurnHooksMock, listBackgroundMediaMock, openDialogMock, openPathExternalMock, reclaudeInfoMock, tauriInvokeMock, turnHookStatusMock } = vi.hoisted(() => ({
+const { appVersionMock, backgroundMediaDirectoryMock, checkAppUpdateMock, deleteBackgroundMediaMock, emitToMock, exportBackgroundMediaMock, importBackgroundMediaMock, installTurnHooksMock, listBackgroundMediaMock, openDialogMock, openPathExternalMock, reclaudeInfoMock, tauriInvokeMock, turnHookStatusMock } = vi.hoisted(() => ({
   appVersionMock: vi.fn(),
   backgroundMediaDirectoryMock: vi.fn(),
   checkAppUpdateMock: vi.fn(),
   deleteBackgroundMediaMock: vi.fn(),
   emitToMock: vi.fn(),
+  exportBackgroundMediaMock: vi.fn(),
   importBackgroundMediaMock: vi.fn(),
   installTurnHooksMock: vi.fn(),
   listBackgroundMediaMock: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock('../../src/api', () => ({
   appVersion: appVersionMock,
   backgroundMediaDirectory: backgroundMediaDirectoryMock,
   deleteBackgroundMedia: deleteBackgroundMediaMock,
+  exportBackgroundMedia: exportBackgroundMediaMock,
   importBackgroundMedia: importBackgroundMediaMock,
   installTurnHooks: installTurnHooksMock,
   listBackgroundMedia: listBackgroundMediaMock,
@@ -166,6 +168,20 @@ const fullHookStatus = {
       managed: true,
     }],
   },
+  grok: {
+    installed: true,
+    configPath: '/home/test/.grok/config.toml',
+    events: ['UserPromptSubmit', 'Stop', 'StopFailure', 'StopCancelled', 'Notification:idle_prompt', 'Notification:permission_prompt']
+      .map((name) => ({ name, installed: true })),
+    hooks: [{
+      event: 'Stop',
+      category: null,
+      matcher: null,
+      hookType: 'command',
+      detail: 'Managed status hook',
+      managed: true,
+    }],
+  },
 }
 
 beforeEach(() => {
@@ -173,6 +189,7 @@ beforeEach(() => {
   setTheme('system')
   appVersionMock.mockReset().mockResolvedValue('9.9.9')
   backgroundMediaDirectoryMock.mockReset().mockResolvedValue('/app-data/background-media')
+  exportBackgroundMediaMock.mockReset().mockResolvedValue({ count: 0, directory: '/export/background-media' })
   checkAppUpdateMock.mockReset()
   installTurnHooksMock.mockReset().mockResolvedValue({})
   openPathExternalMock.mockReset().mockResolvedValue(undefined)
@@ -400,6 +417,29 @@ describe('SettingsModal', () => {
     expect(openPathExternalMock).toHaveBeenCalledWith('/app-data/background-media')
   })
 
+  it('exports every saved background to a selected folder with their display names', async () => {
+    listBackgroundMediaMock.mockResolvedValue([
+      { id: 'b', name: 'forest.jpg', path: '/app-data/background-media/b--forest.jpg' },
+      { id: 'c', name: 'rain.mp4', path: '/app-data/background-media/c--rain.mp4' },
+    ])
+    openDialogMock.mockResolvedValue('/Users/test/Desktop/background-export')
+    exportBackgroundMediaMock.mockResolvedValue({
+      count: 2,
+      directory: '/Users/test/Desktop/background-export/background-media-20260819-170000',
+    })
+    const wrapper = factory({ initialTab: 'theme' })
+    await flushPromises()
+
+    await wrapper.get('[data-background-media-export]').trigger('click')
+    await flushPromises()
+
+    expect(openDialogMock).toHaveBeenCalledWith({ directory: true, multiple: false })
+    expect(exportBackgroundMediaMock).toHaveBeenCalledWith('/Users/test/Desktop/background-export')
+    expect(wrapper.text()).toContain('Exported 2 background media files')
+    expect(wrapper.emitted('notify')).toEqual([['Exported 2 background media files']])
+    expect(openPathExternalMock).toHaveBeenCalledWith('/Users/test/Desktop/background-export')
+  })
+
   it('reuses an imported background returned from the cache without duplicating it in the library', async () => {
     const media = { id: 'b', name: 'forest.jpg', path: '/app-data/background-media/b--forest.jpg' }
     listBackgroundMediaMock.mockResolvedValue([media])
@@ -438,8 +478,8 @@ describe('SettingsModal', () => {
     const wrapper = factory({ initialTab: 'hooks' })
 
     const files = wrapper.findAll('.set-hook-file')
-    expect(files).toHaveLength(3)
-    expect(wrapper.text()).toContain('3 files')
+    expect(files).toHaveLength(4)
+    expect(wrapper.text()).toContain('4 files')
     expect(wrapper.text()).toContain('2 hooks')
     expect(wrapper.text()).not.toContain('echo external-hook')
     expect(wrapper.find('.set-desktop-pet-card').exists()).toBe(false)
@@ -448,6 +488,29 @@ describe('SettingsModal', () => {
     expect(openPathExternalMock).toHaveBeenCalledWith('/home/test/.claude/settings.json')
     expect(wrapper.find('.set-hooks-enable').attributes('disabled')).toBeDefined()
     expect(wrapper.find('.set-hooks-enable').text()).toContain('Enabled')
+  })
+
+  it('refreshes hook status from disk without reinstalling hooks', async () => {
+    turnHookStatus.value = fullHookStatus
+    turnHookStatusMock.mockResolvedValueOnce({
+      ...fullHookStatus,
+      enabled: false,
+      grok: {
+        ...fullHookStatus.grok,
+        installed: false,
+        hooks: [],
+        events: fullHookStatus.grok.events.map((event) => ({ ...event, installed: false })),
+      },
+    })
+    const wrapper = factory({ initialTab: 'hooks' })
+
+    await wrapper.get('.set-hook-list-refresh').trigger('click')
+    await flushPromises()
+
+    expect(turnHookStatusMock).toHaveBeenCalledOnce()
+    expect(installTurnHooksMock).not.toHaveBeenCalled()
+    expect(wrapper.find('.set-hooks-enable').text()).toContain('Enable session status tracking')
+    expect(wrapper.findAll('.set-hook-file')).toHaveLength(3)
   })
 
   it('keeps the hook action enabled for a partial install and refreshes after repair', async () => {

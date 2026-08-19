@@ -16,6 +16,7 @@ import {
 import appIcon from '../assets/app-icon.png'
 import { openGlobalSearch } from '../globalSearch'
 import { visibleAgents } from '../settings'
+import { agentLabel } from '../agentMeta'
 
 const props = defineProps<{
   agent: Agent
@@ -28,8 +29,6 @@ const emit = defineEmits<{
   (e: 'open-repo'): void
 }>()
 
-const agentLabel = (a: Agent) =>
-  a === 'codex' ? 'Codex' : a === 'agy' ? 'agy' : a === 'opencode' ? 'opencode' : 'Claude'
 // 与侧栏 agent-switch 同规则：3 个及以上 agent 时分段控件放不下 icon+文字。
 const iconsOnly = computed(() => visibleAgents.value.length > 2)
 
@@ -99,11 +98,11 @@ const modKey = isMac ? '⌘' : 'Ctrl'
       <!-- 全局搜索快捷键提示 / 入口 —— 点了等同于按 ⌘⇧F；放在 tab 下方与最近列表上方 -->
       <button
         class="welcome-search-hint"
-        v-tooltip="t('search.global.placeholder')"
+        v-tooltip="t('search.global.placeholder', { agent: agentLabel(agent) })"
         @click="openGlobalSearch"
       >
         <IconSearch class="welcome-search-ic" />
-        <span class="welcome-search-label">{{ t('search.global.placeholder') }}</span>
+        <span class="welcome-search-label">{{ t('search.global.placeholder', { agent: agentLabel(agent) }) }}</span>
         <span class="welcome-search-kbd">
           <kbd class="gs-kbd">{{ modKey }}</kbd>
           <kbd class="gs-kbd">⇧</kbd>

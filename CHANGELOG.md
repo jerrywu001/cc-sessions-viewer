@@ -6,6 +6,30 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ---
 
+## [v0.3.20]
+
+### Features
+
+- **Grok Build local-session support** — the viewer now discovers Grok Build sessions from `~/.grok/sessions`, reads their `updates.jsonl` transcript, groups them by working directory, and supports session search, export, rename, trash/restore, reveal, and resume in the embedded terminal. Grok Build remains intentionally read-only in the GUI chat composer.
+- **Grok Build integration across the app** — Grok Build is available in agent settings, CLI environment checks, hooks, worktree handling, session lifecycle indicators, export history, global search, statistics, tray statistics, and the live pricing table.
+- **Grok Build hooks and launch defaults** — Settings can inspect, refresh, and enable Grok Build lifecycle hooks, while terminal launches use Grok's supported `--yolo` behavior.
+- **Background media batch export** — Saved background images and MP4 videos can now be exported together into a new folder inside a selected location, using their original display filenames instead of internal UUID/hash cache names.
+
+### Improvements
+
+- **Pricing source resilience** — live model pricing now requests `js-bridge.com/api/models` first and automatically falls back to `models.dev/api.json` when the preferred source has a network, HTTP, response, or parsing failure. Existing cached prices remain available during a failed refresh.
+- **Fresh pricing source migration** — pricing cache storage moves to a new version so upgrades refresh through the preferred source immediately; restoring defaults also clears prior pricing caches before refetching.
+- **Agent-aware search guidance** — global and project search prompts now name the currently selected agent, making it clear that searches are scoped to that agent's sessions.
+
+### Bug Fixes
+
+- **Grok Build session opening** — opening a session now preserves the agent, project, and split-pane context captured at click time, preventing asynchronous refreshes or navigation changes from reading the wrong source or leaving a newly opened tab out of view.
+- **Export-history navigation** — opening a historical export now switches to the saved agent and project context before restoring the original transcript.
+
+### Tests
+
+- Added Grok Build parser, storage-boundary, stats, hooks, settings, pricing, export, search, and session-list coverage, including the preferred pricing-source order and models.dev fallback contract.
+
 ## [v0.3.19]
 
 ### Features

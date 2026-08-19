@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 「模型实时价格」视图 —— 跟 TrashView / ExportHistoryView 同级，从顶栏
-// More 菜单里进。数据来自 src-tauri 启动期从 models.dev 拉的内存表，by family
-// 分 2 段（Claude / Codex）展示。
+// More 菜单里进。数据来自 src-tauri 启动期优先从 js-bridge 拉取、models.dev 兜底的内存表，by family
+// 按已接入 agent family 分段展示。
 //
 // 主题：完全靠 style.css 里的 design tokens（--surface / --border / --text /
 // --accent / --muted），dark/light 切换自动跟随，无 hardcoded 颜色。
@@ -20,6 +20,7 @@ import {
   IconPriceTag,
   IconClaude,
   IconCodex,
+  IconGrok,
   IconAgy,
   IconOpencode,
   IconSearch,
@@ -28,13 +29,11 @@ import {
 } from '../components/icons'
 import StatsLoadingIcon from '../components/StatsLoadingIcon.vue'
 import { openUrl } from '../api'
-import { visibleAgents } from '../settings'
-import type { Agent } from '../types'
 
-// 价格数据源主页 —— 标题旁的外链按钮直接在系统浏览器打开。
-const SOURCE_URL = 'https://models.dev'
+// 首选价格数据源 —— 后端在其不可用时自动回退到 models.dev 原站。
+const SOURCE_URL = 'https://www.js-bridge.com/api/models'
 function openSource() {
-  openUrl(SOURCE_URL).catch((e) => console.error('open models.dev failed:', e))
+  openUrl(SOURCE_URL).catch((e) => console.error('open pricing source failed:', e))
 }
 
 const entries = ref<PricingEntry[]>([])
@@ -71,17 +70,16 @@ async function onRefresh() {
 onMounted(load)
 
 // 按 family 分桶 —— 后端已排好序（family, input 升序），这里仅做分组。
-type Family = 'claude' | 'codex' | 'agy' | 'opencode'
+type Family = 'claude' | 'codex' | 'grok' | 'agy' | 'opencode'
 const FAMILIES: { key: Family; icon: Component; label: string }[] = [
   { key: 'claude', icon: IconClaude, label: 'pricing.family.claude' },
   { key: 'codex', icon: IconCodex, label: 'pricing.family.codex' },
+  { key: 'grok', icon: IconGrok, label: 'pricing.family.grok' },
   { key: 'agy', icon: IconAgy, label: 'pricing.family.agy' },
   { key: 'opencode', icon: IconOpencode, label: 'pricing.family.opencode' },
 ]
-// 价格页同样跟随设置里的 agent 显隐：只展示启用的 family（锚点 chip + 模型分段）。
-const visibleFamilies = computed(() =>
-  FAMILIES.filter((f) => visibleAgents.value.includes(f.key as Agent)),
-)
+// 价格页是完整的参考价格表，不受设置中 agent 显隐影响。
+const pricingFamilies = FAMILIES
 
 // 搜索框：用户输入 draft，回车（@change / Enter keydown）才把 draft 同步到 query。
 // 跨 family 全量搜，子串匹配 model name（大小写不敏感）。空 query = 显示全部。
@@ -101,7 +99,13 @@ const filtered = computed<PricingEntry[]>(() => {
 })
 
 const grouped = computed(() => {
-  const map: Record<Family, PricingEntry[]> = { claude: [], codex: [], agy: [], opencode: [] }
+  const map: Record<Family, PricingEntry[]> = {
+    claude: [],
+    codex: [],
+    grok: [],
+    agy: [],
+    opencode: [],
+  }
   for (const e of filtered.value) {
     if (e.family in map) map[e.family].push(e)
   }
@@ -134,14 +138,15 @@ function fmtContext(tokens: number): string {
 }
 
 // 锚点快速跳转 ——
-// 用户场景：模型表 200+ 行，找一家厂商的价格要滚很久。顶部加 2 个锚点 chip
-// （Claude / Codex），点击 smooth-scroll 到对应 section 顶端，且滚动
+// 用户场景：模型表 200+ 行，找一家厂商的价格要滚很久。顶部按 family 提供锚点
+// chip，点击 smooth-scroll 到对应 section 顶端，且滚动
 // 时根据视窗里第一个可见的 section 高亮当前 chip。
 const scrollEl = ref<HTMLElement>()
 const toolbarEl = ref<HTMLElement>()
 const sectionEls = ref<Record<Family, HTMLElement | null>>({
   claude: null,
   codex: null,
+  grok: null,
   agy: null,
   opencode: null,
 })
@@ -183,7 +188,7 @@ function onScroll() {
     if (!scroller) return
     // 判定视窗：把"工具栏下沿"作为基准线，刚被它挡住的 section 才算"当前可见"。
     const y = scroller.scrollTop + toolbarOffset() + 8
-    const fams = visibleFamilies.value
+    const fams = pricingFamilies
     if (!fams.length) return
     let best: Family = fams[0].key
     for (const f of fams) {
@@ -283,7 +288,7 @@ async function settleAfterLoad() {
       </div>
       <nav class="pricing-anchors" role="tablist" :aria-label="t('pricing.title')">
         <button
-          v-for="fam in visibleFamilies"
+          v-for="fam in pricingFamilies"
           :key="fam.key"
           type="button"
           class="pricing-anchor"
@@ -310,7 +315,7 @@ async function settleAfterLoad() {
     </div>
 
     <section
-      v-for="fam in visibleFamilies"
+      v-for="fam in pricingFamilies"
       :key="fam.key"
       :ref="(el) => setSectionRef(fam.key, el as Element | null)"
       class="pricing-family"

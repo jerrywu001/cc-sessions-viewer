@@ -93,15 +93,15 @@ fn list_projects(
     Ok(out)
 }
 
-/// 支持 worktree 展示/创建的 agent：只有按 `cwd` 归属会话的 Claude / Codex。opencode / agy
-/// 按 git 仓库归属会话 —— worktree 里起的会话会被 CLI 塞回主仓库，展示 worktree 反而误导，
-/// 故对它们整体隐藏 worktree（显示 + 创建入口，前端也据同一名单收起）。
+/// 支持本应用 worktree 展示/创建的 agent：Claude、Codex、Grok Build 都按 `cwd` 归属会话。
+/// opencode / agy 按 git 仓库归属会话，worktree 里起的会话会被 CLI 塞回主仓库，展示 worktree
+/// 反而误导，故对它们整体隐藏 worktree。这里不接管 Grok 自己的 worktree registry。
 fn agent_supports_worktrees(agent: &str) -> bool {
-    matches!(agent, "claude" | "codex")
+    matches!(agent, "claude" | "codex" | "grok")
 }
 
 /// 把磁盘上 `<项目根>/.claude/worktrees/*` 里的 worktree 注入项目列表 —— agent 无关，
-/// 四种 agent 侧栏都会显示、且都归组在其仓库名下。分几种情况：
+/// 支持 app worktree 的 agent 侧栏都会显示、且都归组在其仓库名下。分几种情况：
 ///   * 该 worktree 已有会话 → 已作为普通项目在 `out` 里（display_path 命中）。若尚未带
 ///     父子标记（非 Claude agent），就地补上 parent_dir_name / worktree_name 让其归组。
 ///   * 尚无会话 → 注入一个 `worktree:<path>` 合成条目（session_count=0），一样能选中/删除。
@@ -275,6 +275,9 @@ fn terminal_turn_signal(
             path,
             state,
             source: "hook".to_string(),
+            prompt_id: None,
+            session_id: None,
+            cwd: None,
         },
     )
 }
@@ -488,7 +491,16 @@ fn parse_toml_string_value(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod codex_runtime_tests {
-    use super::top_level_toml_string;
+    use super::{agent_supports_worktrees, top_level_toml_string};
+
+    #[test]
+    fn app_worktrees_support_cwd_grouped_agents_only() {
+        assert!(agent_supports_worktrees("claude"));
+        assert!(agent_supports_worktrees("codex"));
+        assert!(agent_supports_worktrees("grok"));
+        assert!(!agent_supports_worktrees("agy"));
+        assert!(!agent_supports_worktrees("opencode"));
+    }
 
     #[test]
     fn reads_top_level_codex_model() {
@@ -672,25 +684,14 @@ fn soft_delete_session(agent: String, path: String, project_label: String) -> Re
     trash::soft_delete(&agent, &path, &project_label)
 }
 
-/// 永久删除一个会话文件（直接 rm，不进回收站、不可恢复）。仅供 worktree「全部删除」调用。
-/// 路径经 agent 的 `validate_session_path` 校验（存在 + 是 JSONL），防止误删任意文件。
-/// 删完后若其所在目录（如 `~/.claude/projects/<worktree 编码目录>` —— worktree 的全局工作
-/// 目录）已空，一并移除；只删空目录，绝不误伤仍有会话的目录。
+/// 永久删除一个完整会话存储单元（直接删除、不进回收站、不可恢复）。文件型 agent
+/// 删除单个 JSONL；目录型 agent（Grok）删除整个 session 目录。具体边界和路径校验由
+/// SessionSource 负责，避免通用命令误把 updates.jsonl 当成完整 Grok 会话。
 #[tauri::command]
 fn hard_delete_session(agent: String, path: String) -> Result<(), String> {
     let src = agents::source(&agent)?;
     let fp = PathBuf::from(&path);
-    src.validate_session_path(&fp)?;
-    fs::remove_file(&fp).map_err(|e| format!("Failed to delete session: {e}"))?;
-    if let Some(parent) = fp.parent() {
-        let empty = fs::read_dir(parent)
-            .map(|mut d| d.next().is_none())
-            .unwrap_or(false);
-        if empty {
-            let _ = fs::remove_dir(parent);
-        }
-    }
-    Ok(())
+    src.hard_delete_session(&fp)
 }
 
 /// btw 侧聊关闭后清理 `--fork-session` 产生的会话文件。只认 Claude agent，
@@ -2259,6 +2260,12 @@ async fn refresh_pricing() -> Result<usize, String> {
         .map_err(|e| format!("join: {e}"))?
 }
 
+/// 清除实时模型价格的内存表和磁盘缓存，并在后台重新拉取。
+#[tauri::command]
+fn reset_pricing_cache() {
+    stats::pricing::clear_cache_and_refresh();
+}
+
 /// 价格表当前状态。前端按 `loaded` / `fetching` / `lastError` 决定渲染：
 ///   - loaded=false && fetching=true → 显示加载占位
 ///   - loaded=false && lastError=Some → 显示 error placeholder
@@ -2294,6 +2301,13 @@ async fn tray_quick_stats() -> Result<TrayStats, String> {
     tauri::async_runtime::spawn_blocking(stats::tray::quick_stats)
         .await
         .map_err(|e| format!("join: {e}"))?
+}
+
+/// Sync the frontend's enabled-agent setting into the native tray statistics.
+/// `agy` is ignored because it has no usage statistics provider.
+#[tauri::command]
+fn set_tray_enabled_agents(agents: Vec<String>) {
+    stats::tray::set_enabled_agents(&agents);
 }
 
 /// Attach an empty `NSToolbar` with `unifiedCompact` style so AppKit grows the
@@ -2454,6 +2468,7 @@ pub fn run() {
             background_media::background_media_directory,
             background_media::list_background_media,
             background_media::import_background_media,
+            background_media::export_background_media,
             background_media::delete_background_media,
             set_titlebar_theme,
             add_bookmark,
@@ -2462,10 +2477,12 @@ pub fn run() {
             window_hide_to_tray,
             window_exit_app,
             refresh_pricing,
+            reset_pricing_cache,
             pricing_status,
             list_pricing,
             account_usage,
             tray_quick_stats,
+            set_tray_enabled_agents,
             check_cli_versions,
             install_cli,
             upgrade_cli,

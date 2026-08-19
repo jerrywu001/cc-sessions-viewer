@@ -1,4 +1,4 @@
-export type Agent = 'claude' | 'codex' | 'agy' | 'opencode'
+export type Agent = 'claude' | 'codex' | 'agy' | 'opencode' | 'grok'
 
 export interface ProjectInfo {
   dirName: string
@@ -181,6 +181,10 @@ export interface ModelStat {
   callCount: number
   usage: UsageSummary
   costUsd: number
+  /** 价格表未命中的真实 API 调用数；0 也可能是已知免费，不能只看 costUsd 判断。 */
+  unpricedCallCount: number
+  /** 使用 Grok 官方旗舰价格兜底估算的真实 API 调用数。 */
+  estimatedCallCount: number
   /** 0..=1。cache_read / (input + cache_read + cache_creation)。 */
   cacheHitRate: number
 }
@@ -215,6 +219,10 @@ export interface AgentStats {
   daysActive: number
   usage: UsageSummary
   costUsd: number
+  /** 未命中价格表的真实 API 调用数；costUsd 只包含已知价格部分。 */
+  unpricedCallCount: number
+  /** 使用 Grok 官方旗舰价格兜底估算的真实 API 调用数。 */
+  estimatedCallCount: number
   cacheHitRate: number
   /** 按 cost_usd 降序的项目列表。 */
   projects: ProjectStats[]
@@ -460,7 +468,7 @@ export interface TrashItem {
   agent: Agent
   projectLabel: string
   originalPath: string
-  /** 回收站里 JSONL 的绝对路径，用于在回收站里直接查看会话详情。 */
+  /** 回收站里可读取的 transcript 路径；Grok 指向会话目录内的 updates.jsonl。 */
   trashPath: string
   deletedAt: number
   title: string
@@ -471,10 +479,16 @@ export interface TrayAgentSummary {
   agent: string
   todayTokens: number
   todayCost: number
+  todayUnpricedCalls: number
+  todayEstimatedCalls: number
   weekTokens: number
   weekCost: number
+  weekUnpricedCalls: number
+  weekEstimatedCalls: number
   monthTokens: number
   monthCost: number
+  monthUnpricedCalls: number
+  monthEstimatedCalls: number
   sessionCount: number
 }
 
@@ -482,16 +496,22 @@ export interface TrayStats {
   agents: TrayAgentSummary[]
   totalTodayTokens: number
   totalTodayCost: number
+  totalTodayUnpricedCalls: number
+  totalTodayEstimatedCalls: number
   totalWeekTokens: number
   totalWeekCost: number
+  totalWeekUnpricedCalls: number
+  totalWeekEstimatedCalls: number
   totalMonthTokens: number
   totalMonthCost: number
+  totalMonthUnpricedCalls: number
+  totalMonthEstimatedCalls: number
 }
 
 // ---- CLI 环境检测 ----
 
 export interface CliVersionInfo {
-  cli: 'claude' | 'codex' | 'agy' | 'opencode'
+  cli: 'claude' | 'codex' | 'agy' | 'opencode' | 'grok'
   npmPackage: string
   currentVersion: string | null
   latestVersion: string | null
@@ -509,7 +529,7 @@ export interface CliInstallation {
 }
 
 export interface CliDiagnosisResult {
-  cli: 'claude' | 'codex' | 'agy' | 'opencode'
+  cli: 'claude' | 'codex' | 'agy' | 'opencode' | 'grok'
   binaryName: string
   installations: CliInstallation[]
   hasConflict: boolean
@@ -517,7 +537,7 @@ export interface CliDiagnosisResult {
 }
 
 export interface CliUpgradeResult {
-  cli: 'claude' | 'codex' | 'agy' | 'opencode'
+  cli: 'claude' | 'codex' | 'agy' | 'opencode' | 'grok'
   success: boolean
   newVersion: string | null
   error: string | null

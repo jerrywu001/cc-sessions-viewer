@@ -264,11 +264,14 @@ describe('chatComposerOptions', () => {
     expect(modelLabel('codex', 'unknown-model')).toBe('unknown-model')
   })
 
-  it('chatSupported：Claude 和 Codex 支持 chat，agy/opencode 不支持', () => {
+  it('chatSupported：Claude 和 Codex 支持 chat，Grok Build/agy/opencode 不支持', () => {
     expect(chatSupported('claude')).toBe(true)
     expect(chatSupported('codex')).toBe(true)
+    expect(chatSupported('grok')).toBe(false)
     expect(chatSupported('agy')).toBe(false)
     expect(chatSupported('opencode')).toBe(false)
+    expect(CHAT_MODEL_MENU.grok.primary).toEqual([])
+    expect(CHAT_EFFORT_LEVELS.grok).toEqual([])
   })
 
   it('Codex 权限模式 value 仅含安全字符', () => {

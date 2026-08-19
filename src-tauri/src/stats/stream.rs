@@ -10,7 +10,7 @@
 //     快照，避免太频繁的 IPC 抖动。完成时 emit 一次 final done。
 //   - **数据源**：SessionSource::read_turns(path) 走的是与 read_session 不同的轻量
 //     解析路径——只抽 model / usage / tools / bash / mcp，不构造 UI Block。
-//   - **scope**：'all' = claude + codex 全部聚合；'claude' / 'codex' = 单 agent；
+//   - **scope**：'all' = 所有已接入统计的 agent；单 agent 名称 = 只扫该 agent；
 //     'session:<path>:<agent>' = 单个 session（per-session 统计页面用）。
 //   - **range**：'today' / 'days7' / 'days30' / 'month' / 'months3' / 'months6' /
 //     'custom:YYYY-MM-DD:YYYY-MM-DD'。窗口按本地日历日切，
@@ -89,9 +89,10 @@ fn run_worker(
     request_id: u64,
 ) -> Result<crate::types::AgentStats, String> {
     let agents_to_scan: Vec<&'static str> = match scope {
-        "all" => vec!["claude", "codex", "opencode"],
+        "all" => vec!["claude", "codex", "grok", "opencode"],
         "claude" => vec!["claude"],
         "codex" => vec!["codex"],
+        "grok" => vec!["grok"],
         "opencode" => vec!["opencode"],
         other => {
             // session 模式：scope = "session:<agent>:<path>"
@@ -105,6 +106,7 @@ fn run_worker(
                     .filter_map(|name| match name {
                         "claude" => Some("claude"),
                         "codex" => Some("codex"),
+                        "grok" => Some("grok"),
                         "opencode" => Some("opencode"),
                         _ => None,
                     })

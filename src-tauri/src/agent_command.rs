@@ -28,6 +28,17 @@ impl AgentCommand {
         &self.args
     }
 
+    /// Replace the executable while retaining the arguments. Embedded PTYs
+    /// use this to pin self-managed CLIs to their canonical install path.
+    pub fn with_program(mut self, program: impl Into<String>) -> Self {
+        self.program = program.into();
+        self
+    }
+
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
     #[cfg(any(target_os = "macos", target_os = "linux", test))]
     pub fn to_posix_shell(&self) -> String {
         let mut parts =
@@ -42,7 +53,7 @@ impl AgentCommand {
 
     /// `wrapper` 给出时用它做进程包装器（`& 'reclaude' 'claude' ...`）：`&` 调用算子跑
     /// wrapper，原 program/args 全成 wrapper 的参数。与 posix 侧 `'reclaude' <cli>` 同款语义。
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", test))]
     pub fn to_powershell(&self, wrapper: Option<&str>) -> String {
         let mut parts = Vec::with_capacity(
             2 + usize::from(wrapper.is_some())
@@ -67,14 +78,14 @@ pub fn posix_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 pub fn powershell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
 /// `use_reclaude`：GUI 聊天 / 内嵌终端里把命令包一层 `reclaude`，走 reclaude 守护进程的
 /// 鉴权 + 代理链路（与 posix 侧一致）。外部终端 resume 传 `false`。
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 pub fn powershell_set_location_and_run(
     cwd: &str,
     command: &AgentCommand,
@@ -104,7 +115,7 @@ pub fn powershell_set_location_and_run(
 /// 拼好的每个目录，凡是 ReparsePoint 就把它 `.Target` 解析出的**真实目录**一并加进 PATH，
 /// 命令查找走真实目录（无 reparse）即可命中。`.Target` 只读 reparse 数据、不需要穿透，
 /// 所以在穿不过链接的上下文里依旧读得到。对非符号链接目录（原生安装）该分支不触发，零影响。
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 pub fn powershell_refresh_path() -> &'static str {
     "$machinePath = [Environment]::ExpandEnvironmentVariables(([Environment]::GetEnvironmentVariable('Path', 'Machine') + '')); \
      $userPath = [Environment]::ExpandEnvironmentVariables(([Environment]::GetEnvironmentVariable('Path', 'User') + '')); \
@@ -119,7 +130,8 @@ pub fn powershell_refresh_path() -> &'static str {
 /// 内嵌「新建终端」启动时先跑的初始化：先 [`powershell_refresh_path`] 刷新+解析符号链接，
 /// 再把一份含**刷新后最终 PATH**的诊断快照静默写到 %TEMP%\sv-pathdiag.txt（排查 MSI 启动
 /// 上下文下命令找不到的问题）。诊断写入用 try/catch 包住，失败也不影响交互提示符。
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
+#[allow(dead_code)]
 pub fn powershell_shell_init() -> String {
     let diag = "; $d = Join-Path $env:TEMP 'sv-pathdiag.txt'; \
         try { (\"PSVER=\" + $PSVersionTable.PSVersion + \"`nEXE=\" + \
@@ -134,7 +146,8 @@ pub fn powershell_shell_init() -> String {
 /// 选用哪个 PowerShell 可执行文件：优先 PowerShell 7（`pwsh.exe`，用户默认想用的那个），
 /// 装了才用；没装则回退到系统自带的 Windows PowerShell 5.1（`powershell.exe`）以兼容空机器。
 /// 检测只扫继承到的 PATH（PS7 安装器会把自己写进 Machine PATH），不另起子进程。
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
+#[allow(dead_code)]
 pub fn windows_powershell_exe() -> &'static str {
     if let Ok(paths) = std::env::var("PATH") {
         for dir in std::env::split_paths(&paths) {
@@ -150,7 +163,8 @@ pub fn windows_powershell_exe() -> &'static str {
 /// 打包后的 .app 经 `cmd /c start "" powershell.exe -Command "..."` 启动时，
 /// CMD 的引号层会吞掉 `$`、`@`、`&` 等特殊字符，导致 PATH 刷新失败。
 /// `-EncodedCommand` 完全绕过引号解析，是 Windows 上最可靠的传参方式。
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
+#[allow(dead_code)]
 pub fn powershell_encoded_command(ps_cmd: &str) -> String {
     use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine;
@@ -159,4 +173,24 @@ pub fn powershell_encoded_command(ps_cmd: &str) -> String {
         .flat_map(|c| c.to_le_bytes())
         .collect();
     B64.encode(utf16le)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn powershell_grok_resume_command_quotes_ids_and_windows_paths() {
+        let command = AgentCommand::new("grok")
+            .arg("--resume")
+            .arg("session id")
+            .with_extra_args("--model grok-4.1");
+        assert_eq!(
+            command.to_powershell(None),
+            "& 'grok' '--resume' 'session id' --model grok-4.1"
+        );
+        let rendered = powershell_set_location_and_run(r"C:\work\it's", &command, false);
+        assert!(rendered.contains("Set-Location -LiteralPath 'C:\\work\\it''s'"));
+        assert!(rendered.contains("& 'grok' '--resume' 'session id'"));
+    }
 }

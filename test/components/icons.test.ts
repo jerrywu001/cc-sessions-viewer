@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { mount } from '@vue/test-utils'
 import {
   fileIconFor,
   IconFileDoc,
@@ -11,6 +12,8 @@ import {
   IconFileCode,
   IconJson,
   IconFile,
+  IconGrok,
+  agentIcons,
 } from '../../src/components/icons'
 
 describe('fileIconFor', () => {
@@ -51,5 +54,13 @@ describe('fileIconFor', () => {
     expect(fileIconFor('.gitignore')).toBe(IconFile) // 无后缀点文件不算扩展名
     expect(fileIconFor('weird.qqzz')).toBe(IconFile) // 未知扩展名
     expect(fileIconFor('/a/b/c/')).toBe(IconFile) // 目录路径
+  })
+})
+
+describe('agent icons', () => {
+  it('registers a dedicated Grok Build icon', () => {
+    expect(agentIcons.grok).toBe(IconGrok)
+    const wrapper = mount(IconGrok)
+    expect(wrapper.find('img').attributes('src')).toBe('/grok-icon.png')
   })
 })

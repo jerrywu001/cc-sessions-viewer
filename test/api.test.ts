@@ -69,6 +69,13 @@ describe('api wrappers', () => {
     expect(invoke).toHaveBeenCalledWith('cancel_stats')
   })
 
+  it('setTrayEnabledAgents → set_tray_enabled_agents', () => {
+    api.setTrayEnabledAgents(['claude', 'grok'])
+    expect(invoke).toHaveBeenCalledWith('set_tray_enabled_agents', {
+      agents: ['claude', 'grok'],
+    })
+  })
+
   it('nextStatsRequestId is monotonically increasing', () => {
     const a = api.nextStatsRequestId()
     const b = api.nextStatsRequestId()

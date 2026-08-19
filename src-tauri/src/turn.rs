@@ -1,14 +1,15 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
+use toml_edit::{Array, ArrayOfTables, Document, InlineTable, Item, Table, Value as TomlValue};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TerminalTurnPayload {
@@ -17,6 +18,12 @@ pub struct TerminalTurnPayload {
     pub state: String,
     #[serde(default = "default_turn_signal_source")]
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -42,6 +49,7 @@ pub struct TurnHookInstallResult {
     pub claude_settings_path: String,
     pub codex_hooks_path: String,
     pub agy_hooks_path: String,
+    pub grok_config_path: String,
 }
 
 #[derive(Serialize)]
@@ -77,6 +85,7 @@ pub struct TurnHookStatus {
     pub claude: TurnHookAgentStatus,
     pub codex: TurnHookAgentStatus,
     pub agy: TurnHookAgentStatus,
+    pub grok: TurnHookAgentStatus,
 }
 
 const CLAUDE_TURN_HOOKS: [(&str, &str, Option<&str>); 5] = [
@@ -99,6 +108,15 @@ const CODEX_TURN_HOOKS: [(&str, &str); 3] = [
 
 const AGY_TURN_HOOKS: [(&str, &str); 2] = [("PreInvocation", "started"), ("Stop", "completed")];
 
+const GROK_TURN_HOOKS: [(&str, &str, Option<&str>); 6] = [
+    ("UserPromptSubmit", "started", None),
+    ("Stop", "completed", None),
+    ("StopFailure", "failed", None),
+    ("StopCancelled", "completed", None),
+    ("Notification", "completed", Some("idle_prompt")),
+    ("Notification", "blocked", Some("permission_prompt")),
+];
+
 fn default_turn_signal_source() -> String {
     "hook".to_string()
 }
@@ -111,6 +129,8 @@ struct SignalState {
 
 static SIGNAL_STATE: OnceLock<Mutex<Option<SignalState>>> = OnceLock::new();
 static DESKTOP_TASKS: OnceLock<Mutex<HashMap<String, DesktopTask>>> = OnceLock::new();
+static PENDING_GROK_SIGNALS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static GROK_CONFIG_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn signal_state() -> &'static Mutex<Option<SignalState>> {
     SIGNAL_STATE.get_or_init(|| Mutex::new(None))
@@ -118,6 +138,14 @@ fn signal_state() -> &'static Mutex<Option<SignalState>> {
 
 fn desktop_tasks() -> &'static Mutex<HashMap<String, DesktopTask>> {
     DESKTOP_TASKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn pending_grok_signals() -> &'static Mutex<HashSet<String>> {
+    PENDING_GROK_SIGNALS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn grok_config_lock() -> &'static Mutex<()> {
+    GROK_CONFIG_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn normalized_session_path(path: &str) -> String {
@@ -256,9 +284,60 @@ fn legacy_hook_script_path() -> Result<PathBuf, String> {
     Ok(data_dir()?.join("claude-turn-signal-hook.cjs"))
 }
 
-pub fn emit_turn_signal(app: &AppHandle, payload: TerminalTurnPayload) -> Result<(), String> {
-    if payload.agent != "claude" && payload.agent != "codex" && payload.agent != "agy" {
+pub fn emit_turn_signal(app: &AppHandle, mut payload: TerminalTurnPayload) -> Result<(), String> {
+    if !matches!(payload.agent.as_str(), "claude" | "codex" | "agy" | "grok") {
         return Err("Unknown agent".to_string());
+    }
+    if payload.agent == "grok" && payload.path.trim().is_empty() {
+        payload.path = payload
+            .session_id
+            .as_deref()
+            .and_then(|session_id| {
+                crate::agents::grok::find_updates_path(session_id, payload.cwd.as_deref())
+            })
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if payload.path.trim().is_empty() {
+            let Some(session_id) = payload.session_id.clone() else {
+                return Err("Missing Grok session id".to_string());
+            };
+            let key = format!(
+                "{}\0{}\0{}",
+                session_id,
+                payload.prompt_id.as_deref().unwrap_or(""),
+                payload.state
+            );
+            let should_spawn = pending_grok_signals()
+                .lock()
+                .map_err(|error| error.to_string())?
+                .insert(key.clone());
+            if should_spawn {
+                let app = app.clone();
+                let retry_payload = payload;
+                std::thread::spawn(move || {
+                    for _ in 0..30 {
+                        std::thread::sleep(Duration::from_millis(100));
+                        let path = crate::agents::grok::find_updates_path(
+                            &session_id,
+                            retry_payload.cwd.as_deref(),
+                        );
+                        if let Some(path) = path {
+                            let mut resolved = retry_payload.clone();
+                            resolved.path = path.to_string_lossy().into_owned();
+                            if let Ok(mut pending) = pending_grok_signals().lock() {
+                                pending.remove(&key);
+                            }
+                            let _ = emit_turn_signal(&app, resolved);
+                            return;
+                        }
+                    }
+                    if let Ok(mut pending) = pending_grok_signals().lock() {
+                        pending.remove(&key);
+                    }
+                });
+            }
+            return Ok(());
+        }
     }
     if payload.path.trim().is_empty() {
         return Err("Missing session path".to_string());
@@ -453,10 +532,14 @@ pub fn install_turn_hooks() -> Result<TurnHookInstallResult, String> {
     fs::write(&agy_hooks_path, format!("{formatted}\n"))
         .map_err(|e| format!("Failed to write Antigravity hooks: {e}"))?;
 
+    let grok_config_path = crate::agents::grok::config_path();
+    install_grok_turn_hooks(&grok_config_path, &script_path, &signal_path)?;
+
     Ok(TurnHookInstallResult {
         claude_settings_path: settings_path.to_string_lossy().to_string(),
         codex_hooks_path: codex_hooks_path.to_string_lossy().to_string(),
         agy_hooks_path: agy_hooks_path.to_string_lossy().to_string(),
+        grok_config_path: grok_config_path.to_string_lossy().to_string(),
     })
 }
 
@@ -519,11 +602,32 @@ pub fn turn_hook_status() -> Result<TurnHookStatus, String> {
     let agy_hooks = collect_agy_hooks(&agy_config, &script_path, &legacy_script_path);
     let agy = hook_agent_status(agy_path, agy_events, agy_hooks);
 
+    let grok_path = crate::agents::grok::config_path();
+    let grok_config = read_toml_document(&grok_path, "Grok config.toml")?;
+    let grok_events = GROK_TURN_HOOKS
+        .iter()
+        .map(|(event, state, matcher)| TurnHookEventStatus {
+            name: grok_hook_event_label(event, *matcher),
+            installed: script_installed
+                && has_grok_turn_hook(
+                    &grok_config,
+                    event,
+                    state,
+                    *matcher,
+                    &script_path,
+                    &signal_path,
+                ),
+        })
+        .collect::<Vec<_>>();
+    let grok_hooks = collect_grok_hooks(&grok_config, &script_path, &legacy_script_path);
+    let grok = hook_agent_status(grok_path, grok_events, grok_hooks);
+
     Ok(TurnHookStatus {
-        enabled: claude.installed && codex.installed && agy.installed,
+        enabled: claude.installed && codex.installed && agy.installed && grok.installed,
         claude,
         codex,
         agy,
+        grok,
     })
 }
 
@@ -834,6 +938,311 @@ fn write_hook_script(path: &Path) -> Result<(), String> {
 
 const HOOK_SCRIPT: &str = include_str!("turn_signal_hook.cjs");
 
+fn read_toml_document(path: &Path, label: &str) -> Result<Document, String> {
+    if !path.exists() {
+        return Ok(Document::new());
+    }
+    let raw = fs::read_to_string(path).map_err(|e| format!("Failed to read {label}: {e}"))?;
+    raw.parse::<Document>()
+        .map_err(|e| format!("{label} is not valid TOML: {e}"))
+}
+
+fn read_toml_source(path: &Path, label: &str) -> Result<String, String> {
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    fs::read_to_string(path).map_err(|e| format!("Failed to read {label}: {e}"))
+}
+
+fn grok_hook_event_label(event: &str, matcher: Option<&str>) -> String {
+    matcher
+        .map(|matcher| format!("{event}:{matcher}"))
+        .unwrap_or_else(|| event.to_string())
+}
+
+fn grok_hook_command(state: &str, script_path: &Path, signal_path: &Path) -> String {
+    format!(
+        "node {} grok {} {}",
+        shell_path_arg(script_path),
+        shell_string_arg(state),
+        shell_path_arg(signal_path)
+    )
+}
+
+fn is_grok_hook_handler(value: &TomlValue, script_path: &Path, legacy_script_path: &Path) -> bool {
+    let Some(table) = value.as_inline_table() else {
+        return false;
+    };
+    let Some(command) = table.get("command").and_then(TomlValue::as_str) else {
+        return false;
+    };
+    command_references_path(command, script_path)
+        || command_references_path(command, legacy_script_path)
+}
+
+fn grok_handler_table(command: &str) -> InlineTable {
+    let mut table = InlineTable::new();
+    table.insert("type", TomlValue::from("command"));
+    table.insert("command", TomlValue::from(command));
+    table.insert("timeout", TomlValue::from(10));
+    table
+}
+
+fn merge_grok_hook(
+    doc: &mut Document,
+    event: &str,
+    state: &str,
+    matcher: Option<&str>,
+    script_path: &Path,
+    legacy_script_path: &Path,
+    signal_path: &Path,
+) {
+    let hooks_item = doc
+        .as_table_mut()
+        .entry("hooks")
+        .or_insert(Item::Table(Table::new()));
+    if !hooks_item.is_table() {
+        *hooks_item = Item::Table(Table::new());
+    }
+    let Some(hooks) = hooks_item.as_table_mut() else {
+        return;
+    };
+    let item = hooks
+        .entry(event)
+        .or_insert(Item::ArrayOfTables(ArrayOfTables::new()));
+    if !item.is_array_of_tables() {
+        *item = Item::ArrayOfTables(ArrayOfTables::new());
+    }
+    let groups = item.as_array_of_tables_mut().expect("hooks array");
+    let mut installed = false;
+    for group in groups.iter_mut() {
+        let matches = matcher
+            .map(|expected| group.get("matcher").and_then(Item::as_str) == Some(expected))
+            .unwrap_or_else(|| group.get("matcher").is_none());
+        if !matches {
+            continue;
+        }
+        if let Some(handlers) = group.get_mut("hooks").and_then(Item::as_array_mut) {
+            let mut kept = Array::new();
+            for value in handlers.iter() {
+                if !is_grok_hook_handler(value, script_path, legacy_script_path) {
+                    kept.push(value.clone());
+                }
+            }
+            if !installed {
+                kept.push(grok_handler_table(&grok_hook_command(
+                    state,
+                    script_path,
+                    signal_path,
+                )));
+                installed = true;
+            }
+            *handlers = kept;
+        }
+    }
+    if !installed {
+        let mut group = Table::new();
+        if let Some(matcher) = matcher {
+            group.insert("matcher", Item::Value(TomlValue::from(matcher)));
+        }
+        let mut handlers = Array::new();
+        handlers.push(grok_handler_table(&grok_hook_command(
+            state,
+            script_path,
+            signal_path,
+        )));
+        group.insert("hooks", Item::Value(TomlValue::Array(handlers)));
+        groups.push(group);
+    }
+}
+
+fn atomic_write_toml(path: &Path, doc: &Document) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Grok config path has no parent directory".to_string())?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let original_permissions = fs::metadata(path)
+        .ok()
+        .map(|metadata| metadata.permissions());
+    if path.exists() {
+        let backup = path.with_extension("toml.bak");
+        fs::copy(path, backup).map_err(|e| format!("Failed to back up Grok config: {e}"))?;
+    }
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("config.toml");
+    let temp = parent.join(format!(
+        ".{file_name}.viewer-{}-{}.tmp",
+        std::process::id(),
+        current_timestamp_ms()
+    ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(|e| format!("Failed to create Grok config temp file: {e}"))?;
+    let write_result = file
+        .write_all(doc.to_string().as_bytes())
+        .and_then(|_| file.sync_all());
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temp);
+        return Err(format!("Failed to write Grok config: {error}"));
+    }
+    drop(file);
+    if let Some(permissions) = original_permissions {
+        fs::set_permissions(&temp, permissions)
+            .map_err(|e| format!("Failed to preserve Grok config permissions: {e}"))?;
+    }
+
+    if let Err(first_error) = fs::rename(&temp, path) {
+        // std::fs::rename does not replace an existing destination on Windows.
+        let replacement_backup = parent.join(format!(
+            ".{file_name}.viewer-{}-{}.bak",
+            std::process::id(),
+            current_timestamp_ms()
+        ));
+        if !path.exists() || fs::rename(path, &replacement_backup).is_err() {
+            let _ = fs::remove_file(&temp);
+            return Err(format!("Failed to replace Grok config: {first_error}"));
+        }
+        if let Err(error) = fs::rename(&temp, path) {
+            let _ = fs::rename(&replacement_backup, path);
+            let _ = fs::remove_file(&temp);
+            return Err(format!("Failed to install Grok config: {error}"));
+        }
+        let _ = fs::remove_file(replacement_backup);
+    }
+    if let Ok(directory) = File::open(parent) {
+        let _ = directory.sync_all();
+    }
+    Ok(())
+}
+
+fn install_grok_turn_hooks(
+    path: &Path,
+    script_path: &Path,
+    signal_path: &Path,
+) -> Result<(), String> {
+    let _guard = grok_config_lock()
+        .lock()
+        .map_err(|error| format!("Failed to lock Grok config: {error}"))?;
+    let legacy = legacy_hook_script_path()?;
+    for attempt in 0..2 {
+        let source = read_toml_source(path, "Grok config.toml")?;
+        let mut doc = source
+            .parse::<Document>()
+            .map_err(|e| format!("Grok config.toml is not valid TOML: {e}"))?;
+        for (event, state, matcher) in GROK_TURN_HOOKS {
+            merge_grok_hook(
+                &mut doc,
+                event,
+                state,
+                matcher,
+                script_path,
+                &legacy,
+                signal_path,
+            );
+        }
+        if read_toml_source(path, "Grok config.toml")? != source {
+            if attempt == 0 {
+                continue;
+            }
+            return Err("Grok config changed while installing hooks; try again".to_string());
+        }
+        return atomic_write_toml(path, &doc);
+    }
+    unreachable!()
+}
+
+fn has_grok_turn_hook(
+    doc: &Document,
+    event: &str,
+    state: &str,
+    matcher: Option<&str>,
+    script_path: &Path,
+    signal_path: &Path,
+) -> bool {
+    let Some(groups) = doc
+        .as_table()
+        .get("hooks")
+        .and_then(Item::as_table)
+        .and_then(|hooks| hooks.get(event))
+        .and_then(Item::as_array_of_tables)
+    else {
+        return false;
+    };
+    let expected = grok_hook_command(state, script_path, signal_path);
+    groups.iter().any(|group| {
+        let matcher_matches = matcher
+            .map(|expected| group.get("matcher").and_then(Item::as_str) == Some(expected))
+            .unwrap_or_else(|| group.get("matcher").is_none());
+        matcher_matches
+            && group
+                .get("hooks")
+                .and_then(Item::as_array)
+                .is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item.as_inline_table()
+                            .and_then(|table| table.get("command"))
+                            .and_then(TomlValue::as_str)
+                            == Some(expected.as_str())
+                    })
+                })
+    })
+}
+
+fn collect_grok_hooks(
+    doc: &Document,
+    script_path: &Path,
+    legacy_script_path: &Path,
+) -> Vec<TurnHookEntry> {
+    let mut entries = Vec::new();
+    let Some(hooks) = doc.as_table().get("hooks").and_then(Item::as_table) else {
+        return entries;
+    };
+    for (event, item) in hooks.iter() {
+        let Some(groups) = item.as_array_of_tables() else {
+            continue;
+        };
+        for group in groups.iter() {
+            let matcher = group
+                .get("matcher")
+                .and_then(Item::as_str)
+                .map(str::to_string);
+            let Some(items) = group.get("hooks").and_then(Item::as_array) else {
+                continue;
+            };
+            for value in items.iter() {
+                let Some(table) = value.as_inline_table() else {
+                    continue;
+                };
+                let managed = is_grok_hook_handler(value, script_path, legacy_script_path);
+                if !managed {
+                    // Grok config.toml may contain API keys and arbitrary user
+                    // commands; never surface those values in the UI inventory.
+                    continue;
+                }
+                entries.push(TurnHookEntry {
+                    event: event.to_string(),
+                    category: None,
+                    matcher: matcher.clone(),
+                    hook_type: table
+                        .get("type")
+                        .and_then(TomlValue::as_str)
+                        .unwrap_or("hook")
+                        .to_string(),
+                    detail: "Managed status hook".to_string(),
+                    managed,
+                });
+            }
+        }
+    }
+    sort_hook_entries(&mut entries);
+    entries
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -845,6 +1254,9 @@ mod tests {
             path: path.to_string(),
             state: state.to_string(),
             source: "hook".to_string(),
+            prompt_id: None,
+            session_id: None,
+            cwd: None,
         }
     }
 
@@ -1150,6 +1562,150 @@ mod tests {
             .iter()
             .any(|entry| entry.category.as_deref() == Some("other-hook") && !entry.managed));
         assert_eq!(entries.iter().filter(|entry| entry.managed).count(), 2);
+    }
+
+    #[test]
+    fn grok_hook_merge_is_idempotent_and_preserves_unrelated_toml() {
+        let script = Path::new("/app/turn-signal-hook.cjs");
+        let legacy = Path::new("/app/claude-turn-signal-hook.cjs");
+        let signal = Path::new("/app/turn-signals.jsonl");
+        let source = r#"# Keep this comment and unrelated settings.
+[model]
+name = "grok-4"
+provider = "custom"
+
+[[hooks.Stop]]
+hooks = [{ type = "command", command = "echo keep-this-handler" }]
+"#;
+        let mut config = source.parse::<Document>().unwrap();
+        for (event, state, matcher) in GROK_TURN_HOOKS {
+            merge_grok_hook(&mut config, event, state, matcher, script, legacy, signal);
+        }
+        let first = config.to_string();
+        let mut second_config = first.parse::<Document>().unwrap();
+        for (event, state, matcher) in GROK_TURN_HOOKS {
+            merge_grok_hook(
+                &mut second_config,
+                event,
+                state,
+                matcher,
+                script,
+                legacy,
+                signal,
+            );
+        }
+        assert_eq!(first, second_config.to_string());
+        assert!(first.contains("Keep this comment"));
+        assert!(first.contains("name = \"grok-4\""));
+        assert!(first.contains("echo keep-this-handler"));
+        for (event, state, matcher) in GROK_TURN_HOOKS {
+            assert!(has_grok_turn_hook(
+                &second_config,
+                event,
+                state,
+                matcher,
+                script,
+                signal,
+            ));
+        }
+    }
+
+    #[test]
+    fn grok_hook_merge_initializes_an_empty_config_without_panicking() {
+        let script = Path::new("/app/turn-signal-hook.cjs");
+        let legacy = Path::new("/app/claude-turn-signal-hook.cjs");
+        let signal = Path::new("/app/turn-signals.jsonl");
+        let mut config = Document::new();
+
+        for (event, state, matcher) in GROK_TURN_HOOKS {
+            merge_grok_hook(&mut config, event, state, matcher, script, legacy, signal);
+        }
+
+        for (event, state, matcher) in GROK_TURN_HOOKS {
+            assert!(has_grok_turn_hook(
+                &config, event, state, matcher, script, signal,
+            ));
+        }
+    }
+
+    #[test]
+    fn grok_hook_inventory_hides_external_commands() {
+        let script = Path::new("/app/turn-signal-hook.cjs");
+        let legacy = Path::new("/app/claude-turn-signal-hook.cjs");
+        let signal = Path::new("/app/turn-signals.jsonl");
+        let mut config = Document::new();
+        config["hooks"] = Item::Table(Table::new());
+        merge_grok_hook(
+            &mut config,
+            "Stop",
+            "completed",
+            None,
+            script,
+            legacy,
+            signal,
+        );
+        let stop = config["hooks"]["Stop"].as_array_of_tables_mut().unwrap();
+        let handlers = stop
+            .iter_mut()
+            .next()
+            .unwrap()
+            .get_mut("hooks")
+            .unwrap()
+            .as_array_mut()
+            .unwrap();
+        handlers.push(grok_handler_table("node /tmp/unrelated-user-command"));
+
+        let entries = collect_grok_hooks(&config, script, legacy);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].managed);
+        assert_eq!(entries[0].detail, "Managed status hook");
+        assert!(!entries
+            .iter()
+            .any(|entry| entry.detail.contains("unrelated")));
+    }
+
+    #[test]
+    fn grok_hook_status_treats_missing_hooks_as_not_installed() {
+        let config = "[model]\nname = \"grok-4\"\n".parse::<Document>().unwrap();
+        let script = Path::new("/app/turn-signal-hook.cjs");
+        let signal = Path::new("/app/turn-signals.jsonl");
+
+        assert!(!has_grok_turn_hook(
+            &config,
+            "Stop",
+            "completed",
+            None,
+            script,
+            signal,
+        ));
+        assert!(collect_grok_hooks(
+            &config,
+            script,
+            Path::new("/app/claude-turn-signal-hook.cjs"),
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn atomic_toml_write_creates_a_backup_before_replacement() {
+        let path = std::env::temp_dir().join(format!(
+            "cc-sessions-viewer-grok-config-{}-{}.toml",
+            std::process::id(),
+            current_timestamp_ms()
+        ));
+        let backup = path.with_extension("toml.bak");
+        fs::write(&path, "# original\n[model]\nname = \"grok-4\"\n").unwrap();
+        let mut doc = Document::new();
+        doc["model"] = Item::Table(Table::new());
+        doc["model"]["name"] = Item::Value(TomlValue::from("grok-4.1"));
+        atomic_write_toml(&path, &doc).unwrap();
+        assert_eq!(
+            fs::read_to_string(&backup).unwrap(),
+            "# original\n[model]\nname = \"grok-4\"\n"
+        );
+        assert!(fs::read_to_string(&path).unwrap().contains("grok-4.1"));
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(backup);
     }
 
     #[test]

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from 'vue'
-import type { Agent, TrashItem } from '../types'
+import type { TrashItem } from '../types'
 import { formatSize, formatTime, highlightSegments, shortName } from '../format'
 import { t } from '../i18n'
+import { agentLabel } from '../agentMeta'
 import {
   IconTrashOpen,
   IconDeleteLine,
@@ -78,10 +79,6 @@ function titleSegs(title: string) {
 function projSegs(projectLabel: string) {
   return highlightSegments(shortName(projectLabel), trashSearch.value)
 }
-function agentLabel(a: Agent): string {
-  return a === 'codex' ? 'Codex' : a === 'agy' ? 'agy' : a === 'opencode' ? 'opencode' : 'Claude'
-}
-
 // hover 跟随浮块：与会话列表一致的滑块交互。鼠标移到某张卡片上，把它的
 // offsetTop / offsetHeight 写进 --spot-y / --spot-h 驱动 .list-spotlight；
 // 滚动期间临时隐藏，停止 140ms 后恢复，避免内容在静止光标下移动时抖动。

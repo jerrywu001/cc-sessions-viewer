@@ -52,6 +52,8 @@ function emptyStats(): AgentStats {
       total: 0,
     },
     costUsd: 0,
+    unpricedCallCount: 0,
+    estimatedCallCount: 0,
     cacheHitRate: 0,
     projects: [],
     dailyActivity: [],

@@ -34,6 +34,11 @@ export interface BackgroundMedia {
   path: string
 }
 
+export interface BackgroundMediaExport {
+  count: number
+  directory: string
+}
+
 export interface CodexVisibilityOptions {
   includeCodexInternal?: boolean
   includeCodexArchived?: boolean
@@ -56,10 +61,14 @@ export const setTitlebarTheme = (theme: 'dark' | 'light' | null) =>
 export const windowHideToTray = () => invoke<void>('window_hide_to_tray')
 export const windowExitApp = () => invoke<void>('window_exit_app')
 export const cleanupRuntimeChildren = () => invoke<void>('cleanup_runtime_children')
+/** 清除实时模型价格缓存，并在后端后台重新拉取最新价格。 */
+export const resetPricingCache = () => invoke<void>('reset_pricing_cache')
 
 /** 已导入应用数据目录的图片 / MP4 背景素材。 */
 export const backgroundMediaDirectory = () => invoke<string>('background_media_directory')
 export const listBackgroundMedia = () => invoke<BackgroundMedia[]>('list_background_media')
+export const exportBackgroundMedia = (destinationPath: string) =>
+  invoke<BackgroundMediaExport>('export_background_media', { destinationPath })
 export const importBackgroundMedia = (sourcePath: string) =>
   invoke<BackgroundMedia>('import_background_media', { sourcePath })
 export const deleteBackgroundMedia = (id: string) =>
@@ -273,6 +282,7 @@ export type TurnHookInstallResult = {
   claudeSettingsPath: string
   codexHooksPath: string
   agyHooksPath: string
+  grokConfigPath: string
 }
 
 export type TurnHookEventStatus = {
@@ -301,6 +311,7 @@ export type TurnHookStatus = {
   claude: TurnHookAgentStatus
   codex: TurnHookAgentStatus
   agy: TurnHookAgentStatus
+  grok: TurnHookAgentStatus
 }
 
 export const installTurnHooks = () => invoke<TurnHookInstallResult>('install_turn_hooks')
@@ -561,6 +572,10 @@ export const agentChatSlashCommands = (agent: Agent, cwd: string) =>
 export const reclaudeInfo = () => invoke<ReclaudeInfo>('reclaude_info')
 
 export const trayQuickStats = () => invoke<TrayStats>('tray_quick_stats')
+
+/** Keep native tray statistics aligned with the visible agent setting. */
+export const setTrayEnabledAgents = (agents: Agent[]) =>
+  invoke<void>('set_tray_enabled_agents', { agents })
 
 /** 账号额度（5 小时 / 周 / 各模型分项）—— 走 OAuth 用量接口，每窗口含精确利用率 + 重置时间。 */
 export const accountUsage = (force = false) => invoke<AccountUsage>('account_usage', { force })

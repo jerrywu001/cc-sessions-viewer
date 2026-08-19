@@ -34,6 +34,21 @@ describe('WelcomeView', () => {
     expect(wrapper.find('.welcome-hint').text()).toContain('Select a Claude project')
   })
 
+  it('uses the Grok Build label instead of falling back to Claude', () => {
+    const wrapper = mount(WelcomeView, {
+      props: { agent: 'grok', projects: [] },
+      global: { directives: { tooltip: vTooltip } },
+    })
+    expect(wrapper.find('.welcome-hint').text()).toContain('Select a Grok Build project')
+  })
+
+  it('renders the current agent in the global search label', () => {
+    setLang('zh')
+    const wrapper = factory()
+
+    expect(wrapper.find('.welcome-search-label').text()).toBe('搜索 Claude 会话')
+  })
+
   it('lists recently opened projects most-recent first', () => {
     recents.value = { claude: ['b', 'a'] }
     const wrapper = factory([

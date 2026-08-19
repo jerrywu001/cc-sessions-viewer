@@ -8,6 +8,7 @@
 // daily timeline 等高开销维度。大约比 stream::run_worker 快 2–3×。
 
 use std::collections::{HashMap, HashSet};
+use std::sync::{OnceLock, RwLock};
 
 use chrono::{Datelike, Duration as CDuration, Local, TimeZone};
 
@@ -18,6 +19,37 @@ struct Boundaries {
     today_ms: u64,
     week_ms: u64,
     month_ms: u64,
+}
+
+const TRAY_AGENT_NAMES: [&str; 4] = ["claude", "codex", "grok", "opencode"];
+static ENABLED_TRAY_AGENTS: OnceLock<RwLock<HashSet<String>>> = OnceLock::new();
+
+fn enabled_tray_agents() -> &'static RwLock<HashSet<String>> {
+    ENABLED_TRAY_AGENTS
+        .get_or_init(|| RwLock::new(TRAY_AGENT_NAMES.into_iter().map(str::to_owned).collect()))
+}
+
+/// Sync the user-facing agent visibility setting into the native tray worker.
+/// Grok/Claude/Codex/opencode are supported by tray stats; agy is intentionally
+/// ignored because it has no usage statistics source.
+pub fn set_enabled_agents(agents: &[String]) {
+    let allowed: HashSet<&str> = TRAY_AGENT_NAMES.into_iter().collect();
+    let next: HashSet<String> = agents
+        .iter()
+        .map(String::as_str)
+        .filter(|agent| allowed.contains(agent))
+        .map(str::to_owned)
+        .collect();
+    if let Ok(mut current) = enabled_tray_agents().write() {
+        *current = next;
+    }
+}
+
+fn is_enabled(agent: &str) -> bool {
+    enabled_tray_agents()
+        .read()
+        .map(|agents| agents.contains(agent))
+        .unwrap_or(true)
 }
 
 fn compute_boundaries() -> Result<Boundaries, String> {
@@ -45,12 +77,53 @@ fn compute_boundaries() -> Result<Boundaries, String> {
 struct AgentAcc {
     today_tokens: u64,
     today_cost: f64,
+    today_unpriced_calls: u64,
+    today_estimated_calls: u64,
     week_tokens: u64,
     week_cost: f64,
+    week_unpriced_calls: u64,
+    week_estimated_calls: u64,
     month_tokens: u64,
     month_cost: f64,
+    month_unpriced_calls: u64,
+    month_estimated_calls: u64,
     session_count: usize,
     seen_ids: HashSet<String>,
+}
+
+fn append_agent_summary(result: &mut TrayStats, agent_name: &str, acc: AgentAcc) {
+    // Visibility is controlled by the Settings agent toggles. Keep an enabled
+    // agent in the tray even when it has no activity in the current 30-day
+    // window, otherwise an installed but idle OpenCode is indistinguishable
+    // from a disabled one. agy is excluded by TRAY_AGENT_NAMES.
+    result.total_today_tokens += acc.today_tokens;
+    result.total_today_cost += acc.today_cost;
+    result.total_today_unpriced_calls += acc.today_unpriced_calls;
+    result.total_today_estimated_calls += acc.today_estimated_calls;
+    result.total_week_tokens += acc.week_tokens;
+    result.total_week_cost += acc.week_cost;
+    result.total_week_unpriced_calls += acc.week_unpriced_calls;
+    result.total_week_estimated_calls += acc.week_estimated_calls;
+    result.total_month_tokens += acc.month_tokens;
+    result.total_month_cost += acc.month_cost;
+    result.total_month_unpriced_calls += acc.month_unpriced_calls;
+    result.total_month_estimated_calls += acc.month_estimated_calls;
+    result.agents.push(TrayAgentSummary {
+        agent: agent_name.to_string(),
+        today_tokens: acc.today_tokens,
+        today_cost: acc.today_cost,
+        today_unpriced_calls: acc.today_unpriced_calls,
+        today_estimated_calls: acc.today_estimated_calls,
+        week_tokens: acc.week_tokens,
+        week_cost: acc.week_cost,
+        week_unpriced_calls: acc.week_unpriced_calls,
+        week_estimated_calls: acc.week_estimated_calls,
+        month_tokens: acc.month_tokens,
+        month_cost: acc.month_cost,
+        month_unpriced_calls: acc.month_unpriced_calls,
+        month_estimated_calls: acc.month_estimated_calls,
+        session_count: acc.session_count,
+    });
 }
 
 impl Default for AgentAcc {
@@ -58,10 +131,16 @@ impl Default for AgentAcc {
         Self {
             today_tokens: 0,
             today_cost: 0.0,
+            today_unpriced_calls: 0,
+            today_estimated_calls: 0,
             week_tokens: 0,
             week_cost: 0.0,
+            week_unpriced_calls: 0,
+            week_estimated_calls: 0,
             month_tokens: 0,
             month_cost: 0.0,
+            month_unpriced_calls: 0,
+            month_estimated_calls: 0,
             session_count: 0,
             seen_ids: HashSet::new(),
         }
@@ -72,10 +151,13 @@ pub fn quick_stats() -> Result<TrayStats, String> {
     let bounds = compute_boundaries()?;
     let earliest = bounds.month_ms.min(bounds.week_ms);
 
-    let agent_names: &[&str] = &["claude", "codex", "opencode"];
+    let agent_names: Vec<&str> = TRAY_AGENT_NAMES
+        .into_iter()
+        .filter(|agent| is_enabled(agent))
+        .collect();
     let mut accs: HashMap<&str, AgentAcc> = HashMap::new();
 
-    for &agent_name in agent_names {
+    for &agent_name in &agent_names {
         let src = match agents::source(agent_name) {
             Ok(s) => s,
             Err(_) => continue,
@@ -109,6 +191,9 @@ pub fn quick_stats() -> Result<TrayStats, String> {
                         continue;
                     }
                     for call in &turn.calls {
+                        if call.call_count == 0 {
+                            continue;
+                        }
                         if let Some(id) = &call.message_id {
                             if !acc.seen_ids.insert(id.clone()) {
                                 continue;
@@ -117,17 +202,36 @@ pub fn quick_stats() -> Result<TrayStats, String> {
                         has_data = true;
                         let tokens = call.usage.total;
                         let cost = call.cost_usd;
+                        let call_weight = call.call_count;
                         if ts >= bounds.month_ms {
                             acc.month_tokens += tokens;
                             acc.month_cost += cost;
+                            if call.pricing_missing {
+                                acc.month_unpriced_calls += call_weight;
+                            }
+                            if call.pricing_estimated {
+                                acc.month_estimated_calls += call_weight;
+                            }
                         }
                         if ts >= bounds.week_ms {
                             acc.week_tokens += tokens;
                             acc.week_cost += cost;
+                            if call.pricing_missing {
+                                acc.week_unpriced_calls += call_weight;
+                            }
+                            if call.pricing_estimated {
+                                acc.week_estimated_calls += call_weight;
+                            }
                         }
                         if ts >= bounds.today_ms {
                             acc.today_tokens += tokens;
                             acc.today_cost += cost;
+                            if call.pricing_missing {
+                                acc.today_unpriced_calls += call_weight;
+                            }
+                            if call.pricing_estimated {
+                                acc.today_estimated_calls += call_weight;
+                            }
                         }
                     }
                 }
@@ -139,31 +243,48 @@ pub fn quick_stats() -> Result<TrayStats, String> {
     }
 
     let mut result = TrayStats::default();
-    for &agent_name in agent_names {
+    for &agent_name in &agent_names {
         let acc = accs.remove(agent_name).unwrap_or_default();
-        if acc.session_count == 0
-            && acc.today_tokens == 0
-            && acc.week_tokens == 0
-            && acc.month_tokens == 0
-        {
-            continue;
-        }
-        result.total_today_tokens += acc.today_tokens;
-        result.total_today_cost += acc.today_cost;
-        result.total_week_tokens += acc.week_tokens;
-        result.total_week_cost += acc.week_cost;
-        result.total_month_tokens += acc.month_tokens;
-        result.total_month_cost += acc.month_cost;
-        result.agents.push(TrayAgentSummary {
-            agent: agent_name.to_string(),
-            today_tokens: acc.today_tokens,
-            today_cost: acc.today_cost,
-            week_tokens: acc.week_tokens,
-            week_cost: acc.week_cost,
-            month_tokens: acc.month_tokens,
-            month_cost: acc.month_cost,
-            session_count: acc.session_count,
-        });
+        append_agent_summary(&mut result, agent_name, acc);
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_visibility_accepts_supported_agents_and_excludes_agy() {
+        set_enabled_agents(&[
+            "claude".to_string(),
+            "grok".to_string(),
+            "agy".to_string(),
+            "unknown".to_string(),
+        ]);
+        assert!(is_enabled("claude"));
+        assert!(is_enabled("grok"));
+        assert!(!is_enabled("codex"));
+        assert!(!is_enabled("opencode"));
+        // agy is not a tray-stat agent even if the frontend sends it.
+        assert!(!is_enabled("agy"));
+
+        // Restore the default for other tests and for in-process test runners.
+        set_enabled_agents(
+            &TRAY_AGENT_NAMES
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn enabled_opencode_is_retained_when_the_current_window_is_empty() {
+        let mut result = TrayStats::default();
+        append_agent_summary(&mut result, "opencode", AgentAcc::default());
+
+        assert_eq!(result.agents.len(), 1);
+        assert_eq!(result.agents[0].agent, "opencode");
+        assert_eq!(result.agents[0].session_count, 0);
+    }
 }

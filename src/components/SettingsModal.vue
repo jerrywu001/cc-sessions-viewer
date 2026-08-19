@@ -2,8 +2,8 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
-import type { Agent } from '../types'
 import { t } from '../i18n'
+import { agentLabel } from '../agentMeta'
 import {
   codexShowArchivedSessions,
   codexShowInternalSessions,
@@ -67,6 +67,7 @@ import {
   IconSliders,
   IconKeyboard,
   IconDownload,
+  IconUpload,
   IconTerminal,
   IconWebhook,
   IconStar,
@@ -189,11 +190,13 @@ const shortcutGroups = [
   },
 ]
 
-const agentLabel = (a: Agent) =>
-  a === 'codex' ? 'Codex' : a === 'agy' ? 'Antigravity CLI' : a === 'opencode' ? 'opencode' : 'Claude'
-
 const props = defineProps<{ initialTab?: SettingsTab }>()
-const emit = defineEmits<{ close: []; resetSettings: []; clearTabs: [] }>()
+const emit = defineEmits<{
+  close: []
+  resetSettings: []
+  clearTabs: []
+  notify: [message: string, error?: boolean]
+}>()
 
 function readLastSettingsTab(): SettingsTab {
   const value = localStorage.getItem(SETTINGS_ACTIVE_TAB_KEY)
@@ -231,6 +234,11 @@ const turnHookAgents = computed(() => {
       id: 'agy' as const,
       label: 'AGY · Antigravity CLI',
       events: ['PreInvocation', 'Stop'],
+    },
+    {
+      id: 'grok' as const,
+      label: 'Grok Build',
+      events: ['UserPromptSubmit', 'Stop', 'StopFailure', 'StopCancelled', 'Notification:idle_prompt', 'Notification:permission_prompt'],
     },
   ]
   return definitions.map((definition) => {
@@ -483,8 +491,10 @@ function onBackgroundBorderOpacitySlider(e: Event) {
 }
 
 const backgroundImageError = ref('')
+const backgroundMediaSuccess = ref('')
 const backgroundMedia = ref<api.BackgroundMedia[]>([])
 const backgroundMediaLoading = ref(false)
+const backgroundMediaExporting = ref(false)
 const backgroundImageUrl = computed(() =>
   backgroundImagePath.value ? convertFileSrc(backgroundImagePath.value) : '',
 )
@@ -509,6 +519,7 @@ async function refreshBackgroundMedia() {
 
 async function chooseBackgroundImage() {
   backgroundImageError.value = ''
+  backgroundMediaSuccess.value = ''
   try {
     const selected = await openDialog({
       multiple: false,
@@ -526,6 +537,7 @@ async function chooseBackgroundImage() {
 
 async function openBackgroundMediaDirectory() {
   backgroundImageError.value = ''
+  backgroundMediaSuccess.value = ''
   try {
     await api.openPathExternal(await api.backgroundMediaDirectory())
   } catch (error) {
@@ -533,18 +545,42 @@ async function openBackgroundMediaDirectory() {
   }
 }
 
+async function exportBackgroundMedia() {
+  if (backgroundMediaExporting.value || !backgroundMedia.value.length) return
+  backgroundImageError.value = ''
+  backgroundMediaSuccess.value = ''
+  try {
+    const selected = await openDialog({ directory: true, multiple: false })
+    const destination = typeof selected === 'string' ? selected : selected?.[0]
+    if (!destination) return
+    backgroundMediaExporting.value = true
+    const result = await api.exportBackgroundMedia(destination)
+    const message = t('settings.backgroundImage.exportSuccess', { n: result.count })
+    backgroundMediaSuccess.value = message
+    emit('notify', message)
+    api.openPathExternal(destination).catch(() => {})
+  } catch (error) {
+    backgroundImageError.value = t('settings.backgroundImage.exportFail', { e: String(error) })
+  } finally {
+    backgroundMediaExporting.value = false
+  }
+}
+
 function removeBackgroundImage() {
   backgroundImageError.value = ''
+  backgroundMediaSuccess.value = ''
   setBackgroundImagePath(null)
 }
 
 function selectBackgroundMedia(media: api.BackgroundMedia) {
   backgroundImageError.value = ''
+  backgroundMediaSuccess.value = ''
   setBackgroundImagePath(media.path)
 }
 
 async function deleteBackgroundMedia(media: api.BackgroundMedia) {
   backgroundImageError.value = ''
+  backgroundMediaSuccess.value = ''
   try {
     await api.deleteBackgroundMedia(media.id)
     backgroundMedia.value = backgroundMedia.value.filter((item) => item.id !== media.id)
@@ -621,6 +657,12 @@ async function installTurnHooks() {
   } finally {
     installingTurnHooks.value = false
   }
+}
+
+async function refreshTurnHooks() {
+  if (installingTurnHooks.value || turnHookStatusLoading.value) return
+  turnHooksMsg.value = ''
+  await refreshTurnHookStatus()
 }
 </script>
 
@@ -962,6 +1004,18 @@ async function installTurnHooks() {
               <div class="set-background-library-head">
                 <span class="set-background-library-title">{{ t('settings.backgroundImage.library') }}</span>
                 <button
+                  class="set-background-library-export"
+                  type="button"
+                  data-background-media-export
+                  :disabled="backgroundMediaExporting || !backgroundMedia.length"
+                  :aria-label="t('settings.backgroundImage.export')"
+                  v-tooltip="t('settings.backgroundImage.export')"
+                  @click="exportBackgroundMedia"
+                >
+                  <IconUpload />
+                  <span>{{ t('settings.backgroundImage.export') }}</span>
+                </button>
+                <button
                   class="set-background-library-open"
                   type="button"
                   data-background-media-open-folder
@@ -1031,6 +1085,7 @@ async function installTurnHooks() {
               <div v-else class="set-background-library-empty">{{ t('settings.backgroundImage.empty') }}</div>
             </div>
             <p v-if="backgroundImageError" class="set-background-error">{{ backgroundImageError }}</p>
+            <p v-if="backgroundMediaSuccess" class="set-background-success">{{ backgroundMediaSuccess }}</p>
           </div>
         </template>
 
@@ -1120,20 +1175,20 @@ async function installTurnHooks() {
               <p class="set-group-desc">{{ t('settings.launchArgsDesc') }}</p>
             </div>
             <div class="set-launch-args">
-              <div class="set-launch-args-row" v-for="a in (['claude', 'codex', 'agy', 'opencode'] as const)" :key="a">
+              <div class="set-launch-args-row" v-for="a in (['claude', 'codex', 'grok', 'agy', 'opencode'] as const)" :key="a">
                 <component :is="agentIcons[a]" class="set-launch-args-icon" />
                 <input
                   class="set-launch-args-input"
                   :value="launchArgs[a]"
                   @input="setLaunchArgs(a, ($event.target as HTMLInputElement).value)"
-                  :placeholder="{ claude: '--dangerously-skip-permissions', codex: '--yolo', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a]"
+                  :placeholder="{ claude: '--dangerously-skip-permissions', codex: '--yolo', grok: '--yolo', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a]"
                   spellcheck="false"
                 />
                 <button
                   v-if="!launchArgs[a]"
                   class="set-launch-args-fill"
                   v-tooltip="t('settings.launchArgsFill')"
-                  @click="setLaunchArgs(a, { claude: '--dangerously-skip-permissions', codex: '--yolo', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a])"
+                  @click="setLaunchArgs(a, { claude: '--dangerously-skip-permissions', codex: '--yolo', grok: '--yolo', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a])"
                 >↵</button>
               </div>
             </div>
@@ -1262,9 +1317,22 @@ async function installTurnHooks() {
                 <div class="set-hook-list-title">{{ t('settings.hooks.configuredTitle') }}</div>
                 <p class="set-hook-list-desc">{{ t('settings.hooks.configuredDesc') }}</p>
               </div>
-              <span class="set-hook-file-count">
-                {{ t('settings.hooks.filesCount', { n: configuredHookFiles.length }) }}
-              </span>
+              <div class="set-hook-list-actions">
+                <span class="set-hook-file-count">
+                  {{ t('settings.hooks.filesCount', { n: configuredHookFiles.length }) }}
+                </span>
+                <button
+                  type="button"
+                  class="set-hook-list-refresh"
+                  :class="{ spinning: turnHookStatusLoading }"
+                  :disabled="turnHookStatusLoading || installingTurnHooks"
+                  :aria-label="t('settings.hooks.refresh')"
+                  v-tooltip="t('settings.hooks.refresh')"
+                  @click="refreshTurnHooks"
+                >
+                  <IconRefresh />
+                </button>
+              </div>
             </div>
             <p v-if="hookOpenError" class="set-hook-list-error">{{ hookOpenError }}</p>
           </div>

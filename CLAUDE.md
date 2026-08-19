@@ -5,12 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this app is
 
 A macOS Tauri 2 desktop app (Vue 3 + Rust) for browsing, viewing, and trashing
-local session transcripts from coding agent CLIs — currently **Claude Code**,
-**Codex**, and **Antigravity CLI (agy)**. Each CLI stores JSONL transcripts in
-its own on-disk layout; this app normalizes them all into the same project →
-sessions → chat UI, plus a soft-delete trash that survives across agents. The
-app is read-only against the original transcripts — deletion is a `move` into a
-trash dir, never `rm`.
+local session transcripts from coding agent CLIs — **Claude Code**, **Codex**,
+**Grok Build**, **Antigravity CLI (agy)**, and **opencode**. Each CLI stores
+JSONL transcripts in its own on-disk layout; this app normalizes them all into
+the same project → sessions → chat UI, plus a soft-delete trash that survives
+across agents. Grok supports local history and terminal workflows, but not GUI
+Chat. The app is read-only against original transcript contents; deletion is a
+move into the shared trash, never `rm`.
 
 ## Commands
 
@@ -66,7 +67,10 @@ src-tauri/src/
 └── agents/
     ├── mod.rs       // `SessionSource` trait + `source(agent)` dispatcher
     ├── claude.rs    // ClaudeSource impl  (~/.claude/projects/<dir>/...)
-    └── codex.rs     // CodexSource impl   (~/.codex/sessions/<YYYY>/...)
+    ├── codex.rs     // CodexSource impl   (~/.codex/sessions/<YYYY>/...)
+    ├── grok.rs      // GrokSource impl    ($GROK_HOME/sessions/<cwd>/<id>/...)
+    ├── agy.rs       // Antigravity CLI source
+    └── opencode.rs  // opencode source
 ```
 
 When adding a Tauri command, define it in `lib.rs`, register it in
@@ -83,7 +87,9 @@ trait defined in `agents/mod.rs`. Currently:
 | ------ | ------------------------------------------------------------------- | ------------------------------- |
 | Claude | `~/.claude/projects/<dir>/<sessionId>.jsonl`                        | by project directory            |
 | Codex  | `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl`                | by the `cwd` recorded *inside* each file |
+| Grok Build | `$GROK_HOME/sessions/<group>/<session-id>/updates.jsonl` (`$GROK_HOME` defaults to `~/.grok`) | by `summary.json.info.cwd` |
 | agy    | `~/.gemini/antigravity-cli/brain/<uuid>/.system_generated/logs/transcript.jsonl` | by `workspace` from `history.jsonl`; fallback: first tool_call path |
+| opencode | opencode local session storage | by source metadata |
 
 To add a new agent:
 
@@ -121,13 +127,24 @@ new agent just implements that and uses it inside its own `read_session`.
 
 ### Trash is shared across agents
 
-`trash.rs` (one shared module, not per-agent) moves the JSONL into
-`~/.claude/.session-viewer-trash/` with a sibling `<file>.meta` file describing
-original path, agent, project label, deletion timestamp, etc. The trash dir
-lives under `~/.claude` regardless of which agent the file came from — there
-is one trash, not N. Restore reads the `.meta` to recreate the original parent
-directory and move the file back. The only agent-specific bit is the display
-title in the trash list, which is delegated to `SessionSource::trash_title`.
+`trash.rs` (one shared module, not per-agent) moves a validated storage unit
+into `~/.claude/.session-viewer-trash/` with metadata describing its original
+path, agent, project label, deletion timestamp, and storage kind. Most agents
+use a JSONL file unit; Grok uses its complete session directory, with
+`updates.jsonl` as the display/read entry. The trash dir lives under `~/.claude`
+regardless of agent. Restore validates the destination and recreates its parent
+before moving the original file or directory back; it must never overwrite an
+existing session. The display title remains delegated to
+`SessionSource::trash_title`.
+
+### Worktrees
+
+The app-created Git worktrees under `.claude/worktrees/` are shared physical
+directories. Claude, Codex, and Grok Build group sessions by `cwd`, so the
+worktree UI includes all three and warns with their combined session count
+before deletion. Deletion clears only sessions tied to that cwd, then removes
+the Git worktree; it does not manage Grok's own worktree registry or delete
+`$GROK_HOME/worktrees.db`.
 
 ### Diff parsing in tool results
 

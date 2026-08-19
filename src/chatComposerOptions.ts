@@ -7,6 +7,7 @@
 //   自己按 ~/.claude/settings.json 的 ANTHROPIC_DEFAULT_*_MODEL 映射到用户当前配置的真实模型。
 
 import type { Agent } from './types'
+import { agentSupports } from './agentMeta'
 
 export interface ModelOption {
   /** 下发给 CLI 的完整 model id。 */
@@ -34,7 +35,7 @@ export interface ModelMenuOptions {
 
 /** 该 agent 是否支持 GUI chat。入口 v-if / quick-open 守卫统一用此函数。 */
 export function chatSupported(agent: Agent): boolean {
-  return agent === 'claude' || agent === 'codex'
+  return agentSupports(agent, 'guiChat')
 }
 
 /** 标准模型菜单（按 agent）。Claude 用官方完整 id；Codex 给一组常见 gpt-5.x。 */
@@ -75,6 +76,7 @@ export const CHAT_MODEL_MENU: Record<Agent, ModelMenuConfig> = {
   },
   agy: { unavailable: [], primary: [], more: [], showFastMode: false },
   opencode: { unavailable: [], primary: [], more: [], showFastMode: false },
+  grok: { unavailable: [], primary: [], more: [], showFastMode: false },
 }
 
 /** Claude 在 API-key / 第三方兼容端点下改走 alias，让本地 settings.json 模型映射接管。 */
@@ -189,6 +191,7 @@ export const CHAT_EFFORT_LEVELS: Record<Agent, string[]> = {
   codex: ['low', 'medium', 'high', 'xhigh'],
   agy: [],
   opencode: [],
+  grok: [],
 }
 
 /** Claude 多一档「ultracode」的模型（排在 max 之后）。 */

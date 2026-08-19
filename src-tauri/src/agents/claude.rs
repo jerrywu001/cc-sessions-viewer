@@ -456,12 +456,7 @@ fn last_context_usage(fp: &Path) -> UsageSummary {
 fn best_project_root(dir_name: &str, cwd: &str) -> String {
     let mut path = Path::new(cwd);
     loop {
-        let encoded = format!(
-            "-{}",
-            path.to_string_lossy()
-                .trim_start_matches('/')
-                .replace('/', "-")
-        );
+        let encoded = encode_project_path(path.to_string_lossy().as_ref());
         if encoded == dir_name {
             return path.to_string_lossy().into_owned();
         }
@@ -471,6 +466,27 @@ fn best_project_root(dir_name: &str, cwd: &str) -> String {
         }
     }
     cwd.to_string()
+}
+
+/// Claude Code's `~/.claude/projects` directory names replace path separators
+/// and Windows' drive-colon with `-` (for example `E--work-project`). Keep the
+/// conversion independent of the host OS so a stored Windows path is matched
+/// correctly, while preserving the existing Unix leading-slash behavior.
+fn encode_project_path(path: &str) -> String {
+    let path = path.trim_start_matches('/');
+    let has_windows_drive = path.as_bytes().get(1) == Some(&b':');
+    let encoded: String = path
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' => '-',
+            _ => ch,
+        })
+        .collect();
+    if has_windows_drive {
+        encoded
+    } else {
+        format!("-{encoded}")
+    }
 }
 
 fn last_cwd(fp: &Path) -> Option<String> {
@@ -2489,10 +2505,13 @@ fn read_turns(fp: &Path) -> Vec<Turn> {
             pricing::cost_usd(&model, &usage)
         };
         let call = CallRecord {
+            call_count: 1,
             model,
             message_id,
             usage,
             cost_usd: cost,
+            pricing_missing: false,
+            pricing_estimated: false,
             tools,
             bash_commands,
             mcp_servers,
@@ -3387,6 +3406,29 @@ mod tests {
         let projects = list_projects_in(&root).unwrap();
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].display_path, r#"D:\ZLSYSproject"#);
+    }
+
+    #[test]
+    fn best_project_root_walks_up_unix_paths() {
+        assert_eq!(
+            best_project_root(
+                "-Users-wuchao-apps-prompt-lab",
+                "/Users/wuchao/apps/prompt-lab/pipelines/ugc-talkinghead-shorts",
+            ),
+            "/Users/wuchao/apps/prompt-lab",
+        );
+    }
+
+    #[test]
+    fn encode_project_path_handles_windows_drive_and_separators() {
+        assert_eq!(
+            encode_project_path(r#"E:\super-shan\prompt-lab"#),
+            "E--super-shan-prompt-lab",
+        );
+        assert_eq!(
+            encode_project_path("/Users/wuchao/apps/prompt-lab"),
+            "-Users-wuchao-apps-prompt-lab",
+        );
     }
 
     #[test]

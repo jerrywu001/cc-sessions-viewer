@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch, defineAsyncComponent } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import type { Agent, Msg, SessionMeta, Block, ChatQuestionRequest } from '../types'
+import { agentLabel } from '../agentMeta'
 import { renderText, renderTextUncached, formatTime, formatElapsedSeconds, historicalMessageExecutionMs, isCaveatOnlyMsg, isAskUserQuestionInstructionOnlyMsg, parseSystemEvent, cleanMetaText, metaKindIsPre, parseMetaFields, parseTeammateMessage, parseFileRef } from '../format'
 import type { MetaField } from '../format'
 import { prettifyAndHighlightJson } from '../jsonHighlight'
@@ -840,9 +841,7 @@ watch(
 // 隐藏消息现由气泡下方的悬停操作行接管；右键恢复浏览器默认行为（选中复制等），
 // 不再弹自定义菜单。
 
-const assistantName = computed(() =>
-  props.agent === 'codex' ? 'Codex' : props.agent === 'agy' ? 'agy' : props.agent === 'opencode' ? 'opencode' : 'Claude',
-)
+const assistantName = computed(() => agentLabel(props.agent))
 
 function formatModelName(modelName: string): string {
   if (!modelName) return ''

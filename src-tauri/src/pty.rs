@@ -128,6 +128,14 @@ fn build_shell_command(
     const DEFAULT_SHELL: &str = "/bin/bash";
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| DEFAULT_SHELL.to_string());
+    let command = if command.program() == "grok" {
+        let grok = crate::util::home().join(".grok/bin/grok");
+        command
+            .clone()
+            .with_program(grok.to_string_lossy().into_owned())
+    } else {
+        command.clone()
+    };
     let cli = if use_reclaude {
         format!("'reclaude' {}", command.to_posix_shell())
     } else {
@@ -142,6 +150,17 @@ fn build_shell_command(
     cmd.arg(&inner);
     cmd.env("TERM", "xterm-256color");
     cmd.env_remove("npm_config_prefix");
+    let home = crate::util::home();
+    let grok_bin = home.join(".grok/bin");
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(grok_bin).chain(std::env::split_paths(&inherited_path)),
+    )
+    .map_err(|_| ())
+    .unwrap_or(inherited_path);
+    cmd.env("PATH", path);
+    cmd.env("HOME", &home);
+    cmd.env("GROK_HOME", home.join(".grok"));
     cmd.env("COLORTERM", "truecolor");
     cmd.env("COLORFGBG", color_scheme.colorfgbg());
     cmd.cwd(cwd);
@@ -190,8 +209,33 @@ fn build_interactive_shell(cwd: &str, color_scheme: PtyColorScheme) -> CommandBu
     let mut cmd = CommandBuilder::new(&shell);
     cmd.arg("-l");
     cmd.arg("-i");
+    // Login/interactive startup files are allowed to rewrite PATH. Re-enter a
+    // clean interactive shell after they finish so the managed Grok binary is
+    // still the first command resolution candidate. This does not freeze the
+    // rest of PATH, so pnpm/node changes from the user's shell remain visible.
+    cmd.arg("-c");
+    let home = crate::util::home();
+    let grok_bin = home.join(".grok/bin");
+    let grok = grok_bin.join("grok");
+    cmd.arg(format!(
+        "export PATH={}:$PATH; export HOME={}; export GROK_HOME={}; unset GROK_CLI_BASE_URL GROK_CHANNEL GROK_VERSION GROK_MINIMUM_VERSION GROK_MAXIMUM_VERSION GROK_REQUIRED_MINIMUM_VERSION GROK_REQUIRED_MAXIMUM_VERSION XAI_API_BASE_URL; function grok {{ env -u GROK_CLI_BASE_URL -u GROK_CHANNEL -u GROK_VERSION -u GROK_MINIMUM_VERSION -u GROK_MAXIMUM_VERSION -u GROK_REQUIRED_MINIMUM_VERSION -u GROK_REQUIRED_MAXIMUM_VERSION -u XAI_API_BASE_URL {} \"$@\"; }}; rehash 2>/dev/null; exec {} -i",
+        crate::agent_command::posix_quote(&grok_bin.to_string_lossy()),
+        crate::agent_command::posix_quote(&home.to_string_lossy()),
+        crate::agent_command::posix_quote(&home.join(".grok").to_string_lossy()),
+        crate::agent_command::posix_quote(&grok.to_string_lossy()),
+        crate::agent_command::posix_quote(&shell),
+    ));
     cmd.env("TERM", "xterm-256color");
     cmd.env_remove("npm_config_prefix");
+
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(grok_bin).chain(std::env::split_paths(&inherited_path)),
+    )
+    .unwrap_or(inherited_path);
+    cmd.env("PATH", path);
+    cmd.env("HOME", &home);
+    cmd.env("GROK_HOME", home.join(".grok"));
     cmd.env("COLORTERM", "truecolor");
     cmd.env("COLORFGBG", color_scheme.colorfgbg());
     cmd.cwd(cwd);

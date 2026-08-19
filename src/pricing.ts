@@ -82,7 +82,7 @@ export async function forceRefresh(): Promise<number> {
  *  价格字段都是 $/token（不是 $/Mtok），与后端 ModelCosts 同形；UI 乘 1e6 再展示。 */
 export interface PricingEntry {
   name: string
-  family: 'claude' | 'codex' | 'agy' | 'opencode'
+  family: 'claude' | 'codex' | 'grok' | 'agy' | 'opencode'
   input: number
   output: number
   cacheWrite: number

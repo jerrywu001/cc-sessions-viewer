@@ -11,8 +11,13 @@
 use crate::types::UsageSummary;
 
 /// 一次 assistant API 调用。把 JSONL 里一条 assistant 消息抽成结构化记录。
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Debug)]
 pub struct CallRecord {
+    /// 这条记录代表的真实 API 调用次数。大多数 agent 一条 assistant message 就是
+    /// 一次调用，因此使用 `Default` 的 1 即可；Grok 的
+    /// `turn_completed` 是累计汇总，需显式填入 `modelCalls` 的增量。0 仅用于不代表
+    /// 模型调用、只承载工具分析的合成记录。
+    pub call_count: u64,
     /// 模型名（原始串；pricing::canonical 负责归一）。
     pub model: String,
     /// 上游 API 给的消息 id（Claude 是 `message.id` = "msg_..."）。
@@ -25,6 +30,11 @@ pub struct CallRecord {
     pub usage: UsageSummary,
     /// 这次调用花了多少美元（pricing::cost_usd 算好后填）。
     pub cost_usd: f64,
+    /// usage 有效但模型未在价格表中命中。与已知免费模型的 `$0` 区分开，前端据此
+    /// 明确显示“定价缺失”，而不是给用户一个看似精确的零成本。
+    pub pricing_missing: bool,
+    /// 成本来自 Grok 官方旗舰价格兜底，并非第三方 endpoint 的实际账单。
+    pub pricing_estimated: bool,
     /// 这次调用里 assistant 用了哪些工具（Bash / Edit / mcp__foo__bar / ...）。
     pub tools: Vec<String>,
     /// Bash 工具的命令首词（执行了哪些 shell 命令）。
@@ -35,6 +45,25 @@ pub struct CallRecord {
     pub has_plan_mode: bool,
     /// 是否调用了 Agent / Task spawn 类工具（影响 classifier）。
     pub has_agent_spawn: bool,
+}
+
+impl Default for CallRecord {
+    fn default() -> Self {
+        Self {
+            call_count: 1,
+            model: String::new(),
+            message_id: None,
+            usage: UsageSummary::default(),
+            cost_usd: 0.0,
+            pricing_missing: false,
+            pricing_estimated: false,
+            tools: Vec::new(),
+            bash_commands: Vec::new(),
+            mcp_servers: Vec::new(),
+            has_plan_mode: false,
+            has_agent_spawn: false,
+        }
+    }
 }
 
 /// 一个 "Turn" = 一条用户消息 + 后续的 N 次 assistant 调用。

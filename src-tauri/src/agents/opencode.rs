@@ -1013,6 +1013,7 @@ fn read_turns_impl(conn: &Connection, sid: &str) -> Result<Vec<Turn>, String> {
                 let mode = env.get("mode").and_then(Value::as_str).unwrap_or("");
                 let agent = env.get("agent").and_then(Value::as_str).unwrap_or("");
                 turn.calls.push(CallRecord {
+                    call_count: 1,
                     model: env
                         .get("modelID")
                         .and_then(Value::as_str)
@@ -1021,6 +1022,8 @@ fn read_turns_impl(conn: &Connection, sid: &str) -> Result<Vec<Turn>, String> {
                     message_id: Some(mid),
                     usage,
                     cost_usd,
+                    pricing_missing: false,
+                    pricing_estimated: false,
                     tools,
                     bash_commands,
                     mcp_servers,

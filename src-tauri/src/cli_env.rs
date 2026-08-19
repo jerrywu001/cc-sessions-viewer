@@ -15,6 +15,8 @@ struct CliSpec {
     /// Manifest URL template for non-npm CLIs (e.g. agy). The placeholder
     /// `{platform}` will be replaced at runtime with e.g. `darwin_arm64`.
     manifest_url: Option<&'static str>,
+    /// Command that reports the latest version for self-managed CLIs.
+    version_check_command: Option<&'static str>,
     /// Standalone install command for macOS / Linux (e.g. curl-based installer).
     install_unix: Option<&'static str>,
     /// Standalone install command for Windows (PowerShell, e.g. irm … | iex).
@@ -29,6 +31,7 @@ const CLI_SPECS: &[CliSpec] = &[
         brew_upgrade: Some("claude-code@latest"),
         builtin_update: Some("claude update"),
         manifest_url: None,
+        version_check_command: None,
         install_unix: Some("curl -fsSL https://claude.ai/install.sh | bash"),
         install_windows: Some("irm https://claude.ai/install.ps1 | iex"),
     },
@@ -39,6 +42,7 @@ const CLI_SPECS: &[CliSpec] = &[
         brew_upgrade: Some("--cask codex"),
         builtin_update: Some("codex update"),
         manifest_url: None,
+        version_check_command: None,
         install_unix: Some("curl -fsSL https://chatgpt.com/codex/install.sh | sh"),
         install_windows: Some("irm https://chatgpt.com/codex/install.ps1 | iex"),
     },
@@ -51,6 +55,7 @@ const CLI_SPECS: &[CliSpec] = &[
         manifest_url: Some(
             "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/{platform}.json",
         ),
+        version_check_command: None,
         install_unix: Some("curl -fsSL https://antigravity.google/cli/install.sh | bash"),
         install_windows: Some("irm https://antigravity.google/cli/install.ps1 | iex"),
     },
@@ -61,8 +66,20 @@ const CLI_SPECS: &[CliSpec] = &[
         brew_upgrade: Some("opencode"),
         builtin_update: Some("opencode upgrade"),
         manifest_url: None,
+        version_check_command: None,
         install_unix: Some("curl -fsSL https://opencode.ai/install | bash"),
         install_windows: None,
+    },
+    CliSpec {
+        name: "grok",
+        binary: "grok",
+        npm_package: "",
+        brew_upgrade: None,
+        builtin_update: Some("grok update"),
+        manifest_url: None,
+        version_check_command: Some("grok update --check --json"),
+        install_unix: Some("curl -fsSL https://x.ai/cli/install.sh | bash"),
+        install_windows: Some("irm https://x.ai/cli/install.ps1 | iex"),
     },
 ];
 
@@ -138,6 +155,21 @@ fn get_installed_version(spec: &CliSpec) -> Option<String> {
     extract_version(&out)
 }
 
+fn resolve_grok_binary() -> String {
+    let managed = crate::util::home().join(".grok/bin/grok");
+    if managed.is_file() {
+        return managed.to_string_lossy().into_owned();
+    }
+    find_all_paths("grok")
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "grok".to_string())
+}
+
+fn get_grok_installed_version() -> Option<String> {
+    extract_version(&run_binary(&resolve_grok_binary(), &["--version"]).ok()?)
+}
+
 fn fetch_npm_latest(package: &str) -> Result<String, String> {
     let url = format!("https://registry.npmjs.org/{package}/latest");
     let try_once = || -> Result<String, String> {
@@ -187,6 +219,152 @@ fn fetch_manifest_latest(manifest_url_template: &str) -> Result<String, String> 
     }
 }
 
+#[derive(Debug)]
+struct CommandVersionInfo {
+    latest_version: String,
+    update_available: Option<bool>,
+}
+
+fn extract_command_latest_info(output: &str) -> Result<CommandVersionInfo, String> {
+    // Prefer the explicit field in the raw command output. This avoids shell
+    // wrappers or diagnostic JSON objects with an unrelated `version` field.
+    if let Ok(re) =
+        regex_lite::Regex::new(r#"[\"']latest(?:Version|_version)[\"']\s*:\s*[\"']([^\"']+)[\"']"#)
+    {
+        if let Some(caps) = re.captures(output) {
+            let update_available =
+                regex_lite::Regex::new(r#"[\"']updateAvailable[\"']\s*:\s*(true|false)"#)
+                    .ok()
+                    .and_then(|flag| flag.captures(output))
+                    .and_then(|caps| caps.get(1).map(|v| v.as_str() == "true"));
+            return Ok(CommandVersionInfo {
+                latest_version: caps[1].to_string(),
+                update_available,
+            });
+        }
+    }
+    let latest_from_value = |value: &serde_json::Value| {
+        value
+            .get("latestVersion")
+            .or_else(|| value.get("latest_version"))
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+    };
+    let generic_from_value = |value: &serde_json::Value| {
+        value
+            .get("version")
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+    };
+    let mut values = Vec::new();
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(output.trim()) {
+        values.push(value);
+    }
+    if let (Some(start), Some(end)) = (output.find('{'), output.rfind('}')) {
+        if start < end {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&output[start..=end]) {
+                values.push(value);
+            }
+        }
+    }
+    values.extend(
+        output
+            .lines()
+            .rev()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok()),
+    );
+    // A command may print unrelated JSON metadata before its update result.
+    // Prefer the explicit latest-version fields across all parsed values before
+    // falling back to a generic `version` field for other providers.
+    for value in values.iter() {
+        if let Some(version) = latest_from_value(value) {
+            return Ok(CommandVersionInfo {
+                latest_version: version,
+                update_available: value.get("updateAvailable").and_then(|v| v.as_bool()),
+            });
+        }
+    }
+    for value in values.iter() {
+        if let Some(version) = generic_from_value(value) {
+            return Ok(CommandVersionInfo {
+                latest_version: version,
+                update_available: value.get("updateAvailable").and_then(|v| v.as_bool()),
+            });
+        }
+    }
+    Err("missing latest version field".into())
+}
+
+fn fetch_command_latest_info(command: &str) -> Result<CommandVersionInfo, String> {
+    extract_command_latest_info(&run_in_login_shell(command)?)
+}
+
+fn run_binary(binary: &str, args: &[&str]) -> Result<String, String> {
+    let home = crate::util::home();
+    let grok_bin_dir = home.join(".grok/bin");
+    let system_path = if cfg!(windows) {
+        format!(
+            "{};C:\\Windows\\System32;C:\\Windows",
+            grok_bin_dir.display()
+        )
+    } else {
+        format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", grok_bin_dir.display())
+    };
+    // Version probes must not inherit the GUI/terminal integration environment.
+    // Grok's updater reads its own environment in addition to PATH, while pnpm
+    // only resolves a binary from PATH.  Keeping this child deterministic also
+    // prevents a shell wrapper or an injected CLI selector from changing the
+    // update metadata returned to the UI.
+    let mut cmd = Command::new(binary);
+    for key in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+    ] {
+        if let Some(value) = std::env::var_os(key) {
+            cmd.env(key, value);
+        }
+    }
+    let out = cmd
+        .args(args)
+        .env_clear()
+        .env("HOME", &home)
+        .env("GROK_HOME", home.join(".grok"))
+        .env("PATH", system_path)
+        .env("TERM", "dumb")
+        .env("LANG", "C.UTF-8")
+        .current_dir(&home)
+        .output()
+        .map_err(|e| format!("binary exec: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            format!("exit {}", out.status.code().unwrap_or(-1))
+        } else {
+            stderr
+        })
+    }
+}
+
+fn fetch_grok_latest_info() -> Result<CommandVersionInfo, String> {
+    // Grok can be present more than once in PATH. Resolve the managed
+    // executable directly so shell aliases or startup scripts cannot alter
+    // the update-check JSON.
+    let binary = resolve_grok_binary();
+    extract_command_latest_info(&run_binary(&binary, &["update", "--check", "--json"])?)
+}
+
 /// Return a platform key such as `darwin_arm64`, `darwin_amd64`, `linux_amd64`
 /// etc., matching the manifest filename convention used by the agy auto-updater.
 fn detect_platform_key() -> String {
@@ -222,25 +400,51 @@ fn compare_versions(current: &str, latest: &str) -> bool {
     false
 }
 
+fn is_upgradable(
+    current: Option<&str>,
+    latest_version: Option<&str>,
+    command_update_available: Option<bool>,
+) -> bool {
+    command_update_available.unwrap_or_else(|| match (current, latest_version) {
+        (Some(c), Some(l)) => compare_versions(c, l),
+        _ => false,
+    })
+}
+
 fn check_cli_version(spec: &CliSpec) -> CliVersionInfo {
-    let current = get_installed_version(spec);
+    let current = if spec.name == "grok" {
+        get_grok_installed_version()
+    } else {
+        get_installed_version(spec)
+    };
     let installed = current.is_some();
     // Use npm registry for npm-based CLIs, manifest URL for others (e.g. agy)
-    let latest = if !spec.npm_package.is_empty() {
-        fetch_npm_latest(spec.npm_package)
+    let (latest, command_update_available) = if spec.name == "grok" {
+        match fetch_grok_latest_info() {
+            Ok(info) => (Ok(info.latest_version), info.update_available),
+            Err(e) => (Err(e), None),
+        }
+    } else if let Some(command) = spec.version_check_command {
+        match fetch_command_latest_info(command) {
+            Ok(info) => (Ok(info.latest_version), info.update_available),
+            Err(e) => (Err(e), None),
+        }
+    } else if !spec.npm_package.is_empty() {
+        (fetch_npm_latest(spec.npm_package), None)
     } else if let Some(manifest_url) = spec.manifest_url {
-        fetch_manifest_latest(manifest_url)
+        (fetch_manifest_latest(manifest_url), None)
     } else {
-        Err("no version source configured".into())
+        (Err("no version source configured".into()), None)
     };
     let (latest_version, error) = match latest {
         Ok(v) => (Some(v), None),
         Err(e) => (None, Some(e)),
     };
-    let upgradable = match (&current, &latest_version) {
-        (Some(c), Some(l)) => compare_versions(c, l),
-        _ => false,
-    };
+    let upgradable = is_upgradable(
+        current.as_deref(),
+        latest_version.as_deref(),
+        command_update_available,
+    );
     CliVersionInfo {
         cli: spec.name.to_string(),
         npm_package: spec.npm_package.to_string(),
@@ -710,12 +914,30 @@ mod tests {
     }
 
     #[test]
+    fn grok_version_check_reads_latest_version_without_exposing_other_fields() {
+        let check = extract_command_latest_info(
+            r#"{"currentVersion":"1.0.4","latestVersion":"1.0.5","updateAvailable":true}"#,
+        )
+        .unwrap();
+        assert_eq!(check.latest_version, "1.0.5");
+        assert_eq!(check.update_available, Some(true));
+        assert!(extract_command_latest_info("{\"error\":null}").is_err());
+    }
+
+    #[test]
     fn test_compare_versions() {
         assert!(compare_versions("2.1.187", "2.1.197"));
         assert!(!compare_versions("2.1.197", "2.1.187"));
         assert!(!compare_versions("2.1.187", "2.1.187"));
         assert!(compare_versions("0.43.0", "0.49.0"));
         assert!(compare_versions("0.142.3", "0.142.5"));
+    }
+
+    #[test]
+    fn command_update_available_overrides_version_comparison() {
+        assert!(is_upgradable(Some("1.0.4"), Some("1.0.5"), Some(true)));
+        assert!(!is_upgradable(Some("1.0.4"), Some("1.0.5"), Some(false)));
+        assert!(is_upgradable(Some("1.0.4"), Some("1.0.5"), None));
     }
 
     #[test]

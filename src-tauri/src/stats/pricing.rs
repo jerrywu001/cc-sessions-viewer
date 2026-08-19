@@ -1,8 +1,9 @@
-// 模型 → $/token 价格表。**唯一数据源是 models.dev 上游**
-// (`https://models.dev/api.json`，开源模型目录，sst 维护、opencode 同源)：
+// 模型 → $/token 价格表。首选 js-bridge 的 models.dev 镜像，models.dev 原站兜底：
+// (`https://www.js-bridge.com/api/models` → `https://models.dev/api.json`，开源模型目录，
+// sst 维护、opencode 同源)：
 //
 //   - 启动期 `init()` 后台线程拉一份，落盘到
-//     `~/Library/Caches/cc-sessions-viewer/models-dev-pricing.json`（24h TTL）。
+//     `~/Library/Caches/cc-sessions-viewer/model-pricing-v3.json`（24h TTL）。
 //   - `lookup()` 只查这一份内存表 —— 没拉到 / 没命中就返回 None（成本按 $0 计）。
 //   - 前端通过 `pricing_status` Tauri 命令读 `status()`，决定显示
 //     正常 / loading / error placeholder。
@@ -21,6 +22,7 @@ use crate::types::UsageSummary;
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -82,6 +84,58 @@ pub fn lookup(model: &str) -> Option<ModelCosts> {
     best.map(|(_, v)| v)
 }
 
+/// 严格价格查询：只接受精确 ID 及可证明安全的规范化形式，不做系列前缀推断。
+///
+/// Grok 会允许用户配置自定义 endpoint/model。`custom/grok-3` 不能因为末段看起来像
+/// 官方模型就套用 xAI 价格，因此只有裸模型 ID和明确的 `xai/` provider 前缀可以
+/// 规范化；精确查询失败后，额外允许 `*-free` 去后缀查其基础模型。
+pub fn lookup_strict(model: &str) -> Option<ModelCosts> {
+    if model.is_empty() {
+        return None;
+    }
+    let cell = REMOTE_PRICING.get()?;
+    let table = cell.read().ok()?;
+    if table.is_empty() {
+        return None;
+    }
+
+    let mut candidates = Vec::with_capacity(4);
+    candidates.push(model.to_string());
+
+    let mut unpinned = model.to_string();
+    if let Some(pos) = unpinned.find('@') {
+        unpinned.truncate(pos);
+    }
+    if let Some(stripped) = strip_trailing_yyyymmdd(&unpinned) {
+        unpinned = stripped;
+    }
+    if !candidates.contains(&unpinned) {
+        candidates.push(unpinned.clone());
+    }
+
+    let lower = unpinned.to_ascii_lowercase();
+    if !unpinned.contains('/') || lower.starts_with("xai/") {
+        let canon = resolve_alias(&canonical(&unpinned));
+        if !candidates.contains(&canon) {
+            candidates.push(canon);
+        }
+    }
+
+    for key in &candidates {
+        if let Some(value) = table.get(key) {
+            return Some(*value);
+        }
+    }
+    for key in &candidates {
+        if let Some(base) = key.strip_suffix("-free") {
+            if let Some(value) = table.get(base) {
+                return Some(*value);
+            }
+        }
+    }
+    None
+}
+
 /// 按 usage 算这次调用的美元成本。找不到模型时用 Claude 4.6-4.8 均价兜底。
 ///
 /// `reasoning_output_tokens` 按 output 单价计费。OpenAI 的 o-系列 / GPT-5
@@ -98,6 +152,64 @@ pub fn cost_usd(model: &str, usage: &UsageSummary) -> f64 {
     let Some(c) = lookup(model).or_else(fallback_costs) else {
         return 0.0;
     };
+    calculate_cost(c, usage)
+}
+
+/// 严格计算成本。`None` 表示价格缺失；`Some(0.0)` 表示价格已知且为免费，调用方
+/// 必须保留这个区别。Grok 统计只使用这个入口，永远不会落入 Claude 均价 fallback。
+pub fn cost_usd_strict(model: &str, usage: &UsageSummary) -> Option<f64> {
+    lookup_strict(model).map(|costs| calculate_cost(costs, usage))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GrokPricedCost {
+    pub cost_usd: f64,
+    /// true = 模型本身未命中，使用 models.dev 中最新的纯官方旗舰 Grok 价格估算。
+    pub estimated: bool,
+}
+
+/// Grok 专用计价：精确、安全规范化和 `-free` alias 优先；仍未命中时，以价格表中
+/// 版本最高的纯官方旗舰型号（例如当前的 `grok-4.6`）作为动态兜底。
+///
+/// 该兜底只估算第三方 endpoint 的 token 成本，调用方必须把 `estimated=true` 传到 UI；
+/// 它不代表代理商实际账单，也永远不会使用 Claude 或其它 provider 的价格。
+pub fn cost_usd_grok(model: &str, usage: &UsageSummary) -> Option<GrokPricedCost> {
+    if let Some(costs) = lookup_strict(model) {
+        return Some(GrokPricedCost {
+            cost_usd: calculate_cost(costs, usage),
+            estimated: false,
+        });
+    }
+    latest_plain_grok_costs().map(|costs| GrokPricedCost {
+        cost_usd: calculate_cost(costs, usage),
+        estimated: true,
+    })
+}
+
+fn latest_plain_grok_costs() -> Option<ModelCosts> {
+    let cell = REMOTE_PRICING.get()?;
+    let table = cell.read().ok()?;
+    table
+        .iter()
+        .filter(|(name, _)| is_plain_grok_model(name))
+        .max_by(|(a, _), (b, _)| {
+            version_tuple(a)
+                .cmp(&version_tuple(b))
+                .then_with(|| a.cmp(b))
+        })
+        .map(|(_, costs)| *costs)
+}
+
+fn is_plain_grok_model(name: &str) -> bool {
+    name.strip_prefix("grok-").is_some_and(|version| {
+        !version.is_empty()
+            && version
+                .split('.')
+                .all(|segment| !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
+fn calculate_cost(c: ModelCosts, usage: &UsageSummary) -> f64 {
     let safe = |n: u64| n as f64;
     let one_h_extra = ONE_HOUR_CACHE_WRITE_MULTIPLIER_OVER_5MIN - 1.0; // 0.6
     safe(usage.input_tokens) * c.input
@@ -194,13 +306,18 @@ fn resolve_alias(name: &str) -> String {
     name.to_string()
 }
 
-// ---------- 动态层（models.dev 远端） ----------
+// ---------- 动态层（models.dev 数据镜像 + 原站兜底） ----------
 
+// js-bridge 是国内更稳定的 models.dev 镜像；响应格式和原站保持一致。请求、HTTP
+// 状态、响应正文或结构解析任一环节异常时，立刻回退到 models.dev 原站。
+const JS_BRIDGE_MODELS_URL: &str = "https://www.js-bridge.com/api/models";
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 const CACHE_TTL_SECS: u64 = 24 * 60 * 60;
 // 注意：换源时连文件名一起换（旧 litellm-pricing.json 直接弃用），
 // 避免新解析逻辑去读旧格式缓存。
-const CACHE_FILE_NAME: &str = "models-dev-pricing.json";
+// v3 changes the primary upstream to js-bridge. Reusing a fresh v2 cache would delay the source
+// change for up to 24 hours, so deliberately refresh once after upgrade.
+const CACHE_FILE_NAME: &str = "model-pricing-v3.json";
 
 static REMOTE_PRICING: OnceCell<RwLock<HashMap<String, ModelCosts>>> = OnceCell::new();
 static IS_FETCHING: AtomicBool = AtomicBool::new(false);
@@ -222,12 +339,12 @@ pub struct PricingStatus {
 }
 
 /// 前端「模型实时价格」窗口要展示的单条记录。`family` 用来在 UI 上分 tab
-/// （Claude / Codex），名字按上游原始 key（用户已熟悉的标识符）。
+/// （Claude / Codex / Grok / ...），名字按上游原始 key（用户已熟悉的标识符）。
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PricingEntry {
     pub name: String,
-    pub family: &'static str, // "claude" | "codex"
+    pub family: &'static str, // "claude" | "codex" | "grok" | "agy" | "opencode"
     pub input: f64,
     pub output: f64,
     pub cache_write: f64,
@@ -295,9 +412,8 @@ fn pin_date(name: &str) -> Option<u32> {
     latest
 }
 
-/// 我们只展示两家 CLI 用户实际会跑的模型：Anthropic Claude、OpenAI Codex（含
-/// `gpt-…-codex` / `codex-…` / `o1-…` 系列）。入表时已只取这
-/// 两家 provider，这里的前缀过滤是第二道防线（顺带踢掉 embedding 等非 chat 条目）。
+/// 展示各已接入 CLI 用户实际会跑的聊天模型。入表时已限定原生 provider 和
+/// opencode 白名单，这里的前缀过滤是第二道防线（顺带踢掉 embedding 等非 chat 条目）。
 ///
 /// 排序：先 family（claude → codex），再按"版本号自然顺序倒序"
 /// —— 最新型号在前。`claude-opus-4-8` > `claude-opus-4-7` > `claude-opus-4` > `claude-3-7-sonnet`，
@@ -351,6 +467,8 @@ pub fn list_for_ui() -> Vec<PricingEntry> {
             || lower == "o4"
         {
             "codex"
+        } else if lower.starts_with("grok-") {
+            "grok"
         } else if lower.starts_with("gemini-") {
             "agy"
         } else if lower.starts_with("text-embedding-")
@@ -375,8 +493,9 @@ pub fn list_for_ui() -> Vec<PricingEntry> {
     let family_rank = |f: &str| match f {
         "claude" => 0,
         "codex" => 1,
-        "agy" => 2,
-        "opencode" => 3,
+        "grok" => 2,
+        "agy" => 3,
+        "opencode" => 4,
         _ => 9,
     };
     // 同 family 内："版本号倒序" 主键 + "naked > 日期 pin 倒序" tiebreak。
@@ -472,6 +591,24 @@ pub fn refresh_blocking() -> Result<usize, String> {
     }
 }
 
+/// 清除本地价格缓存和当前内存表，然后在后台重新拉取最新价格。
+/// 用于“恢复默认设置”，避免价格页继续显示重置前的 24h 缓存。
+pub fn clear_cache_and_refresh() {
+    REMOTE_PRICING.get_or_init(|| RwLock::new(HashMap::new()));
+    LAST_FETCH_ERROR.get_or_init(|| Mutex::new(None));
+
+    if let Some(path) = cache_path() {
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_file_name("models-dev-pricing-v2.json"));
+        let _ = std::fs::remove_file(path.with_file_name("models-dev-pricing.json"));
+        let _ = std::fs::remove_file(path.with_file_name("litellm-pricing.json"));
+    }
+    write_table(HashMap::new());
+    set_last_error(None);
+
+    std::thread::spawn(run_fetch);
+}
+
 fn run_fetch() {
     if IS_FETCHING.swap(true, Ordering::SeqCst) {
         // 已经有一次在跑，不重复发车
@@ -504,7 +641,7 @@ fn set_last_error(err: Option<String>) {
     }
 }
 
-/// 磁盘缓存路径：`<cache_dir>/cc-sessions-viewer/models-dev-pricing.json`。
+/// 磁盘缓存路径：`<cache_dir>/cc-sessions-viewer/model-pricing-v3.json`。
 /// macOS: `~/Library/Caches/...`；Linux: `~/.cache/...`；Windows: `%LOCALAPPDATA%\...`。
 fn cache_path() -> Option<std::path::PathBuf> {
     let base = dirs::cache_dir()?;
@@ -514,7 +651,20 @@ fn cache_path() -> Option<std::path::PathBuf> {
 /// 从磁盘读 cache。返回 `(is_fresh, table)`；过期但能解出的 table 也返回（启动期兜底）。
 fn load_from_cache() -> Option<(bool, HashMap<String, ModelCosts>)> {
     let path = cache_path()?;
-    let raw = std::fs::read_to_string(&path).ok()?;
+    if let Some(cached) = read_cache_file(&path) {
+        return Some(cached);
+    }
+    // 旧缓存只作为离线启动兜底：强制后台按新优先级刷新，成功后只写 v3。
+    for old_name in ["models-dev-pricing-v2.json", "models-dev-pricing.json"] {
+        if let Some((_, table)) = read_cache_file(&path.with_file_name(old_name)) {
+            return Some((false, table));
+        }
+    }
+    None
+}
+
+fn read_cache_file(path: &Path) -> Option<(bool, HashMap<String, ModelCosts>)> {
+    let raw = std::fs::read_to_string(path).ok()?;
     let parsed: CacheFile = serde_json::from_str(&raw).ok()?;
     let age = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -523,18 +673,44 @@ fn load_from_cache() -> Option<(bool, HashMap<String, ModelCosts>)> {
     Some((age < CACHE_TTL_SECS, parsed.data))
 }
 
-/// GET models.dev JSON → 解析 → 写盘 → 返回表。每一步失败都映射成可读错误字符串。
+/// 先 GET js-bridge 镜像；任一步失败即 GET models.dev 原站兜底。成功后才写盘，
+/// 因而临时网络问题不会覆盖仍可用的旧缓存。
 fn fetch_and_store() -> Result<HashMap<String, ModelCosts>, String> {
-    let body = ureq::get(MODELS_DEV_URL)
+    let sources = pricing_sources();
+    let mut failures = Vec::with_capacity(sources.len());
+    for (name, url) in sources {
+        match fetch_source(url) {
+            Ok(body) => match parse_models_dev_json(&body).filter(|table| !table.is_empty()) {
+                Some(table) => {
+                    save_to_cache(&table);
+                    return Ok(table);
+                }
+                None => failures.push(format!("{name}: parse: empty or malformed")),
+            },
+            Err(error) => failures.push(format!("{name}: {error}")),
+        }
+    }
+    Err(format!(
+        "all pricing sources failed ({})",
+        failures.join("; ")
+    ))
+}
+
+fn pricing_sources() -> [(&'static str, &'static str); 2] {
+    [
+        ("js-bridge", JS_BRIDGE_MODELS_URL),
+        ("models.dev", MODELS_DEV_URL),
+    ]
+}
+
+fn fetch_source(url: &str) -> Result<String, String> {
+    let body = ureq::get(url)
         .timeout(Duration::from_secs(20))
         .call()
         .map_err(|e| format!("network: {e}"))?
         .into_string()
         .map_err(|e| format!("read body: {e}"))?;
-    let table =
-        parse_models_dev_json(&body).ok_or_else(|| "parse: empty or malformed".to_string())?;
-    save_to_cache(&table);
-    Ok(table)
+    Ok(body)
 }
 
 fn save_to_cache(table: &HashMap<String, ModelCosts>) {
@@ -560,15 +736,16 @@ fn save_to_cache(table: &HashMap<String, ModelCosts>) {
 /// 解析 models.dev 的根 JSON：`{ <provider>: { models: { <id>: { cost, limit, … } } } }`。
 ///
 /// 两步：
-///   1. anthropic / openai / google —— 三家原生 CLI 的模型，直接入表。
+///   1. anthropic / openai / xai / google —— 原生 CLI 的模型，直接入表。
 ///   2. opencode 专属模型（白名单，来源 opencode 官方文档）：逐个在各厂商直连
 ///      provider 里查价格（官方价为准），查不到的在 `opencode` provider 里兜底。
 pub(crate) fn parse_models_dev_json(body: &str) -> Option<HashMap<String, ModelCosts>> {
-    const NATIVE_PROVIDERS: &[&str] = &["anthropic", "openai", "google"];
+    const NATIVE_PROVIDERS: &[&str] = &["anthropic", "openai", "xai", "google"];
     const OPENCODE_DIRECT: &[&str] = &[
         "deepseek",
         "kimi-for-coding",
         "minimax",
+        "opencode-go",
         "zhipuai",
         "xiaomi",
         "xai",
@@ -585,6 +762,7 @@ pub(crate) fn parse_models_dev_json(body: &str) -> Option<HashMap<String, ModelC
         "glm-5",
         "glm-5.1",
         "glm-5.2",
+        "glm-5.3",
         "grok-build-0.1",
         "kimi-k2.5",
         "kimi-k2.6",
@@ -609,7 +787,7 @@ pub(crate) fn parse_models_dev_json(body: &str) -> Option<HashMap<String, ModelC
     let root = value.as_object()?;
     let mut out: HashMap<String, ModelCosts> = HashMap::with_capacity(128);
 
-    // Step 1: 三家原生 CLI
+    // Step 1: 原生 CLI provider
     for prov in NATIVE_PROVIDERS {
         let Some(models) = root
             .get(*prov)
@@ -768,6 +946,14 @@ fn derive_name(canon: &str) -> Option<String> {
         }
         return Some(out);
     }
+    if let Some(rest) = canon.strip_prefix("grok-") {
+        let mut out = String::from("Grok Build");
+        for segment in rest.split('-') {
+            out.push(' ');
+            out.push_str(&title_case(segment));
+        }
+        return Some(out);
+    }
     None
 }
 
@@ -847,6 +1033,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn pricing_sources_prefer_js_bridge_and_keep_models_dev_fallback() {
+        assert_eq!(
+            pricing_sources(),
+            [
+                ("js-bridge", "https://www.js-bridge.com/api/models"),
+                ("models.dev", "https://models.dev/api.json"),
+            ]
+        );
+    }
+
     /// 测试辅助：往内存 REMOTE_PRICING 塞一份"模拟拉来的"价格表，并在闭包结束后
     /// **恢复原值**（而不是一删了之）。cargo test 默认多线程，每条测试应使用
     /// 各自专属的 model key 避免互相串扰；恢复语义保证即便和 seed_test_prices
@@ -916,6 +1113,114 @@ mod tests {
             c > 0.0,
             "unknown model should use Claude 4.6-4.8 average as fallback"
         );
+    }
+
+    #[test]
+    fn strict_cost_never_uses_claude_fallback_for_unknown_grok_model() {
+        seed_test_prices();
+        let usage = u(1_000_000, 1_000_000, 0, 0);
+        assert_eq!(lookup_strict("custom/grok-private-model"), None);
+        assert_eq!(cost_usd_strict("custom/grok-private-model", &usage), None);
+        assert!(
+            cost_usd("custom/grok-private-model", &usage) > 0.0,
+            "the legacy non-strict path still demonstrates why Grok must not use it"
+        );
+    }
+
+    #[test]
+    fn strict_lookup_supports_xai_prefix_pin_and_free_alias() {
+        let rate = ModelCosts {
+            input: 2e-6,
+            output: 10e-6,
+            cache_write: 2.5e-6,
+            cache_read: 0.2e-6,
+            context: 131_072,
+        };
+        with_remote(&[("grok-strict-alias-test", rate)], || {
+            assert_eq!(lookup_strict("grok-strict-alias-test"), Some(rate));
+            assert_eq!(
+                lookup_strict("xai/grok-strict-alias-test@20260818"),
+                Some(rate)
+            );
+            assert_eq!(lookup_strict("grok-strict-alias-test-free"), Some(rate));
+            assert_eq!(
+                lookup_strict("custom/grok-strict-alias-test"),
+                None,
+                "custom endpoints must not inherit official xAI pricing"
+            );
+        });
+    }
+
+    #[test]
+    fn strict_cost_distinguishes_known_free_from_missing_price() {
+        let free = ModelCosts {
+            input: 0.0,
+            output: 0.0,
+            cache_write: 0.0,
+            cache_read: 0.0,
+            context: 32_000,
+        };
+        with_remote(&[("grok-known-free-test-free", free)], || {
+            let usage = u(10_000, 2_000, 0, 0);
+            assert_eq!(
+                cost_usd_strict("grok-known-free-test-free", &usage),
+                Some(0.0)
+            );
+            assert_eq!(cost_usd_strict("grok-missing-price-test", &usage), None);
+        });
+    }
+
+    #[test]
+    fn grok_cost_uses_latest_plain_official_model_as_marked_fallback() {
+        let older = ModelCosts {
+            input: 1e-6,
+            output: 2e-6,
+            cache_write: 0.0,
+            cache_read: 0.0,
+            context: 131_072,
+        };
+        let latest = ModelCosts {
+            input: 7e-6,
+            output: 11e-6,
+            cache_write: 0.0,
+            cache_read: 0.0,
+            context: 262_144,
+        };
+        let special = ModelCosts {
+            input: 99e-6,
+            output: 99e-6,
+            cache_write: 0.0,
+            cache_read: 0.0,
+            context: 0,
+        };
+        with_remote(
+            &[
+                ("grok-9998", older),
+                ("grok-9999", latest),
+                ("grok-10000-multi-agent", special),
+            ],
+            || {
+                let usage = u(1_000_000, 1_000_000, 0, 0);
+                let exact = cost_usd_grok("grok-9998", &usage).expect("exact price");
+                assert!(!exact.estimated);
+                assert!((exact.cost_usd - 3.0).abs() < 1e-9);
+
+                let fallback = cost_usd_grok("third-party/custom-model", &usage)
+                    .expect("official Grok estimate");
+                assert!(fallback.estimated);
+                assert!((fallback.cost_usd - 18.0).abs() < 1e-9);
+            },
+        );
+    }
+
+    #[test]
+    fn plain_grok_fallback_excludes_specialized_variants() {
+        assert!(is_plain_grok_model("grok-4"));
+        assert!(is_plain_grok_model("grok-4.6"));
+        assert!(is_plain_grok_model("grok-4.20.1"));
+        assert!(!is_plain_grok_model("grok-build-0.1"));
+        assert!(!is_plain_grok_model("grok-4.20-reasoning"));
+        assert!(!is_plain_grok_model("grok-4-free"));
     }
 
     #[test]
@@ -1168,6 +1473,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_models_dev_json_includes_native_xai_models() {
+        let body = r#"{
+            "xai": { "models": {
+                "grok-native-price-test": {
+                    "cost": { "input": 2, "output": 10, "cache_read": 0.2 },
+                    "limit": { "context": 131072 }
+                }
+            }}
+        }"#;
+
+        let table = parse_models_dev_json(body).expect("parsed");
+        let grok = table
+            .get("grok-native-price-test")
+            .expect("native xAI model");
+        assert!((grok.input - 2e-6).abs() < 1e-15);
+        assert!((grok.output - 10e-6).abs() < 1e-15);
+        assert_eq!(grok.context, 131_072);
+    }
+
+    #[test]
     fn parse_models_dev_json_includes_opencode_qwen_3_8_max() {
         let body = r#"{
             "alibaba-cn": { "models": {
@@ -1184,6 +1509,38 @@ mod tests {
         assert!((qwen.output - 5.33231e-6).abs() < 1e-15);
         assert!((qwen.cache_read - 0.22218e-6).abs() < 1e-15);
         assert_eq!(qwen.context, 1_000_000);
+    }
+
+    #[test]
+    fn parse_models_dev_json_includes_glm_5_3_and_native_claude_5_models() {
+        let body = r#"{
+            "anthropic": { "models": {
+                "claude-fable-5": {
+                    "cost": { "input": 10, "output": 50, "cache_read": 1, "cache_write": 12.5 },
+                    "limit": { "context": 1000000 }
+                },
+                "claude-opus-5": {
+                    "cost": { "input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25 },
+                    "limit": { "context": 1000000 }
+                }
+            }},
+            "opencode-go": { "models": {
+                "glm-5.3": {
+                    "cost": { "input": 1.4, "output": 4.4, "cache_read": 0.26 },
+                    "limit": { "context": 1000000 }
+                }
+            }}
+        }"#;
+
+        let table = parse_models_dev_json(body).expect("parsed");
+        for name in ["claude-fable-5", "claude-opus-5", "glm-5.3"] {
+            assert!(table.contains_key(name), "missing {name}");
+        }
+        let glm = table.get("glm-5.3").unwrap();
+        assert!((glm.input - 1.4e-6).abs() < 1e-15);
+        assert!((glm.output - 4.4e-6).abs() < 1e-15);
+        assert!((glm.cache_read - 0.26e-6).abs() < 1e-15);
+        assert_eq!(glm.context, 1_000_000);
     }
 
     #[test]
@@ -1207,6 +1564,25 @@ mod tests {
         assert_eq!(short_name("claude-opus-4-7"), "Opus 4.7");
         assert_eq!(short_name("gpt-5.3-codex"), "GPT-5.3 Codex");
         assert_eq!(short_name("gpt-5-fast"), "GPT-5"); // aliased
+        assert_eq!(short_name("grok-4-fast"), "Grok Build 4 Fast");
+    }
+
+    #[test]
+    fn list_for_ui_classifies_grok_family() {
+        let rate = ModelCosts {
+            input: 2e-6,
+            output: 10e-6,
+            cache_write: 2.5e-6,
+            cache_read: 0.2e-6,
+            context: 131_072,
+        };
+        with_remote(&[("grok-ui-family-test", rate)], || {
+            let entry = list_for_ui()
+                .into_iter()
+                .find(|entry| entry.name == "grok-ui-family-test")
+                .expect("Grok pricing row");
+            assert_eq!(entry.family, "grok");
+        });
     }
 
     #[test]

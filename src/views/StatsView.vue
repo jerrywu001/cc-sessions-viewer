@@ -27,7 +27,8 @@ import {
   agentIcons,
 } from '../components/icons'
 import { useStatsStream } from '../stats'
-import { statsRange, statsScope, visibleAgents } from '../settings'
+import { ALL_AGENTS, statsRange, statsScope, visibleAgents } from '../settings'
+import { agentSupports } from '../agentMeta'
 import { forceRefresh as forceRefreshPricing, pricingStatus, refreshStatus as refreshPricingStatus, watchUntilReady as watchPricingUntilReady } from '../pricing'
 import StatsDailyChart from '../components/StatsDailyChart.vue'
 import StatsModelChart from '../components/StatsModelChart.vue'
@@ -56,23 +57,25 @@ const emit = defineEmits<{
 const scope = statsScope
 const range = statsRange
 
-// Scope 选项跟随设置里的 agent 显隐：'all' 常驻，其余只列出启用的 agent。
+// Scope 选项跟随设置里的 agent 显隐和统计 capability：'all' 常驻，其余只列出
+// 已启用且完成统计接入的 agent；能力由集中式 agent metadata 决定。
+const statsAgents = computed(() =>
+  visibleAgents.value.filter((agent) => agentSupports(agent, 'stats')),
+)
 const SCOPES = computed<{ value: StatsScope; key: string }[]>(() => [
   { value: 'all', key: 'stats.scope.all' },
-  ...visibleAgents.value
-    .filter((a) => a !== 'agy')
-    .map((a) => ({ value: a as StatsScope, key: `stats.scope.${a}` })),
+  ...statsAgents.value.map((a) => ({ value: a as StatsScope, key: `stats.scope.${a}` })),
 ])
 
 // 持久化的 scope 可能指向一个之后被隐藏的 agent —— 回退到 'all'。
 // 放在 watch(scope) 注册之前同步纠正，避免挂载时多触发一次 refresh。
-if (scope.value !== 'all' && !visibleAgents.value.includes(scope.value as Agent)) {
+if (scope.value !== 'all' && !statsAgents.value.includes(scope.value as Agent)) {
   scope.value = 'all'
 }
 // 设置里改了 agent 显隐时：
 //   - 当前 scope 指向被隐藏的 agent → 回退 'all'（触发 watch(scope) 重扫）；
 //   - 当前已是 'all' → 'all' 的口径变了（少/多算一个 agent），主动重扫。
-watch(visibleAgents, (list) => {
+watch(statsAgents, (list) => {
   if (scope.value !== 'all' && !list.includes(scope.value as Agent)) {
     scope.value = 'all'
   } else if (scope.value === 'all' && !isSession.value) {
@@ -84,8 +87,9 @@ watch(visibleAgents, (list) => {
 // 后端据此只聚合启用的 agent。非 'all' 的 scope 原样透传。
 function backendScope(): string {
   if (scope.value !== 'all') return scope.value
-  const vis = visibleAgents.value.filter((a) => a !== 'agy')
-  return vis.length >= 2 ? 'all' : `all:${vis.join(',')}`
+  const vis = statsAgents.value
+  const allStatsAgents = ALL_AGENTS.filter((agent) => agentSupports(agent, 'stats'))
+  return vis.length === allStatsAgents.length ? 'all' : `all:${vis.join(',')}`
 }
 const RANGES: { value: StatsPresetRange | 'custom'; key: string }[] = [
   { value: 'today', key: 'stats.range.today' },
@@ -387,8 +391,13 @@ const isEmpty = computed(
 const headerLine = computed(() => {
   const s = stats.value
   if (!s) return null
+  const costSuffix = `${s.estimatedCallCount > 0 ? '~' : ''}${s.unpricedCallCount > 0 ? '+' : ''}`
   return {
-    cost: fmtUsd(s.costUsd),
+    cost: s.unpricedCallCount === s.callCount
+      && s.unpricedCallCount > 0
+      && s.estimatedCallCount === 0
+      ? t('stats.pricing.unknownShort')
+      : `${fmtUsd(s.costUsd)}${costSuffix}`,
     calls: s.callCount.toLocaleString(),
     sessions: s.sessionCount.toLocaleString(),
     cacheHit: pct(s.cacheHitRate),
@@ -433,6 +442,13 @@ const modelData = computed(() => {
   return top
 })
 
+const unpricedModels = computed(() =>
+  stats.value?.byModel.filter((model) => model.unpricedCallCount > 0) ?? [],
+)
+const estimatedModels = computed(() =>
+  stats.value?.byModel.filter((model) => model.estimatedCallCount > 0) ?? [],
+)
+
 const activityData = computed(() => {
   const s = stats.value
   if (!s) return []
@@ -453,7 +469,8 @@ function emptyHint(arr: { length: number } | undefined): boolean {
 }
 
 function asAgent(name: string): Agent {
-  return (name === 'codex' ? name : 'claude') as Agent
+  const known: Agent[] = ['claude', 'codex', 'grok', 'agy', 'opencode']
+  return known.includes(name as Agent) ? name as Agent : 'claude'
 }
 </script>
 
@@ -616,6 +633,17 @@ function asAgent(name: string): Agent {
             : t('stats.computingNoTotal')
           }}
         </span>
+        <div
+          v-if="stats?.unpricedCallCount || stats?.estimatedCallCount"
+          class="stats-hero-warnings"
+        >
+          <span v-if="stats?.unpricedCallCount" class="stats-hero-warning">
+            {{ t('stats.pricing.missing', { n: stats?.unpricedCallCount ?? 0 }) }}
+          </span>
+          <span v-if="stats?.estimatedCallCount" class="stats-hero-warning estimated">
+            {{ t('stats.pricing.estimated', { n: stats?.estimatedCallCount ?? 0 }) }}
+          </span>
+        </div>
       </div>
       <div class="kpi-grid">
         <div class="kpi-card kpi-card--brand">
@@ -784,6 +812,12 @@ function asAgent(name: string): Agent {
         </div>
         <div class="stats-block stats-block-chart">
           <div class="stats-block-title">{{ t('stats.byModel.title') }}</div>
+          <div v-if="unpricedModels.length" class="stats-pricing-missing">
+            {{ t('stats.pricing.modelsMissing', { n: unpricedModels.length }) }}
+          </div>
+          <div v-if="estimatedModels.length" class="stats-pricing-missing estimated">
+            {{ t('stats.pricing.modelsEstimated', { n: estimatedModels.length }) }}
+          </div>
           <div v-if="emptyHint(stats.byModel)" class="stats-block-empty">—</div>
           <div v-else class="stats-chart stats-chart-tall">
             <StatsModelChart

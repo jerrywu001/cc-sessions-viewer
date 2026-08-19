@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, shallowRef, computed, onMounted, onUnmounted, watch, nextTick, provide, defineAsyncComponent } from 'vue'
 import type { Agent, ProjectInfo, SessionMeta, TrashItem, Msg, UsageSummary } from './types'
+import { agentLabel, agentSupports } from './agentMeta'
 import * as api from './api'
 import { shortName } from './format'
 import { t } from './i18n'
@@ -19,6 +20,7 @@ import {
   launchArgs,
   terminalApp,
   applyTerminalDefault,
+  enabledAgents,
   visibleAgents,
   quickOpenTarget,
   backgroundImagePath,
@@ -623,9 +625,7 @@ function focusPaneDir(dir: 'left' | 'right' | 'up' | 'down') {
 const activeProject = computed(() =>
   projects.value.find((p) => p.dirName === activeDir.value),
 )
-const activeAgentLabel = computed(() =>
-  agent.value === 'codex' ? 'Codex' : agent.value === 'agy' ? 'agy' : agent.value === 'opencode' ? 'opencode' : 'Claude',
-)
+const activeAgentLabel = computed(() => agentLabel(agent.value))
 const topbarContextTitle = computed(() => {
   if (showStats.value) return t('sidebar.stats')
   if (showTrash.value) return t('sidebar.trash')
@@ -722,10 +722,10 @@ function openCtxMenu(e: MouseEvent, p: ProjectInfo) {
   const x = Math.min(e.clientX, window.innerWidth - W - 8)
   const y = Math.min(e.clientY, window.innerHeight - H - 8)
   ctxMenu.value = { x, y, project: p, isGitRepo: false }
-  // 「创建 Worktree」仅对 git 仓库、且自身不是 worktree 的项目显示；且仅 Claude/Codex 开放
-  // （opencode/agy 按 git 仓库归属会话，worktree 会话会塌回主仓库，故整体隐藏）。git 探测
+  // 「创建 Worktree」仅对 git 仓库、且自身不是 worktree 的项目显示；Claude/Codex/Grok Build
+  // 都按 cwd 归属会话，opencode/agy 则会把 worktree 会话塌回主仓库，故对后两者隐藏。git 探测
   // 是异步的，先把菜单弹出来，探测回来后再点亮该项（响应式更新，避免右键卡一下）。
-  if (p.exists && !p.worktreeName && (agent.value === 'claude' || agent.value === 'codex')) {
+  if (p.exists && !p.worktreeName && agentSupports(agent.value, 'worktree')) {
     const target = p.displayPath
     api.gitHasRepo(target)
       .then((has) => {
@@ -820,9 +820,10 @@ async function confirmCreateWorktree() {
   }
 }
 
-// worktree 是 Claude / Codex 共享的物理目录 —— 两个 agent 都可能在里面跑过会话，各自按自己的
-// 布局存 transcript。删 worktree、统计会话数都要覆盖这两个 agent。
-const WORKTREE_AGENTS: Agent[] = ['claude', 'codex']
+// app 创建的 worktree 是 Claude / Codex / Grok Build 共享的物理目录。三个 agent 都按 cwd
+// 归属会话，删 worktree、统计会话数时必须一起覆盖，避免留下无法访问的会话目录。
+// 这不接管 Grok 自己的 worktree registry。
+const WORKTREE_AGENTS: Agent[] = ['claude', 'codex', 'grok']
 
 const normPath = (s: string) => s.replace(/\\/g, '/').replace(/\/+$/, '')
 
@@ -929,8 +930,8 @@ async function performWorktreeDelete(p: ProjectInfo) {
     //   2) 内嵌 TUI / shell 的 PTY（closeTabsByProject 里 ptyKill，异步，句柄释放由后端重试兜底）。
     await stopWorktreeChats(p.displayPath)
     closeTabsByProject(p.dirName)
-    // worktree 是 Claude / Codex 共享目录 → 两个 agent 在该路径下的会话都物理删除，不可恢复，
-    // 否则移除工作树后会残留另一 agent 的孤儿 transcript。最后再移除工作树 + 删除分支。
+    // worktree 是 Claude / Codex / Grok Build 共享目录，先清理三个 agent 在该 cwd 的会话，
+    // 避免移除工作树后留下无法访问的 transcript。最后再移除工作树 + 删除分支。
     for (const a of WORKTREE_AGENTS) {
       await hardDeleteWorktreeSessionsFor(a, p.displayPath)
     }
@@ -1522,6 +1523,21 @@ watch(visibleAgents, (list) => {
   if (!list.includes(agent.value)) switchAgent(list[0])
 })
 
+// Native tray statistics run outside the webview, so localStorage changes must
+// be explicitly mirrored into the Rust tray worker. agy is filtered by the
+// backend because it has no usage statistics source.
+watch(
+  enabledAgents,
+  (agents) => {
+    void api.setTrayEnabledAgents(
+      Object.entries(agents)
+        .filter(([, enabled]) => enabled)
+        .map(([agent]) => agent as Agent),
+    ).catch(() => {})
+  },
+  { immediate: true, deep: true },
+)
+
 // 记住「当前 agent + 当前项目」里活跃的 view tab / TUI tab，供切项目、切 agent
 // 之后原样恢复。activeDir 为空（欢迎页）时无可记，直接返回。
 function rememberActiveNav() {
@@ -1810,6 +1826,12 @@ async function loadTrash() {
 async function openChat(s: SessionMeta) {
   setActiveTui(null)
   openTrashItem.value = null
+  // Capture the click context before any async work. In split panes and while the
+  // project list is refreshing, the global agent/dir can change before read_session
+  // resolves; opening must remain tied to the pane and source that was clicked.
+  const openAgent = agent.value
+  const openProjectKey = activeDir.value ?? ''
+  const openPaneId = focusedPane.value?.id
   // 已有同 path 的 tab（read 或 chat）→ 切过去；chat tab 就地转回 read
   const existing = findViewTab(t =>
     (t.type === 'session' && t.session?.path === s.path) ||
@@ -1821,7 +1843,7 @@ async function openChat(s: SessionMeta) {
       existing.session = s
     }
     existing.loadingMsgs = true
-    api.readSession(agent.value, s.path).then(msgs => {
+    api.readSession(existing.agent, s.path).then(msgs => {
       existing.msgs = msgs
       existing.loadingMsgs = false
     }).catch(() => { existing.loadingMsgs = false })
@@ -1830,17 +1852,18 @@ async function openChat(s: SessionMeta) {
   }
   const tab = createViewTab({
     type: 'session',
-    agent: agent.value,
-    projectKey: activeDir.value ?? '',
+    agent: openAgent,
+    projectKey: openProjectKey,
+    paneId: openPaneId,
     title: s.title,
     session: s,
     loadingMsgs: true,
   })
   await nextTick()
   try {
-    tab.msgs = await api.readSession(agent.value, s.path)
+    tab.msgs = await api.readSession(openAgent, s.path)
     try {
-      await api.watchSession(agent.value, s.path)
+      await api.watchSession(openAgent, s.path)
       const ageMs = Date.now() - (s.modified ?? 0)
       if (ageMs >= 0 && ageMs < LIVE_FRESH_MS) {
         tab.liveTailing = true
@@ -1856,8 +1879,8 @@ async function openChat(s: SessionMeta) {
   } finally {
     tab.loadingMsgs = false
   }
-  if (activeDir.value) {
-    recordView({ agent: agent.value, dir: activeDir.value, session: s, mode: 'read' })
+  if (openProjectKey) {
+    recordView({ agent: openAgent, dir: openProjectKey, session: s, mode: 'read' })
   }
 }
 
@@ -1898,13 +1921,48 @@ function openPricing() {
 }
 
 // 点开导出历史里的一条 —— 用平时查看会话的同一套逻辑（read_session）打开**原始**
-// transcript，和落盘的导出文件无关。沿用回收站的跨 agent 打开机制：用 importedAgent
-// 记录这条记录的 agent，不切换整个侧栏。原始文件已被移动 / 删除时后端抛错 —— 仅提示，
-// 不自动删历史（可能只是临时不可达，让用户在列表里手动移除）。showExportHistory 保持
-// true，关闭会话详情时自动回到历史列表（与回收站一致）。
+// transcript，和落盘的导出文件无关。历史记录可以来自当前侧栏之外的 agent，因此这里
+// 必须先切换 agent / 项目布局并关闭全局历史覆盖层，再激活新建的 view tab；否则 tab
+// 虽然已经创建，仍会挂在不可见的旧布局里，看起来就像点击没有反应。
 async function openHistorySession(rec: ExportRecord) {
   setActiveTui(null)
   openTrashItem.value = null
+
+  // 导出历史卡片保存的是 cwd，而不同 agent 的 projectKey 规则不同。优先从项目列表
+  // 用 displayPath 反查真实 key（Claude 的 key 是编码目录名，Grok/Codex 通常就是 cwd）。
+  if (agent.value !== rec.agent) {
+    rememberActiveNav()
+    lastDirByAgent.set(agent.value, activeDir.value)
+    agent.value = rec.agent
+  }
+  showExportHistory.value = false
+  showTrash.value = false
+  showStats.value = false
+  showPricing.value = false
+  sessionStatsTarget.value = null
+  activeDir.value = null
+  setActiveViewTab(null)
+  sessions.value = []
+  sessionTotal.value = 0
+
+  let projectKey = rec.cwd || ''
+  try {
+    const listed = await api.listProjects(rec.agent, sessionListOptions())
+    projects.value = listed
+    const norm = (s: string) => s.replace(/\\/g, '/').replace(/\/+$/, '')
+    const cwd = rec.cwd ? norm(rec.cwd) : ''
+    const project = cwd
+      ? listed.find((p) => norm(p.displayPath) === cwd)
+      : undefined
+    projectKey = project?.dirName || projectKey
+  } catch {
+    // 即使项目列表暂时不可用，会话 tab 仍可按原始路径打开；项目列表稍后可刷新。
+  }
+  activeDir.value = projectKey || null
+  // App 的 watch 是异步 flush；这里同步推进 panes 投影，确保 createViewTab 落在当前布局。
+  panesAgent.value = rec.agent
+  panesProject.value = activeDir.value
+
   const meta: SessionMeta = {
     id: rec.sessionId,
     fileName: shortName(rec.path),
@@ -1923,12 +1981,13 @@ async function openHistorySession(rec: ExportRecord) {
   const tab = createViewTab({
     type: 'session',
     agent: rec.agent,
-    projectKey: activeDir.value ?? '',
+    projectKey,
     title: rec.title,
     session: meta,
     importedAgent: rec.agent,
     loadingMsgs: true,
   })
+  setActiveViewTab(tab.uiId)
   try {
     tab.msgs = await api.readSession(rec.agent, rec.path)
   } catch (e) {
@@ -3434,6 +3493,7 @@ function onResetSettings() {
     danger: true,
     onOk: () => {
       resetSettings()
+      void api.resetPricingCache().catch(() => {})
       resetDesktopPetSettings()
       void updateDesktopPetWindow(false).catch(() => {})
       projPrefs.value = {}
@@ -3892,6 +3952,7 @@ type TerminalTurnEvent = {
   path: string
   state: 'started' | 'completed' | 'blocked' | 'failed'
   source: 'hook'
+  promptId?: string
 }
 
 type DesktopPetSessionTarget = Pick<DesktopTask, 'agent' | 'path'>
@@ -3940,12 +4001,12 @@ async function installLiveTailListeners() {
 
 async function installTerminalTurnListeners() {
   const turnUnlisten = await listen<TerminalTurnEvent>('terminal-turn://state', (e) => {
-    const { agent: eventAgent, path, state, source } = e.payload
+    const { agent: eventAgent, path, state, source, promptId } = e.payload
     if (!path) return
-    if (state === 'started') markTabTurnStarted(eventAgent, path, source)
-    else if (state === 'completed') markTabTurnCompleted(eventAgent, path, source)
-    else if (state === 'blocked') markTabTurnBlocked(eventAgent, path, source)
-    else if (state === 'failed') markTabTurnFailed(eventAgent, path, source)
+    if (state === 'started') markTabTurnStarted(eventAgent, path, source, promptId)
+    else if (state === 'completed') markTabTurnCompleted(eventAgent, path, source, promptId)
+    else if (state === 'blocked') markTabTurnBlocked(eventAgent, path, source, promptId)
+    else if (state === 'failed') markTabTurnFailed(eventAgent, path, source, promptId)
   })
   const desktopPetUnlisten = await listen<DesktopPetSessionTarget>(
     'desktop-pet://open-session',
@@ -4279,11 +4340,11 @@ provide<PaneActions>(PaneActionsKey, {
           <button
             type="button"
             class="ct-search topbar-global-search"
-            v-tooltip="t('search.global.placeholder')"
+            v-tooltip="t('search.global.placeholder', { agent: agentLabel(agent) })"
             @click="openGlobalSearch"
           >
             <IconSearch class="ct-search-ic" />
-            <span>{{ t('search.global.placeholder') }}</span>
+            <span>{{ t('search.global.placeholder', { agent: agentLabel(agent) }) }}</span>
           </button>
         </div>
       </div>
@@ -4419,6 +4480,7 @@ provide<PaneActions>(PaneActionsKey, {
         @close="showSettings = false; settingsTab = undefined"
         @reset-settings="onResetSettings"
         @clear-tabs="onClearTabs"
+        @notify="notify"
       />
     </Transition>
 

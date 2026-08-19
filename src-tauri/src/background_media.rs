@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -16,6 +16,13 @@ pub struct BackgroundMedia {
     path: String,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundMediaExport {
+    count: usize,
+    directory: String,
+}
+
 fn media_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let directory = app
         .path()
@@ -30,6 +37,77 @@ fn media_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 #[tauri::command]
 pub fn background_media_directory(app: tauri::AppHandle) -> Result<String, String> {
     Ok(media_directory(&app)?.to_string_lossy().into_owned())
+}
+
+/// Copy every saved background into a new folder in the user-selected directory,
+/// using the original display name rather than the UUID-prefixed cache filename.
+#[tauri::command]
+pub fn export_background_media(
+    app: tauri::AppHandle,
+    destination_path: String,
+) -> Result<BackgroundMediaExport, String> {
+    let destination = PathBuf::from(destination_path);
+    if !destination.is_dir() {
+        return Err("Export destination is not a directory".to_string());
+    }
+    let export_directory = create_export_directory(
+        &destination,
+        &chrono::Local::now().format("%Y%m%d-%H%M%S").to_string(),
+    )?;
+    let media = list_background_media(app)?;
+    let mut exported = 0usize;
+    for item in media {
+        let source = PathBuf::from(&item.path);
+        let target = next_export_path(&export_directory, &item.name);
+        fs::copy(source, target).map_err(|error| error.to_string())?;
+        exported += 1;
+    }
+    Ok(BackgroundMediaExport {
+        count: exported,
+        directory: export_directory.to_string_lossy().into_owned(),
+    })
+}
+
+fn create_export_directory(destination: &Path, timestamp: &str) -> Result<PathBuf, String> {
+    let base_name = format!("background-media-{timestamp}");
+    for index in 1usize.. {
+        let name = if index == 1 {
+            base_name.clone()
+        } else {
+            format!("{base_name} ({index})")
+        };
+        let directory = destination.join(name);
+        match fs::create_dir(&directory) {
+            Ok(()) => return Ok(directory),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    unreachable!("unbounded export directory search")
+}
+
+fn next_export_path(destination: &Path, name: &str) -> PathBuf {
+    let original = destination.join(name);
+    if !original.exists() {
+        return original;
+    }
+    let source_name = Path::new(name);
+    let stem = source_name
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or(name);
+    let extension = source_name
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{value}"))
+        .unwrap_or_default();
+    for index in 2usize.. {
+        let candidate = destination.join(format!("{stem} ({index}){extension}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded export filename search")
 }
 
 fn extension(path: &Path) -> Result<String, String> {
@@ -175,6 +253,48 @@ mod tests {
 
         assert_eq!(media.id, id.to_string());
         assert_eq!(media.path, cached.to_string_lossy());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn export_paths_keep_original_names_and_disambiguate_collisions() {
+        let directory =
+            std::env::temp_dir().join(format!("background-media-export-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+
+        assert_eq!(
+            next_export_path(&directory, "dream.mp4"),
+            directory.join("dream.mp4")
+        );
+        fs::write(directory.join("dream.mp4"), b"first").unwrap();
+        assert_eq!(
+            next_export_path(&directory, "dream.mp4"),
+            directory.join("dream (2).mp4")
+        );
+        fs::write(directory.join("dream (2).mp4"), b"second").unwrap();
+        assert_eq!(
+            next_export_path(&directory, "dream.mp4"),
+            directory.join("dream (3).mp4")
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn export_directories_are_created_inside_the_selected_folder() {
+        let directory =
+            std::env::temp_dir().join(format!("background-media-export-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+
+        let first = create_export_directory(&directory, "20260819-170000").unwrap();
+        let second = create_export_directory(&directory, "20260819-170000").unwrap();
+
+        assert_eq!(first, directory.join("background-media-20260819-170000"));
+        assert_eq!(
+            second,
+            directory.join("background-media-20260819-170000 (2)")
+        );
+        assert!(first.is_dir());
+        assert!(second.is_dir());
         fs::remove_dir_all(directory).unwrap();
     }
 }

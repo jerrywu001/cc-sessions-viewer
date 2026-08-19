@@ -6,6 +6,7 @@ import { t } from '../i18n'
 import { IconDownload, IconRefresh, IconSettings, IconClose, IconCheck, IconTrash, IconSelect, IconGitBranch, agentIcons } from './icons'
 import { latestVersion, updateAvailable } from '../updateCheck'
 import { visibleAgents } from '../settings'
+import { agentLabel } from '../agentMeta'
 
 type ProjState = 'pinned' | 'sunk'
 
@@ -30,8 +31,6 @@ const emit = defineEmits<{
   (e: 'reorder-projects', dirNames: string[]): void
 }>()
 
-const agentLabel = (a: Agent) =>
-  a === 'codex' ? 'Codex' : a === 'agy' ? 'agy' : a === 'opencode' ? 'opencode' : 'Claude'
 const agentName = computed(() => agentLabel(props.agent))
 // 3 个及以上 agent 时分段控件放不下 icon+文字 —— 收成纯图标，名字挪进 tooltip。
 const switcherIconsOnly = computed(() => visibleAgents.value.length > 2)

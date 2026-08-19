@@ -11,7 +11,7 @@
 
 **English** · [中文](README.zh-CN.md) · [日本語](README.ja.md) · [CHANGELOG](CHANGELOG.md)
 
-<p align="center">A native desktop browser for <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Antigravity CLI</strong>, and <strong>opencode</strong>.<br/>Read, search, and manage local session transcripts from all four in one place.</p>
+<p align="center">A native desktop browser for <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Grok Build</strong>, <strong>Antigravity CLI</strong>, and <strong>opencode</strong>.<br/>Read, search, and manage local session transcripts from all five in one place.</p>
 
 </div>
 
@@ -23,7 +23,8 @@ https://github.com/user-attachments/assets/9bcb92a8-e5b8-40e5-b492-af252162309b
 
 - **Faithful replay** — thinking chains, tool-call pairings, structured diffs, and inline screenshots
 - **Global search** — cross-project instant search (⌘⇧F) jumps to the exact message
-- **In-app chat** — start or resume a session in a built-in chat with live model, reasoning-effort (incl. Opus **Ultracode**), and permission-mode pickers — no terminal required
+- **In-app chat** — start or resume Claude Code or Codex sessions in a built-in chat with live model, reasoning-effort (incl. Opus **Ultracode**), and permission-mode pickers — no terminal required
+- **Grok Build history + TUI** — browse, search, export, analyze, rename, trash/restore, and resume local Grok sessions; Grok GUI Chat is intentionally not included
 - **One-click resume** — resume or start a session in an embedded terminal or external app — supports **Terminal.app**, **cmux**, **iTerm2**, **Ghostty**, and **Warp**
 - **Shell terminal tabs** — open pure shell tabs alongside agent sessions for running arbitrary commands in the project directory; tabs persist across restarts
 - **Split panes** — split any project into side-by-side or stacked panes, each with its own tab strip; drag tabs to reorder within a pane or move them between panes, with keyboard shortcuts for every action (see Settings → Shortcuts). Every project remembers its own layout across restarts
@@ -33,7 +34,7 @@ https://github.com/user-attachments/assets/9bcb92a8-e5b8-40e5-b492-af252162309b
 - **Views history** — per-project, searchable history of every view you've opened, with favorites; jump back to any past read or chat view in one click
 - **Deep stats** — aggregate token spend and cost with live model pricing from LiteLLM; slice by project, model, or tool
 - **Menu bar stats** — macOS tray icon shows at-a-glance Today / 7d / 30d cost and tokens per agent
-- **Live model pricing** — browseable pricing table for Claude / Codex, auto-updated from upstream
+- **Live model pricing** — browseable pricing table including Claude, Codex, and Grok / xAI, auto-updated from upstream
 - **Flexible export** — single session or batches to offline-readable Markdown, HTML, or lossless JSON
 - **Bookmarks** — pin any folder to the sidebar for quick access, per agent
 - **Rename & delete** — session renames sync back to the CLI; soft-delete moves to shared trash with restore support

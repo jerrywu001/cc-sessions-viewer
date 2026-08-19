@@ -44,7 +44,7 @@ notify = { version = "6", default-features = false, features = ["macos_fsevent"]
 # base64 把 PTY 原始字节 chunk 化后通过 Tauri event emit 给前端 xterm.js。
 portable-pty = "0.8"
 base64 = "0.22"
-# 启动时后台从 LiteLLM 拉模型价格表，新模型上架不必发版。
+# 启动时后台从 js-bridge 拉模型价格表、models.dev 原站兜底，新模型上架不必发版。
 # 同步 API（默认 native-tls，rustls 失败可退回系统 OpenSSL），
 # 在 background thread 里跑、不污染 cost_usd 的同步调用链。
 ureq = { version = "2", features = ["json"] }
@@ -58,6 +58,9 @@ tauri-plugin-single-instance = "2"
 uuid = { version = "1", features = ["v4"] }
 # 背景素材按内容去重，避免同一图片 / 视频被重复复制到应用缓存。
 sha2 = "0.10"
+# Grok hooks live in config.toml. Preserve unrelated comments, formatting and
+# secret-bearing fields while editing only this app's managed hook entries.
+toml_edit = "0.20"
 
 [features]
 default = []

@@ -2563,10 +2563,13 @@ fn read_turns(fp: &Path) -> Vec<Turn> {
                 }
 
                 let mut call = CallRecord {
+                    call_count: 1,
                     model: model_hint.clone(),
                     message_id: None,
                     usage,
                     cost_usd: 0.0,
+                    pricing_missing: false,
+                    pricing_estimated: false,
                     tools: std::mem::take(&mut pending_tools),
                     bash_commands: std::mem::take(&mut pending_bash),
                     mcp_servers: std::mem::take(&mut pending_mcp),

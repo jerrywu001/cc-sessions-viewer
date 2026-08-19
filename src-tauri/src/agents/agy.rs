@@ -817,10 +817,13 @@ fn read_turns(fp: &Path) -> Vec<Turn> {
                         }
                     }
                     turn.calls.push(CallRecord {
+                        call_count: 1,
                         model: String::new(),
                         message_id: None,
                         usage: UsageSummary::default(),
                         cost_usd: 0.0,
+                        pricing_missing: false,
+                        pricing_estimated: false,
                         tools,
                         bash_commands: Vec::new(),
                         mcp_servers: Vec::new(),

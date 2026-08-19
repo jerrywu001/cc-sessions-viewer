@@ -3,9 +3,11 @@ import {
   captureStableTerminalCursor,
   codexSgrNormalizer,
   codexResumeConfigHint,
+  createTerminalImeInputDeduper,
   handleWindowsTerminalSelectionDelete,
   shouldBlinkTerminalCursor,
   shouldCopyWindowsTerminalSelection,
+  shouldBufferTerminalImeSwitch,
   shouldUseStableTerminalCursor,
   type TerminalTab,
 } from '../src/terminals'
@@ -15,6 +17,7 @@ import { humanizeTerminalSessionError } from '../src/sessionError'
 // Windows：实测 codex 认不出背景、按深色主题出色 → 浅色主题下镜像前景。
 const normalizeLightSgr = codexSgrNormalizer('light', true)
 const normalizeDarkSgr = codexSgrNormalizer('dark', true)
+const normalizeInheritedBackgroundSgr = codexSgrNormalizer('dark', false, true)
 // mac/Linux：未验证 codex 用哪套调色板 → 前景一律不动。
 const normalizeLightSgrMac = codexSgrNormalizer('light', false)
 
@@ -57,6 +60,131 @@ describe('terminal keyboard handling', () => {
   it('does not intercept modified or unrelated keys', () => {
     expect(shouldCopyWindowsTerminalSelection(key({ shiftKey: true }), true, 'Win32')).toBe(false)
     expect(shouldCopyWindowsTerminalSelection(key({ key: 'v' }), true, 'Win32')).toBe(false)
+  })
+
+  it('recognizes Windows bare Shift as an IME switch only on Windows', () => {
+    expect(shouldBufferTerminalImeSwitch(key({ key: 'Shift', ctrlKey: false }), 'Win32')).toBe(true)
+    expect(shouldBufferTerminalImeSwitch(key({ key: '', code: 'ShiftLeft', ctrlKey: false }), 'Win32')).toBe(true)
+    expect(shouldBufferTerminalImeSwitch(key({ key: 'Shift', ctrlKey: false }), 'MacIntel')).toBe(false)
+    expect(shouldBufferTerminalImeSwitch(key({ key: 'Shift' }), 'Win32')).toBe(false)
+  })
+})
+
+describe('terminal IME input', () => {
+  it('forwards a composition result once when switching from Chinese IME to English', () => {
+    vi.useFakeTimers()
+    try {
+      const deduper = createTerminalImeInputDeduper()
+      deduper.onCompositionEnd()
+
+      // macOS may produce insertText immediately, then xterm's delayed composition result.
+      expect(deduper.consume('g ro k')).toBe('grok')
+      expect(deduper.consume('g ro k')).toBeNull()
+
+      const merged = createTerminalImeInputDeduper()
+      merged.onCompositionEnd()
+      expect(merged.consume('g ro kg ro k')).toBe('grok')
+
+      const compact = createTerminalImeInputDeduper()
+      compact.onCompositionEnd()
+      expect(compact.consume('grokgrok')).toBe('grok')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not suppress distinct text after a composition ends', () => {
+    vi.useFakeTimers()
+    try {
+      const deduper = createTerminalImeInputDeduper()
+      deduper.onCompositionEnd()
+
+      expect(deduper.consume('果肉可')).toBe('果肉可')
+      expect(deduper.consume('!')).toBe('!')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not affect ordinary input after the composition event loop', () => {
+    vi.useFakeTimers()
+    try {
+      const deduper = createTerminalImeInputDeduper()
+      deduper.onCompositionEnd()
+      vi.runAllTimers()
+
+      expect(deduper.consume('grok')).toBe('grok')
+      expect(deduper.consume('grok')).toBe('grok')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('filters a delayed duplicate caused by Caps Lock within the debounce window', () => {
+    vi.useFakeTimers()
+    try {
+      const deduper = createTerminalImeInputDeduper()
+      deduper.onCompositionEnd()
+
+      expect(deduper.consume('grok')).toBe('grok')
+      vi.advanceTimersByTime(80)
+      expect(deduper.consume('grok')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('buffers all Caps Lock IME fragments and flushes one normalized result', () => {
+    vi.useFakeTimers()
+    try {
+      const flushed: string[] = []
+      const deduper = createTerminalImeInputDeduper()
+      deduper.setFlushHandler((data) => flushed.push(data))
+      deduper.onInputMethodSwitch()
+
+      expect(deduper.consume('g')).toBeNull()
+      expect(deduper.consume('ro')).toBeNull()
+      expect(deduper.consume('kgrok')).toBeNull()
+      vi.advanceTimersByTime(120)
+
+      expect(flushed).toEqual(['grok'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the Caps Lock buffer active when compositionend follows the keydown', () => {
+    vi.useFakeTimers()
+    try {
+      const flushed: string[] = []
+      const deduper = createTerminalImeInputDeduper()
+      deduper.setFlushHandler((data) => flushed.push(data))
+      deduper.onInputMethodSwitch()
+      deduper.onCompositionEnd()
+
+      expect(deduper.consume('g')).toBeNull()
+      expect(deduper.consume('ro')).toBeNull()
+      expect(deduper.consume('k')).toBeNull()
+      vi.advanceTimersByTime(120)
+
+      expect(flushed).toEqual(['grok'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('accepts the same text as a new input after the debounce window', () => {
+    vi.useFakeTimers()
+    try {
+      const deduper = createTerminalImeInputDeduper()
+      deduper.onCompositionEnd()
+
+      expect(deduper.consume('grok')).toBe('grok')
+      vi.advanceTimersByTime(121)
+      expect(deduper.consume('grok')).toBe('grok')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -303,6 +431,15 @@ describe('SGR background normalization', () => {
     expect(normalizeLightSgr('38;5;40')).not.toContain('38;5;49')
     expect(normalizeDarkSgr('38;2;40;100;47')).toBeNull()
     expect(normalizeDarkSgr('48;2;30;30;30')).toBeNull()
+  })
+
+  it('strips every explicit background when a CLI should inherit the app terminal theme', () => {
+    expect(normalizeInheritedBackgroundSgr('40')).toBe('49')
+    expect(normalizeInheritedBackgroundSgr('107')).toBe('49')
+    expect(normalizeInheritedBackgroundSgr('48;2;0;0;0')).toBe('49')
+    expect(normalizeInheritedBackgroundSgr('1;38;2;255;255;255;48;5;0;22')).toBe(
+      '1;38;2;255;255;255;49;22',
+    )
   })
 })
 
