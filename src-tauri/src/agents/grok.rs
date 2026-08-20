@@ -402,6 +402,14 @@ fn event_prompt_id(event: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())
         .map(str::to_owned)
+        // Grok 本地持久化的用户消息没有外层 promptId；同一轮文字和附件靠 update
+        // 内的递增 promptIndex 关联。把它作为稳定 key，才能合并为同一个用户消息。
+        .or_else(|| {
+            event
+                .pointer("/params/update/_meta/promptIndex")
+                .and_then(Value::as_u64)
+                .map(|index| format!("grok-prompt-index:{index}"))
+        })
 }
 
 fn is_session_update_event(event: &Value) -> bool {
@@ -465,9 +473,13 @@ fn append_chunk(
             .and_then(Value::as_i64),
     };
     let can_merge = key.prompt_id.is_some() || key.stream_start_ms.is_some();
-    if can_merge && blocks.len() == 1 {
-        if let Some(previous) = last_chunk.as_ref().filter(|previous| previous.key == key) {
-            if previous.message_index + 1 == messages.len() {
+    if can_merge {
+        if let Some(previous) = last_chunk.as_ref().filter(|previous| {
+            previous.message_index + 1 == messages.len()
+                && previous.key.role == role
+                && previous.key.prompt_id == key.prompt_id
+        }) {
+            if previous.key == key && blocks.len() == 1 {
                 if let (Some(existing), Some(extra)) = (
                     messages
                         .get_mut(previous.message_index)
@@ -481,6 +493,21 @@ fn append_chunk(
                             .push_str(extra);
                         return;
                     }
+                }
+            }
+            // Grok 把一条带附件的用户输入依次写成 text / image / image chunk。它们
+            // promptIndex 相同但 block 类型不同，不能像连续文本那样拼接；追加到同一条
+            // Msg 后，ChatView 会将缩略图渲染在对应用户气泡的上方。
+            if role == "user" && key.prompt_id.is_some() {
+                if let Some(message) = messages.get_mut(previous.message_index) {
+                    let block_index = message.blocks.len() + blocks.len() - 1;
+                    message.blocks.append(&mut blocks);
+                    *last_chunk = Some(LastChunk {
+                        key,
+                        message_index: previous.message_index,
+                        block_index,
+                    });
+                    return;
                 }
             }
         }
@@ -656,7 +683,7 @@ fn failed_hook_text(update: &Value) -> Option<String> {
         .then(|| format!("Grok Build {event_name} hook failed\n{}", failed.join("\n")))
 }
 
-fn system_message(event: &Value, text: String) -> Msg {
+fn meta_message(event: &Value, meta_kind: &str, text: String) -> Msg {
     Msg {
         uuid: event
             .pointer("/params/_meta/eventId")
@@ -667,7 +694,75 @@ fn system_message(event: &Value, text: String) -> Msg {
         model: event_model(event),
         sidechain: false,
         blocks: vec![text_block("text", &text)],
-        meta_kind: Some("system".to_string()),
+        meta_kind: Some(meta_kind.to_string()),
+    }
+}
+
+fn system_message(event: &Value, text: String) -> Msg {
+    meta_message(event, "system", text)
+}
+
+fn system_note_message(event: &Value, text: String) -> Msg {
+    meta_message(event, "meta", text)
+}
+
+fn session_recap_text(update: &Value) -> Option<String> {
+    nonempty_string(update, "summary").map(str::to_owned)
+}
+
+fn task_completion(update: &Value) -> Option<(String, String, bool)> {
+    let snapshot = update.get("task_snapshot")?;
+    let task_id = nonempty_string(snapshot, "task_id")?.to_string();
+    let output = nonempty_string(snapshot, "output")
+        .unwrap_or("Background task completed")
+        .to_string();
+    let failed = snapshot
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .is_some_and(|code| code != 0)
+        || snapshot
+            .get("signal")
+            .is_some_and(|signal| !signal.is_null())
+        || matches!(
+            snapshot.get("completed").and_then(Value::as_bool),
+            Some(false)
+        );
+    Some((task_id, output, failed))
+}
+
+fn upsert_tool_result(
+    messages: &mut Vec<Msg>,
+    tool_result_by_id: &mut HashMap<String, usize>,
+    event: &Value,
+    fallback_model: Option<&str>,
+    id: Option<String>,
+    result_block: Block,
+) {
+    if let Some(message_index) = id
+        .as_deref()
+        .and_then(|tool_id| tool_result_by_id.get(tool_id))
+        .copied()
+    {
+        if let Some(message) = messages.get_mut(message_index) {
+            message.timestamp = event_timestamp(event);
+            message.blocks = vec![result_block];
+        }
+    } else {
+        messages.push(Msg {
+            uuid: event
+                .pointer("/params/_meta/eventId")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            role: "user".to_string(),
+            timestamp: event_timestamp(event),
+            model: event_model(event).or_else(|| fallback_model.map(str::to_owned)),
+            sidechain: false,
+            blocks: vec![result_block],
+            meta_kind: None,
+        });
+        if let Some(id) = id {
+            tool_result_by_id.insert(id, messages.len() - 1);
+        }
     }
 }
 
@@ -791,32 +886,14 @@ fn read_updates(path: &Path) -> Result<Vec<Msg>, String> {
                     is_error: failed,
                     ..Default::default()
                 };
-                if let Some(message_index) = id
-                    .as_deref()
-                    .and_then(|tool_id| tool_result_by_id.get(tool_id))
-                    .copied()
-                {
-                    if let Some(message) = messages.get_mut(message_index) {
-                        message.timestamp = event_timestamp(&event);
-                        message.blocks = vec![result_block];
-                    }
-                } else {
-                    messages.push(Msg {
-                        uuid: event
-                            .pointer("/params/_meta/eventId")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
-                        role: "user".to_string(),
-                        timestamp: event_timestamp(&event),
-                        model: event_model(&event).or_else(|| fallback_model.clone()),
-                        sidechain: false,
-                        blocks: vec![result_block],
-                        meta_kind: None,
-                    });
-                    if let Some(id) = id {
-                        tool_result_by_id.insert(id, messages.len() - 1);
-                    }
-                }
+                upsert_tool_result(
+                    &mut messages,
+                    &mut tool_result_by_id,
+                    &event,
+                    fallback_model.as_deref(),
+                    id,
+                    result_block,
+                );
             }
             "plan" => {
                 last_chunk = None;
@@ -846,12 +923,58 @@ fn read_updates(path: &Path) -> Result<Vec<Msg>, String> {
             }
             "retry_state" => {
                 last_chunk = None;
-                messages.push(system_message(&event, retry_text(update)));
+                messages.push(system_note_message(&event, retry_text(update)));
             }
             "hook_execution" => {
-                last_chunk = None;
                 if let Some(text) = failed_hook_text(update) {
-                    messages.push(system_message(&event, text));
+                    // 成功 hook 只是 Grok 在同一轮 text / image chunk 之间插入的内部
+                    // 生命周期事件，不能打断 promptIndex 附件合并。失败 hook 才是需要
+                    // 展示的独立系统注记。
+                    last_chunk = None;
+                    messages.push(system_note_message(&event, text));
+                }
+            }
+            "session_recap" => {
+                last_chunk = None;
+                if let Some(text) = session_recap_text(update) {
+                    // Grok 在会话收尾时写入的简要回顾属于系统注记，不是用户可见的
+                    // 未知协议错误。使用已有的 `meta` 类型，使其与 Claude 的
+                    // System note 使用同一套轻量折叠展示。
+                    messages.push(system_note_message(&event, text));
+                }
+            }
+            "task_backgrounded" => {
+                // 对应 tool_call_update 已经记录了「转入后台」状态；不重复把协议载荷渲染成
+                // 系统卡片。
+                last_chunk = None;
+            }
+            "task_completed" => {
+                last_chunk = None;
+                if let Some((task_id, output, failed)) = task_completion(update) {
+                    if failed {
+                        if let Some(message_index) = tool_message_by_id.get(&task_id).copied() {
+                            if let Some(block) = messages
+                                .get_mut(message_index)
+                                .and_then(|message| message.blocks.first_mut())
+                            {
+                                block.is_error = true;
+                            }
+                        }
+                    }
+                    upsert_tool_result(
+                        &mut messages,
+                        &mut tool_result_by_id,
+                        &event,
+                        fallback_model.as_deref(),
+                        Some(task_id.clone()),
+                        Block {
+                            kind: "tool_result".to_string(),
+                            text: Some(output),
+                            tool_id: Some(task_id),
+                            is_error: failed,
+                            ..Default::default()
+                        },
+                    );
                 }
             }
             "turn_completed" => {
@@ -1993,6 +2116,92 @@ mod tests {
     }
 
     #[test]
+    fn parser_groups_grok_prompt_index_attachments_with_their_text() {
+        fn user_chunk(id: &str, prompt_index: u64, content: Value) -> Value {
+            let mut value = event(
+                id,
+                "ignored",
+                "user_message_chunk",
+                serde_json::json!({
+                    "content": content,
+                    "_meta": {"promptIndex": prompt_index, "modelId": "grok-test"}
+                }),
+            );
+            let meta = value
+                .pointer_mut("/params/_meta")
+                .unwrap()
+                .as_object_mut()
+                .unwrap();
+            meta.remove("promptId");
+            meta.remove("streamStartMs");
+            value
+        }
+
+        let root = scratch("prompt-index-attachments");
+        let updates = create_session(
+            &root,
+            "%2Ftmp%2Fdemo",
+            "session-a",
+            serde_json::json!({"info":{"id":"session-a","cwd":"/tmp/demo"}}),
+            &[
+                user_chunk(
+                    "text",
+                    7,
+                    serde_json::json!({"type":"text","text":"Describe these images"}),
+                ),
+                event(
+                    "hook-after-text",
+                    "internal",
+                    "hook_execution",
+                    serde_json::json!({
+                        "event_name":"user_prompt_submit",
+                        "runs":[{"name":"ok","status":{"status":"success"}}]
+                    }),
+                ),
+                user_chunk(
+                    "image-one",
+                    7,
+                    serde_json::json!({"type":"image","data":"AQID","mimeType":"image/png"}),
+                ),
+                event(
+                    "hook-between-images",
+                    "internal",
+                    "hook_execution",
+                    serde_json::json!({
+                        "event_name":"pre_tool_use",
+                        "runs":[{"name":"ok","status":{"status":"success"}}]
+                    }),
+                ),
+                user_chunk(
+                    "image-two",
+                    7,
+                    serde_json::json!({"type":"image","data":"BAUG","mimeType":"image/png"}),
+                ),
+                user_chunk(
+                    "next-prompt",
+                    8,
+                    serde_json::json!({"type":"text","text":"A separate prompt"}),
+                ),
+            ],
+        );
+
+        let messages = read_updates(&updates).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].blocks.len(), 3);
+        assert_eq!(
+            messages[0].blocks[0].text.as_deref(),
+            Some("Describe these images")
+        );
+        assert_eq!(messages[0].blocks[1].kind, "image");
+        assert_eq!(messages[0].blocks[2].kind, "image");
+        assert_eq!(
+            messages[1].blocks[0].text.as_deref(),
+            Some("A separate prompt")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn parser_marks_failed_tool_call_and_result() {
         let root = scratch("failed-tool");
         let updates = create_session(
@@ -2094,6 +2303,115 @@ mod tests {
         assert!(!rendered.contains("ok: completed"));
         assert!(rendered.contains("Unsupported Grok Build update (future_update)"));
         assert!(rendered.contains("preserve me"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parser_renders_session_recap_as_a_system_note() {
+        let root = scratch("session-recap");
+        let updates = create_session(
+            &root,
+            "%2Ftmp%2Fdemo",
+            "session-a",
+            serde_json::json!({"info":{"id":"session-a","cwd":"/tmp/demo"}}),
+            &[event(
+                "recap",
+                "prompt",
+                "session_recap",
+                serde_json::json!({
+                    "summary":"The requested Markdown examples were rendered.",
+                    "auto":true
+                }),
+            )],
+        );
+
+        let messages = read_updates(&updates).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].meta_kind.as_deref(), Some("meta"));
+        assert_eq!(
+            messages[0].blocks[0].text.as_deref(),
+            Some("The requested Markdown examples were rendered.")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parser_keeps_background_task_protocol_out_of_system_notes() {
+        let root = scratch("background-task");
+        let updates = create_session(
+            &root,
+            "%2Ftmp%2Fdemo",
+            "session-a",
+            serde_json::json!({"info":{"id":"session-a","cwd":"/tmp/demo"}}),
+            &[
+                event(
+                    "call",
+                    "prompt",
+                    "tool_call",
+                    serde_json::json!({
+                        "toolCallId":"task-1",
+                        "title":"run_terminal_command",
+                        "rawInput":{"command":"long-running-command"}
+                    }),
+                ),
+                event(
+                    "started",
+                    "prompt",
+                    "tool_call_update",
+                    serde_json::json!({
+                        "toolCallId":"task-1",
+                        "status":"completed",
+                        "content":[{"type":"content","content":{"type":"text","text":"Moved to background"}}]
+                    }),
+                ),
+                event(
+                    "backgrounded",
+                    "prompt",
+                    "task_backgrounded",
+                    serde_json::json!({"task_id":"task-1"}),
+                ),
+                event(
+                    "completed",
+                    "prompt",
+                    "task_completed",
+                    serde_json::json!({
+                        "task_snapshot":{
+                            "task_id":"task-1",
+                            "output":"final command output",
+                            "exit_code":0,
+                            "completed":true
+                        }
+                    }),
+                ),
+                event(
+                    "retry",
+                    "prompt",
+                    "retry_state",
+                    serde_json::json!({"reason":"temporary failure"}),
+                ),
+            ],
+        );
+
+        let messages = read_updates(&updates).unwrap();
+        assert_eq!(messages.len(), 3);
+        let result = messages[1].blocks.first().unwrap();
+        assert_eq!(result.kind, "tool_result");
+        assert_eq!(result.text.as_deref(), Some("final command output"));
+        assert_eq!(result.tool_id.as_deref(), Some("task-1"));
+        assert!(!result.is_error);
+        assert_eq!(messages[2].meta_kind.as_deref(), Some("meta"));
+        assert_eq!(
+            messages[2].blocks[0].text.as_deref(),
+            Some("temporary failure")
+        );
+        assert!(messages.iter().all(|message| {
+            message.blocks.iter().all(|block| {
+                !block
+                    .text
+                    .as_deref()
+                    .is_some_and(|text| text.contains("Unsupported Grok Build update"))
+            })
+        }));
         let _ = fs::remove_dir_all(root);
     }
 

@@ -511,9 +511,6 @@ button {
 :root.has-custom-background .text-diff-result .block-summary {
   background: color-mix(in srgb, var(--surface-2) 60%, transparent);
 }
-:root.has-custom-background .md-mermaid-source {
-  background: color-mix(in srgb, var(--code-bg) 74%, transparent);
-}
 :root.has-custom-background .md-math-block,
 :root.has-custom-background .md-table thead,
 :root.has-custom-background .mermaid-export {
@@ -3234,13 +3231,31 @@ mark.locate-hl {
 .md-list {
   margin: 10px 0;
   padding-left: 1.4em;
-  list-style: disc;
+  list-style-type: disc;
 }
 .md-list li {
   margin: 4px 0;
 }
 .md-list li::marker {
   color: var(--text-dim);
+}
+/* Nested lists are real child lists, not flattened sibling items. Give each
+   level its own inset and marker so hierarchy stays legible at a glance. */
+.md-list > li > .md-list {
+  margin: 4px 0 0;
+  padding-left: 1.5em;
+}
+.md-list > li > ul.md-list {
+  list-style-type: circle;
+}
+.md-list > li > ol.md-list {
+  list-style-type: lower-alpha;
+}
+.md-list > li > .md-list > li > ul.md-list {
+  list-style-type: square;
+}
+.md-list > li > .md-list > li > ol.md-list {
+  list-style-type: lower-roman;
 }
 .bubble code {
   background: color-mix(in srgb, var(--text) 8%, transparent);
@@ -3301,6 +3316,10 @@ code.file-ref:hover {
   margin: 8px 0;
   color: var(--text-dim);
 }
+.md-quote > .md-quote {
+  margin: 6px 0 0;
+  border-left-color: color-mix(in srgb, var(--border) 68%, var(--text-dim));
+}
 
 /* 删除线 */
 del { text-decoration: line-through; opacity: 0.7; }
@@ -3325,7 +3344,7 @@ del { text-decoration: line-through; opacity: 0.7; }
 .md-check.checked { color: var(--accent); }
 
 /* 有序列表 */
-.md-list-ol { list-style: decimal; padding-left: 1.5em; }
+.md-list-ol { list-style-type: decimal; padding-left: 1.5em; }
 
 /* 定义列表 */
 .md-dl { margin: 8px 0; }
@@ -3466,9 +3485,7 @@ del { text-decoration: line-through; opacity: 0.7; }
   user-select: none;
 }
 
-/* Mermaid 图占位符（待 mermaid.js 渲染）+ 渲染失败兜底。
- * 渲染前 / 失败时露出源码，让用户至少看得到原文；渲染成功后 mermaid.render()
- * 把 innerHTML 换成 <svg>，外层这个 .md-mermaid 容器保留做样式钩子。 */
+/* Mermaid 图占位符由 mermaid.js 替换成 SVG；外层容器保留做样式钩子。 */
 .md-mermaid {
   display: block;
   margin: 10px 0;
@@ -3507,16 +3524,11 @@ del { text-decoration: line-through; opacity: 0.7; }
 }
 .md-mermaid:hover .mermaid-export { opacity: 1; }
 .mermaid-export:hover { background: var(--surface-hover); color: var(--text); }
-.md-mermaid-source {
-  margin: 0;
-  padding: 10px 12px;
-  background: var(--code-bg);
-  color: var(--code-fg);
-  border-radius: 6px;
+.md-mermaid:not([data-rendered])::before {
+  content: 'Rendering diagram…';
+  display: block;
+  color: var(--text-mute);
   font-size: 12px;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  white-space: pre;
-  overflow-x: auto;
   text-align: left;
 }
 .md-mermaid-error {
@@ -4878,6 +4890,13 @@ body.is-tab-reordering * {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+/* 内嵌终端以绝对定位覆盖 view 层。不能用 display:none 隐藏会话详情：那会让其中的
+   虚拟列表收到 0 高的 ResizeObserver 测量，回到详情后滚动锚点便会失真。保留布局尺寸，
+   只移除视觉和交互即可。 */
+.view-layer.is-covered {
+  visibility: hidden;
+  pointer-events: none;
 }
 .tui-layer {
   position: absolute;

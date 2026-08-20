@@ -446,64 +446,125 @@ function renderTableHtml(
 // 注意要排在 table 检测之后：表格分隔行 `|---|---|` 带竖线，不会命中本正则。
 const HR_RE = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/
 
-const BULLET_ITEM_RE = /^\s*[-*]\s+(.+?)\s*$/
+const BULLET_ITEM_RE = /^(\s*)[-*]\s+(.+?)\s*$/
 const ORDERED_ITEM_RE = /^(\s*)(\d+)[.)]\s+(.+?)\s*$/
 const TASK_ITEM_RE = /^\[([xX ])\]\s+(.+)$/
 const DEF_TERM_RE = /^\S/
 const DEF_LINE_RE = /^:\s+(.+)$/
 
-function isBulletItem(line: string): boolean {
-  return BULLET_ITEM_RE.test(line)
+type ListKind = 'bullet' | 'ordered'
+
+type ListMarker = {
+  kind: ListKind
+  indent: number
+  number?: number
+  text: string
 }
 
-function isOrderedItem(line: string): boolean {
-  return ORDERED_ITEM_RE.test(line)
+type MarkdownList = {
+  kind: ListKind
+  start?: number
+  items: MarkdownListItem[]
 }
 
-function orderedItemParts(line: string): { indent: number; number: number; text: string } | null {
-  const m = ORDERED_ITEM_RE.exec(line)
-  if (!m) return null
-  return { indent: m[1].length, number: Number(m[2]), text: m[3] }
+type MarkdownListItem = {
+  text: string
+  children: MarkdownList[]
 }
 
-function bulletItemText(line: string): string {
-  const m = BULLET_ITEM_RE.exec(line)
-  return m?.[1] ?? line.trim()
+function listMarker(line: string): ListMarker | null {
+  const bullet = BULLET_ITEM_RE.exec(line)
+  if (bullet) return { kind: 'bullet', indent: bullet[1].length, text: bullet[2] }
+
+  const ordered = ORDERED_ITEM_RE.exec(line)
+  if (ordered) {
+    return {
+      kind: 'ordered',
+      indent: ordered[1].length,
+      number: Number(ordered[2]),
+      text: ordered[3],
+    }
+  }
+  return null
 }
 
-function renderListItemHtml(text: string): string {
+/** Parse one list level. A more-indented marker belongs to the preceding item,
+ * so mixed ordered/unordered lists can nest naturally instead of being flattened. */
+function parseMarkdownList(
+  lines: string[],
+  start: number,
+  indent = listMarker(lines[start])!.indent,
+  kind = listMarker(lines[start])!.kind,
+): { list: MarkdownList; next: number } {
+  const first = listMarker(lines[start])!
+  const items: MarkdownListItem[] = []
+  let i = start
+
+  while (i < lines.length) {
+    const marker = listMarker(lines[i])
+    if (!marker || marker.indent !== indent || marker.kind !== kind) break
+    i++
+
+    const children: MarkdownList[] = []
+    while (i < lines.length) {
+      const beforeBlank = i
+      while (i < lines.length && lines[i].trim() === '') i++
+      const next = listMarker(lines[i])
+
+      if (next && next.indent > indent) {
+        const child = parseMarkdownList(lines, i, next.indent, next.kind)
+        children.push(child.list)
+        i = child.next
+        continue
+      }
+
+      // Blank lines between sibling items stay inside the same list. For any
+      // other following content, leave them for the ordinary text renderer.
+      if (next && next.indent === indent && next.kind === kind) break
+      if (i !== beforeBlank) i = beforeBlank
+      break
+    }
+
+    items.push({ text: marker.text, children })
+  }
+
+  return {
+    list: {
+      kind,
+      start: kind === 'ordered' ? first.number : undefined,
+      items,
+    },
+    next: i,
+  }
+}
+
+function renderListItemHtml(text: string, children = ''): string {
   const task = TASK_ITEM_RE.exec(text)
   if (task) {
     const checked = task[1].toLowerCase() === 'x'
     const icon = checked
       ? '<span class="md-check checked">&#9745;</span>'
       : '<span class="md-check">&#9744;</span>'
-    return `<li class="md-task">${icon}${inline(task[2])}</li>`
+    return `<li class="md-task">${icon}${inline(task[2])}${children}</li>`
   }
-  return `<li>${inline(text)}</li>`
+  return `<li>${inline(text)}${children}</li>`
 }
 
-function renderBulletListHtml(items: string[]): string {
-  const body = items.map(renderListItemHtml).join('')
-  return `<ul class="md-list">${body}</ul>`
+function renderMarkdownListHtml(list: MarkdownList): string {
+  const tag = list.kind === 'ordered' ? 'ol' : 'ul'
+  const start = list.kind === 'ordered' && list.start && list.start !== 1
+    ? ` start="${list.start}"`
+    : ''
+  const classes = list.kind === 'ordered' ? 'md-list md-list-ol' : 'md-list'
+  const body = list.items
+    .map((item) => renderListItemHtml(item.text, item.children.map(renderMarkdownListHtml).join('')))
+    .join('')
+  return `<${tag} class="${classes}"${start}>${body}</${tag}>`
 }
 
-type OrderedListItem = {
-  number: number
-  text: string
-  nestedBullets: string[]
-}
-
-function renderOrderedListHtml(items: OrderedListItem[]): string {
-  const first = items[0]?.number
-  const start = first && first !== 1 ? ` start="${first}"` : ''
-  const body = items.map((item) => {
-    const nested = item.nestedBullets.length
-      ? renderBulletListHtml(item.nestedBullets)
-      : ''
-    return `<li>${inline(item.text)}${nested}</li>`
-  }).join('')
-  return `<ol class="md-list md-list-ol"${start}>${body}</ol>`
+function quoteLineText(line: string): string | null {
+  const quote = /^(?: {0,3})>\s?(.*)$/.exec(line)
+  return quote ? quote[1] : null
 }
 
 type MdSegment =
@@ -513,9 +574,9 @@ type MdSegment =
   | { kind: 'blockquote'; html: string }
   | { kind: 'text'; text: string }
 
-/** 把一段非代码块文本按 markdown table / bullet list 切片。未命中的部分保留原换行，
+/** 把一段非代码块文本按 markdown table / list 切片。未命中的部分保留原换行，
  *  之后交由 inline() 处理。 */
-function extractMarkdownBlocks(text: string): MdSegment[] {
+function extractMarkdownBlocks(text: string, renderQuote: (text: string) => string): MdSegment[] {
   const lines = text.split('\n')
   const segs: MdSegment[] = []
   let buf: string[] = []
@@ -552,67 +613,26 @@ function extractMarkdownBlocks(text: string): MdSegment[] {
       i++
       continue
     }
-    if (line.startsWith('> ') || line === '>') {
+    const firstQuoteLine = quoteLineText(line)
+    if (firstQuoteLine !== null) {
       flushBuf()
-      const qLines: string[] = [line.replace(/^>\s?/, '')]
+      const qLines: string[] = [firstQuoteLine]
       let j = i + 1
-      while (j < lines.length && (lines[j].startsWith('> ') || lines[j] === '>')) {
-        qLines.push(lines[j].replace(/^>\s?/, ''))
-        j++
-      }
-      segs.push({ kind: 'blockquote', html: `<blockquote class="md-quote">${inline(qLines.join('\n'))}</blockquote>` })
-      i = j
-      continue
-    }
-    if (isBulletItem(line)) {
-      flushBuf()
-      const items: string[] = [bulletItemText(line)]
-      let j = i + 1
-      while (j < lines.length && isBulletItem(lines[j])) {
-        items.push(bulletItemText(lines[j]))
-        j++
-      }
-      segs.push({ kind: 'list', html: renderBulletListHtml(items) })
-      i = j
-      continue
-    }
-    if (isOrderedItem(line)) {
-      flushBuf()
-      const first = orderedItemParts(line)!
-      const items: OrderedListItem[] = []
-      let j = i
       while (j < lines.length) {
-        const item = orderedItemParts(lines[j])
-        if (!item || item.indent !== first.indent) break
+        const quoteLine = quoteLineText(lines[j])
+        if (quoteLine === null) break
+        qLines.push(quoteLine)
         j++
-        const nestedBullets: string[] = []
-        // Indented bullet lines belong to the preceding ordered item. Blank
-        // lines are allowed between a list item and its nested list.
-        while (j < lines.length) {
-          if (lines[j].trim() === '' && j + 1 < lines.length) {
-            const nextBullet = lines[j + 1].match(/^(\s*)[-*]\s+(.+?)\s*$/)
-            if (nextBullet && nextBullet[1].length > first.indent) {
-              j++
-              continue
-            }
-          }
-          const nested = lines[j].match(/^(\s*)[-*]\s+(.+?)\s*$/)
-          if (!nested || nested[1].length <= first.indent) break
-          nestedBullets.push(nested[2])
-          j++
-        }
-        items.push({ number: item.number, text: item.text, nestedBullets })
-        while (
-          j < lines.length &&
-          lines[j].trim() === '' &&
-          j + 1 < lines.length &&
-          orderedItemParts(lines[j + 1])?.indent === first.indent
-        ) {
-          j++
-        }
       }
-      segs.push({ kind: 'list', html: renderOrderedListHtml(items) })
+      segs.push({ kind: 'blockquote', html: `<blockquote class="md-quote">${renderQuote(qLines.join('\n'))}</blockquote>` })
       i = j
+      continue
+    }
+    if (listMarker(line)) {
+      flushBuf()
+      const list = parseMarkdownList(lines, i)
+      segs.push({ kind: 'list', html: renderMarkdownListHtml(list.list) })
+      i = list.next
       continue
     }
     // 定义列表: term + `: definition`
@@ -700,7 +720,7 @@ function renderTextImpl(raw: string, cacheNested = true): string {
     const part = textBuf.join('\n')
     textBuf = []
     if (!part) return
-    for (const seg of extractMarkdownBlocks(part)) {
+    for (const seg of extractMarkdownBlocks(part, (quote) => renderTextImpl(quote, cacheNested))) {
       if (seg.kind === 'table') html += seg.html
       else if (seg.kind === 'list') html += seg.html
       else if (seg.kind === 'blockquote') html += seg.html
@@ -789,10 +809,9 @@ function renderTextImpl(raw: string, cacheNested = true): string {
       flushText()
       const src = body.join('\n')
       if (lang === 'mermaid') {
-        // mermaid 块用占位符发出去，渲染管线（ChatView 那边的 hookMermaidRender）
-        // 后置扫描 .md-mermaid 调 mermaid.render() 替换。原文存 data-source，主题
-        // 切换时可以重新渲染。
-        html += `<div class="md-mermaid" data-source="${encodeURIComponent(src)}"><pre class="md-mermaid-source">${escapeHtml(src)}</pre></div>`
+        // Mermaid 由每个富文本节点的生命周期渲染。源码只保存在 data-source，不能作为
+        // 代码块 fallback 露给用户，否则异步渲染尚未完成时会被误认为普通 fenced code。
+        html += `<div class="md-mermaid" data-source="${encodeURIComponent(src)}" role="img" aria-label="Mermaid diagram"></div>`
       } else {
         html += `<pre class="code-block"${lang ? ` data-lang="${escapeHtml(lang)}"` : ''}><code>${escapeHtml(src)}</code></pre>`
       }

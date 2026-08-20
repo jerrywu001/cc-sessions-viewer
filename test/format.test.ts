@@ -291,6 +291,27 @@ A\boldsymbol c=0.
     expect(html.match(/<ol class="md-list md-list-ol"/g)?.length).toBe(1)
   })
 
+  it('keeps nested ordered and unordered lists inside their parent item', () => {
+    const html = renderText(
+      '- Parent\n  - Child\n    - Grandchild\n- Sibling\n\n1. First\n   1. Nested first\n   2. Nested second\n2. Second',
+    )
+
+    expect(html).toContain('<li>Parent<ul class="md-list"><li>Child<ul class="md-list"><li>Grandchild</li></ul></li></ul></li>')
+    expect(html).toContain('<li>First<ol class="md-list md-list-ol"><li>Nested first</li><li>Nested second</li></ol></li>')
+    expect(html).toContain('<li>Sibling</li>')
+  })
+
+  it('renders nested blockquotes as nested quote blocks', () => {
+    const html = renderText('> First level\n>\n> > Second level\n> >\n> > > Third level')
+
+    expect(html.match(/<blockquote class="md-quote">/g)).toHaveLength(3)
+    expect(html).toContain('First level')
+    expect(html).toContain('Second level')
+    expect(html).toContain('Third level')
+    expect(html).not.toContain('&gt; Second level')
+    expect(html).not.toContain('&gt; Third level')
+  })
+
   it('preserves a non-one starting number for an ordered list', () => {
     expect(renderText('3. Third\n4. Fourth')).toContain(
       '<ol class="md-list md-list-ol" start="3">',
@@ -308,14 +329,13 @@ A\boldsymbol c=0.
     expect(html).toContain('>src/views/ChatView.vue<')
   })
 
-  // Mermaid 块：emit 占位符给 ChatView 后置 mermaid.render() 替换；fallback 露源码。
+  // Mermaid 块：emit 占位符给富文本节点后置 mermaid.render() 替换；源码不能露成代码块。
   it('emits a mermaid placeholder with encoded source for ```mermaid blocks', () => {
     const html = renderText('```mermaid\nflowchart TD\n  A --> B\n```')
     expect(html).toContain('<div class="md-mermaid"')
     expect(html).toContain('data-source="')
     expect(html).toContain(encodeURIComponent('flowchart TD\n  A --> B'))
-    // 渲染前先露源码 fallback
-    expect(html).toContain('<pre class="md-mermaid-source">flowchart TD')
+    expect(html).not.toContain('md-mermaid-source')
     // 不应该走普通 code-block 分支
     expect(html).not.toContain('<pre class="code-block">')
   })

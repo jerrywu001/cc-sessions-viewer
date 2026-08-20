@@ -449,10 +449,8 @@ describe('messagesToHtml', () => {
     expect(html).toContain('<code>code</code>')
   })
 
-  // mermaid prerender —— 不论成功（SVG）/ 失败（errmsg + 源码）/ mermaid 加载失败
-  // （留占位符），都不应该让 mermaid 块在导出 HTML 里彻底消失。最低保障：源码
-  // 字符串至少要出现在 HTML 里某处（rendered 节点里、error fallback 里、或原始占位符里）。
-  it('preserves mermaid blocks in HTML export (rendered or fallback)', async () => {
+  // mermaid prerender —— 不论成功（SVG）或失败（errmsg），都保留图表容器且不露出源码。
+  it('preserves mermaid blocks in HTML export without exposing source code', async () => {
     const html = await messagesToHtml(
       session(),
       [msg('assistant', [text('```mermaid\nNOTAVALIDGRAPH\n```')])],
@@ -460,6 +458,7 @@ describe('messagesToHtml', () => {
     )
     // 必有 md-mermaid 容器（class 或在 error / rendered 状态）
     expect(/class="md-mermaid/.test(html)).toBe(true)
+    expect(html).not.toContain('NOTAVALIDGRAPH')
   })
 
 })

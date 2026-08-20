@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch, defineAsyncComponent } from 'vue'
+import type { DirectiveBinding } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import type { Agent, Msg, SessionMeta, Block, ChatQuestionRequest } from '../types'
 import { agentLabel } from '../agentMeta'
@@ -1200,9 +1201,7 @@ function onScroll() {
   rafEdge = requestAnimationFrame(() => {
     rafEdge = 0
     updateEdges()
-    // 装饰(高亮/mermaid)由「真实滚动」驱动,而非 virtualRows 的响应式变化 —— 否则装饰改行高
-    // → measureElement 重测 → virtualRows 变 → 又装饰,即使静止也空转打满 CPU。滚动停 = 不再装饰。
-    scheduleDecorate()
+    if (search.value) markVisibleSearch(false)
     refreshRailActive()
   })
 }
@@ -1319,6 +1318,27 @@ onUnmounted(() => {
 // ============================ 顶栏功能：折叠工具 / 搜索 ============================
 
 const innerEl = ref<HTMLElement>()
+
+// Markdown 以 HTML 字符串写入虚拟列表的消息行。把 Mermaid / KaTeX / Shiki 的装饰
+// 绑定到该 HTML 容器的 Vue 生命周期：消息行重新挂载或 tab 替换内容时，当前节点直接
+// 完成渲染；滚动事件不再参与富内容处理。
+function decorateRichHtml(el: HTMLElement) {
+  void renderAllMermaid(el)
+  renderAllMath(el)
+  void highlightAllCodeBlocks(el)
+  decorateCodeBlocks(el)
+}
+const vRichHtml = {
+  mounted(el: HTMLElement, binding: DirectiveBinding<string>) {
+    el.innerHTML = binding.value
+    decorateRichHtml(el)
+  },
+  updated(el: HTMLElement, binding: DirectiveBinding<string>) {
+    if (binding.value === binding.oldValue) return
+    el.innerHTML = binding.value
+    decorateRichHtml(el)
+  },
+}
 
 // ---- 折叠状态持久化（虚拟滚动友好）
 //
@@ -1465,7 +1485,7 @@ function computeSearchHits() {
   searchIndex.value = hits.length ? Math.min(searchIndex.value || 1, hits.length) : 0
 }
 
-// 对当前挂载的可见行打 <mark>（不改计数 / 当前项）。滚动进新行时由 scheduleDecorate 调用。
+// 对当前挂载的可见行打 <mark>（不改计数 / 当前项）。滚动进新行时由 onScroll 调用。
 function markVisibleSearch(scroll = true) {
   unmarkAll()
   const root = innerEl.value
@@ -1585,42 +1605,11 @@ watch(searchScope, () => {
   if (search.value) applySearch()
 })
 
-// 消息变化（切换会话 / 刷新）后重新建立标记 + 重新 sweep 折叠态 + 渲染 mermaid 占位符
+// 消息变化（切换会话 / 刷新）后重建搜索标记。Markdown 的 Mermaid / KaTeX / Shiki
+// 已由每个富文本容器的 mounted / updated 生命周期处理，不能再由这里或滚动回调补扫。
 // live GUI chat 自动跟随：必须在「消息变化导致 DOM 撑高之前」判断用户是否贴底，
 // 否则新消息一来 scrollHeight 立刻变大、isNearBottom 误判为 false，就再也不跟随了。
 // flush:'pre' 的 watcher 在 re-render 前跑，此刻 scrollTop/scrollHeight 还是旧值。
-// 对当前挂在 DOM 里的可见行补做高亮 / mermaid / 装饰 / 折叠态。虚拟滚动下只有窗口内的行
-// 存在,这些函数都跳过已处理节点（:not([data-shiki]) 等）,所以每次只碰新进入的行,成本≈仅可见行。
-function decorateVisible() {
-  const root = innerEl.value ?? null
-  renderAllMermaid(root)
-  renderAllMath(root)
-  highlightAllCodeBlocks(root)
-  decorateCodeBlocks(root)
-}
-// 滚动使可见窗口频繁变化 —— 用 rAF 合并,一帧最多跑一次。
-//
-// ⚠️ 关键：只在「可见行的下标区间」真正变化时才装饰。否则会陷入死循环：装饰（高亮/mermaid）
-// 改了行高 → measureElement 的 ResizeObserver 重测 → 虚拟器调整 start → virtualRows 变（对象
-// 变了但可见行没变）→ watch 又触发装饰 …… 每帧空转把 CPU 打满。用首/末下标当指纹,重排但下标
-// 区间不变就跳过,反馈环即断。
-let decorateRAF = 0
-let lastVisibleKey = ''
-function scheduleDecorate() {
-  const rows = virtualRows.value
-  const key = rows.length ? `${rows[0].index}-${rows[rows.length - 1].index}` : ''
-  if (key === lastVisibleKey) return
-  lastVisibleKey = key
-  if (decorateRAF) return
-  decorateRAF = requestAnimationFrame(() => {
-    decorateRAF = 0
-    decorateVisible()
-    if (search.value) markVisibleSearch(false)
-  })
-}
-// 注意：不要 watch(virtualRows) 来触发装饰 —— 会形成 装饰→改行高→重测→virtualRows 变→装饰
-// 的死循环。装饰改由 onScroll（真实滚动）驱动;静止时不跑,反馈环天然断开。
-
 let wasAtBottomBeforeUpdate = true
 watch(
   () => props.messages,
@@ -1631,9 +1620,7 @@ watch(
 watch(
   () => props.messages,
   () => {
-    lastVisibleKey = '' // 消息集变了,让下次滚动重新装饰
     nextTick(() => {
-      decorateVisible()
       refreshRailActive()
       if (search.value) applySearch()
       // 聊天进行中：变化前贴底 → 钉到最新消息（钉一小段，扛住高亮/图片异步撑高）。
@@ -1730,10 +1717,8 @@ watch(theme, () => {
 onMounted(() => {
   setSearchNavigator(navigateMatches)
   document.addEventListener('click', onDocClick)
-  // 初次挂载也跑一遍 —— 会话已经有 messages 时 watch 不会触发。
   nextTick(() => {
     measureListMargin() // 量列表相对滚动容器顶端的偏移,scrollToIndex 才对得准
-    decorateVisible()
     scheduleRailReady()
     // live GUI chat：进入时（含入口 3 切换 / 列表续聊的预载历史）钉到底部一会儿，
     // 露出最新上下文 + composer，扛住代码高亮/图片异步撑高。
@@ -2250,7 +2235,7 @@ function onDocClick(e: MouseEvent) {
                     </template>
                   </dl>
                   <pre v-else-if="metaIsPre(m)">{{ cleanMetaText(b.text ?? '') }}</pre>
-                  <div v-else class="text-run" v-html="metaBlockHtml(m.metaKind, b.text ?? '')" />
+                  <div v-else class="text-run" v-rich-html="metaBlockHtml(m.metaKind, b.text ?? '')" />
                 </template>
               </template>
             </div>
@@ -2319,8 +2304,8 @@ function onDocClick(e: MouseEvent) {
 
           <CollapsibleBox :enabled="effectiveRole(m) === 'user'" :max-height="320">
             <template v-for="(b, bi) in m.blocks" :key="bi">
-              <div v-if="b.kind === 'text'" class="text-run" v-html="renderBubble(m, b.text ?? '')" />
-              <div v-else-if="isCodexPluginFileBlock(b)" class="text-run" v-html="codexPluginFileHtml(b)" />
+              <div v-if="b.kind === 'text'" class="text-run" v-rich-html="renderBubble(m, b.text ?? '')" />
+              <div v-else-if="isCodexPluginFileBlock(b)" class="text-run" v-rich-html="codexPluginFileHtml(b)" />
 
               <!-- AskUserQuestion 是 Claude 的提问工具。历史回放也使用和 live 一致的
                    选择题视觉；对应的 user/tool_result 协议记录在下方被隐藏并合并进状态。 -->
@@ -2346,7 +2331,7 @@ function onDocClick(e: MouseEvent) {
                   <span class="thinking-label">{{ thinkingLabel(vr.index) }}</span>
                   <span class="thinking-chev"><IconChevronRight /></span>
                 </summary>
-                <div class="thinking-content" v-html="renderText(b.text ?? '')" />
+                <div class="thinking-content" v-rich-html="renderText(b.text ?? '')" />
               </details>
 
               <div

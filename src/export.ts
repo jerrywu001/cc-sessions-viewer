@@ -516,12 +516,6 @@ h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -0.01em; flex
   background: var(--surface); overflow-x: auto; text-align: center;
 }
 .md-mermaid svg { max-width: 100%; height: auto; }
-.md-mermaid-source {
-  margin: 0; padding: 10px 12px; background: var(--code-bg);
-  border-radius: 6px; font-size: 12px; white-space: pre; overflow-x: auto;
-  text-align: left;
-  font-family: 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
-}
 .md-mermaid-error { border-color: hsl(0 70% 60% / 0.5); }
 .md-mermaid-errmsg {
   font-size: 12px; color: hsl(0 70% 50%);
@@ -1357,19 +1351,23 @@ function currentTheme(): 'light' | 'dark' {
 /** 扫一遍 HTML 把 renderText 留下的 .md-mermaid 占位符替换成真 SVG。
  *  让导出 HTML 完全离线可看（不依赖运行时 mermaid.js）。
  *  - 一次性 dynamic-import mermaid；同一 source 二次出现复用上次的 SVG 不重画。
- *  - 渲染失败：保留占位符 + 一行错误提示 + 源码，跟聊天里的兜底一致。
+ *  - 渲染失败：显示错误提示，避免把 Mermaid 源码错误地当成普通代码块展示。
  *  - 主题：用当前 app 的 theme（light/dark），SVG 颜色烤死；HTML 的 theme toggle 切
  *    其它元素的色，mermaid SVG 保持不变（mermaid 不支持运行时切主题）。 */
 async function prerenderMermaidInHtml(html: string): Promise<string> {
   // 没占位符就别动 mermaid，避免给纯文本会话加 600KB 的解析开销。
   if (!html.includes('class="md-mermaid"')) return html
+  // format.ts 的占位符属性会随可访问性属性扩展；只依赖 class 和 data-source。
+  const RE = /<div class="md-mermaid" data-source="([^"]*)"[^>]*>[\s\S]*?<\/div>/g
   let mermaid: typeof import('mermaid').default
   try {
     mermaid = (await import('mermaid')).default
   } catch (e) {
-    // 拉不到 mermaid（离线 / 安装损坏）—— 直接交回带占位符的 HTML，源码 fallback 还在。
     console.warn('[export] mermaid load failed:', e)
-    return html
+    return html.replace(
+      RE,
+      '<div class="md-mermaid md-mermaid-error" data-rendered><div class="md-mermaid-errmsg">Mermaid diagram could not be rendered.</div></div>',
+    )
   }
   mermaid.initialize({
     startOnLoad: false,
@@ -1379,8 +1377,6 @@ async function prerenderMermaidInHtml(html: string): Promise<string> {
       '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
   })
   const cache = new Map<string, { ok: true; svg: string } | { ok: false; err: string }>()
-  // \s\S 跨行匹配占位符里的 fallback <pre>；同一占位符 div 不嵌套，懒匹配安全。
-  const RE = /<div class="md-mermaid" data-source="([^"]*)">[\s\S]*?<\/div>/g
   const sources = new Set<string>()
   for (const m of html.matchAll(RE)) sources.add(m[1])
   let counter = 0
@@ -1396,15 +1392,13 @@ async function prerenderMermaidInHtml(html: string): Promise<string> {
   }
   return html.replace(RE, (_, enc) => {
     const hit = cache.get(enc)
-    const src = decodeURIComponent(enc)
     if (!hit) return _
     if (hit.ok) {
       return `<div class="md-mermaid" data-rendered>${hit.svg}</div>`
     }
     return (
       `<div class="md-mermaid md-mermaid-error" data-rendered>` +
-      `<div class="md-mermaid-errmsg">mermaid: ${escapeHtml(hit.err)}</div>` +
-      `<pre class="md-mermaid-source">${escapeHtml(src)}</pre>` +
+      '<div class="md-mermaid-errmsg">Mermaid diagram could not be rendered.</div>' +
       `</div>`
     )
   })

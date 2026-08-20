@@ -175,10 +175,15 @@ const liveChatMeta = computed<SessionMeta>(() => {
 
     <div class="main-body">
       <!-- view 层：本 pane 无 active TUI tab 时显示 -->
-      <div class="view-layer" v-show="pane.activeUiId === null">
+      <div
+        class="view-layer"
+        :class="{ 'is-covered': pane.activeUiId !== null }"
+        :aria-hidden="pane.activeUiId !== null"
+      >
         <!-- live GUI chat tab -->
         <ChatView
           v-if="paneViewTab?.type === 'chat' && liveChat"
+          :key="paneViewTab.uiId"
           :agent="liveChat.agent"
           :session="liveChatMeta"
           :messages="liveChat.msgs"
@@ -204,6 +209,7 @@ const liveChatMeta = computed<SessionMeta>(() => {
           <div v-if="paneViewTab.loadingMsgs" class="loading">{{ t('common.loading') }}</div>
           <ChatView
             v-else
+            :key="paneViewTab.uiId"
             ref="chatView"
             :agent="chatAgent"
             :session="openSession"
