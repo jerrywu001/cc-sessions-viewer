@@ -24,8 +24,10 @@ describe('ToolResult', () => {
     const wrapper = mount(ToolResult, {
       props: { block: blk({ kind: 'tool_result', text: 'bad', isError: true }) },
     })
-    expect(wrapper.find('.label').text()).toBe('Tool result · error')
-    expect(wrapper.find('.label').classes()).toContain('error')
+    expect(wrapper.find('.thinking-label').text()).toBe('Tool result · error')
+    expect(wrapper.find('details').classes()).toContain('thinking-block')
+    expect(wrapper.find('details').classes()).toContain('tool-result-error')
+    expect(wrapper.find('.thinking-icon').exists()).toBe(true)
   })
 
   it('renders a Bash textual unified diff as an expanded file-change card', () => {

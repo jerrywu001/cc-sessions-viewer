@@ -204,6 +204,7 @@ export default {
   'chat.systemEvent.interrupted': '用户中断了请求',
   'chat.metaKind.compact': '上下文摘要',
   'chat.metaKind.meta': '系统注入',
+  'chat.metaKind.recap': '会话回顾',
   'chat.metaKind.taskNotification': '任务通知',
   'chat.metaKind.system': '系统消息',
   'chat.metaKind.commandOutput': '命令输出',

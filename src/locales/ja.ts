@@ -203,6 +203,7 @@ export default {
   'chat.systemEvent.interrupted': 'ユーザーがリクエストを中断しました',
   'chat.metaKind.compact': 'コンテキスト要約',
   'chat.metaKind.meta': 'システムノート',
+  'chat.metaKind.recap': 'セッションの要約',
   'chat.metaKind.taskNotification': 'タスク通知',
   'chat.metaKind.system': 'システムメッセージ',
   'chat.metaKind.commandOutput': 'コマンド出力',

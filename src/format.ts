@@ -282,7 +282,7 @@ export function historicalMessageExecutionMs(messages: Msg[]): Map<number, numbe
 // ─── 系统注入的 user 记录（metaKind）的展示 ──────────────────────────────
 // 后端 claude 源给压缩摘要 / skill 注入 / 任务通知 / 命令输出这类 `type:"user"`
 // 记录打了 metaKind 标记。这里决定它们怎么渲染：
-//   - compact / meta —— 本身就是 markdown 文本，走 renderText（标题、列表、代码）
+//   - compact / meta / recap —— 本身就是 markdown 文本，走 renderText（标题、列表、代码）
 //   - 其余（task-notification / system / command-output）—— 是带伪 XML 包裹 +
 //     可能含 ANSI 控制码的纯文本输出，去壳后以等宽 <pre> 原样呈现更贴近终端观感
 const META_PRE_KINDS = new Set(['task-notification', 'system', 'command-output'])
@@ -789,22 +789,27 @@ function renderTextImpl(raw: string, cacheNested = true): string {
       i = j
       continue
     }
-    // 开围栏：缩进 ≤3、≥3 个连续反引号、信息串里不含反引号（CommonMark）。
-    const open = lines[i].match(/^( {0,3})(`{3,})(.*)$/)
+    // 开围栏：除了 CommonMark 的 ≤3 缩进，也接受列表续行里的深缩进围栏。Grok 常把
+    // ` ```css` 放在嵌套列表中，若只接受 ≤3 空格，围栏会退化成一段行内文本。
+    const open = lines[i].match(/^( *)(`{3,})(.*)$/)
     if (open && !open[3].includes('`')) {
+      const fenceIndent = open[1].length
       const fenceLen = open[2].length
       const lang = open[3].trim().toLowerCase()
       const body: string[] = []
       let j = i + 1
       let closed = false
       for (; j < lines.length; j++) {
-        // 闭围栏：纯反引号行（无信息串）、缩进 ≤3、长度 ≥ 开围栏。更短的 ``` 当内容。
-        const close = lines[j].match(/^ {0,3}(`{3,})[ \t]*$/)
-        if (close && close[1].length >= fenceLen) {
+        // 闭围栏允许与开围栏同级或更少缩进；更深的反引号串仍是代码内容。
+        const close = lines[j].match(/^( *)(`{3,})[ \t]*$/)
+        if (close && close[1].length <= fenceIndent && close[2].length >= fenceLen) {
           closed = true
           break
         }
-        body.push(lines[j])
+        // 去掉列表续行带来的共同缩进，保留代码实际的相对缩进。
+        body.push(lines[j].startsWith(' '.repeat(fenceIndent))
+          ? lines[j].slice(fenceIndent)
+          : lines[j])
       }
       flushText()
       const src = body.join('\n')

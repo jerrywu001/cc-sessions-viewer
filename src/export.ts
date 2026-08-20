@@ -83,6 +83,7 @@ function systemEventText(m: Msg): string | null {
 const META_KIND_KEY: Record<string, string> = {
   compact: 'chat.metaKind.compact',
   meta: 'chat.metaKind.meta',
+  recap: 'chat.metaKind.recap',
   'task-notification': 'chat.metaKind.taskNotification',
   system: 'chat.metaKind.system',
   'command-output': 'chat.metaKind.commandOutput',

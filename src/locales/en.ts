@@ -203,6 +203,7 @@ export default {
   'chat.systemEvent.interrupted': 'Request interrupted by user',
   'chat.metaKind.compact': 'Context summary',
   'chat.metaKind.meta': 'System note',
+  'chat.metaKind.recap': 'Recap',
   'chat.metaKind.taskNotification': 'Task notification',
   'chat.metaKind.system': 'System message',
   'chat.metaKind.commandOutput': 'Command output',

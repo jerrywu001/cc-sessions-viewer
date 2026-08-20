@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import type { Block } from '../types'
 import { t } from '../i18n'
 import CollapsibleBox from './CollapsibleBox.vue'
-import { IconChevronRight } from './icons'
+import { IconChevronRight, IconInfo } from './icons'
 import { highlightJsonInPlace, looksLikeJson } from '../jsonHighlight'
 import { highlightDiff, looksLikeDiff } from '../diffHighlight'
 import { renderCodexFileChangeHtml } from '../codexApplyPatch'
@@ -98,17 +98,30 @@ const fileChangeHtml = computed(() => {
   />
   <details
     v-else-if="hasRenderableText"
-    class="block-card"
-    :class="{ 'in-user': inUser, 'auto-open': shouldAutoOpen, 'text-diff-result': isTextDiff }"
+    :class="{
+      'block-card': !block.isError,
+      'thinking-block': block.isError,
+      'tool-result-error': block.isError,
+      'in-user': inUser,
+      'auto-open': shouldAutoOpen,
+      'text-diff-result': isTextDiff,
+    }"
     :open="persistOpen ?? shouldAutoOpen"
     @toggle="emit('toggle', ($event.target as HTMLDetailsElement).open)"
   >
-    <summary class="block-summary">
-      <span class="chev"><IconChevronRight /></span>
-      <span class="label" :class="{ error: block.isError }">{{ label }}</span>
-      <span v-if="diffStat" class="diff-stat">{{ diffStat }}</span>
+    <summary :class="block.isError ? 'thinking-summary' : 'block-summary'">
+      <template v-if="block.isError">
+        <IconInfo class="thinking-icon" aria-hidden="true" />
+        <span class="thinking-label">{{ label }}</span>
+        <span class="thinking-chev"><IconChevronRight /></span>
+      </template>
+      <template v-else>
+        <span class="chev"><IconChevronRight /></span>
+        <span class="label">{{ label }}</span>
+        <span v-if="diffStat" class="diff-stat">{{ diffStat }}</span>
+      </template>
     </summary>
-    <div class="block-body">
+    <div :class="block.isError ? 'thinking-content tool-result-error-content' : 'block-body'">
       <CollapsibleBox :max-height="400">
         <pre v-if="diffHtml" class="lang-diff" v-html="diffHtml" />
         <pre v-else-if="jsonHtml" class="lang-json" v-html="jsonHtml" />

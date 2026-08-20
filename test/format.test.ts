@@ -207,6 +207,12 @@ A\boldsymbol c=0.
     expect(html).toContain('<pre class="code-block" data-lang="js"><code>const x = 1</code></pre>')
   })
 
+  it('renders a fenced code block indented as a nested list continuation', () => {
+    const html = renderText('1. Finding\n   - Example:\n     ```css\n     .block-body { color: red; }\n     ```')
+    expect(html).toContain('<pre class="code-block" data-lang="css"><code>.block-body { color: red; }</code></pre>')
+    expect(html).not.toContain('```css')
+  })
+
   it('renders a fenced code block with no language line', () => {
     expect(renderText('```\nplain\n```')).toContain('<code>plain</code>')
   })
@@ -563,9 +569,10 @@ describe('metaKindIsPre', () => {
     expect(metaKindIsPre('system')).toBe(true)
   })
 
-  it('treats compact / meta as markdown (not <pre>)', () => {
+  it('treats compact / meta / recap as markdown (not <pre>)', () => {
     expect(metaKindIsPre('compact')).toBe(false)
     expect(metaKindIsPre('meta')).toBe(false)
+    expect(metaKindIsPre('recap')).toBe(false)
   })
 })
 

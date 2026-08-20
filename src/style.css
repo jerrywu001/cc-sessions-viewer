@@ -3741,6 +3741,14 @@ details[open] > .block-summary > .chev {
   outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
   outline-offset: 2px;
 }
+/* 会话收尾 recap 是固定可读的摘要，不是可展开的过程信息。 */
+.recap-block .thinking-summary {
+  cursor: default;
+}
+.recap-block .thinking-summary:hover {
+  color: var(--text-dim);
+  background: transparent;
+}
 .thinking-icon {
   width: 17px;
   height: 17px;
@@ -3836,6 +3844,20 @@ details[open] > .thinking-summary .thinking-chev {
 }
 .thinking-content a {
   color: var(--link);
+}
+/* 失败的工具结果与 System note 同属低优先级过程信息：保留可见的失败提示，但避免用整块
+   高饱和红色卡片打断会话阅读。 */
+.tool-result-error .thinking-icon {
+  color: var(--danger);
+}
+.tool-result-error .thinking-summary {
+  color: var(--text-dim);
+}
+.tool-result-error .thinking-summary:hover {
+  color: var(--text);
+}
+.tool-result-error-content {
+  border-left-color: color-mix(in srgb, var(--danger) 38%, var(--border));
 }
 .inline-tool-code .block-body .code-block {
   margin: 0;

@@ -21,7 +21,9 @@ use crate::agent_command::AgentCommand;
 use crate::stats::pricing;
 use crate::stats::shell::{extract_first_command, extract_mcp_server};
 use crate::stats::types::{CallRecord, Turn};
-use crate::types::{Block, Msg, ProjectInfo, SessionMeta, SessionPage, UsageSummary};
+use crate::types::{
+    Block, DiffHunk, DiffLine, Msg, ProjectInfo, SessionMeta, SessionPage, UsageSummary,
+};
 use crate::util::{clean_title, home, mtime_millis, now_millis, text_block, validate_rename_name};
 
 pub struct GrokSource;
@@ -534,6 +536,22 @@ fn append_chunk(
 }
 
 fn tool_name(update: &Value) -> String {
+    // Grok Build 的编辑工具在 tool_call 上使用内部名 `search_replace`，但元数据已经
+    // 明确给出 `kind: edit` / `label: Edit`。归一为现有文件变更工具名，让前端复用
+    // Edit 的展示与归组，而不是把它当作默认隐藏的过程性工具。
+    if update
+        .pointer("/_meta/x.ai~1tool/kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind == "edit")
+    {
+        return update
+            .pointer("/_meta/x.ai~1tool/label")
+            .and_then(Value::as_str)
+            .filter(|label| !label.trim().is_empty())
+            .unwrap_or("Edit")
+            .to_string();
+    }
+
     nonempty_string(update, "title")
         .or_else(|| {
             update
@@ -547,6 +565,129 @@ fn tool_name(update: &Value) -> String {
         })
         .unwrap_or("tool")
         .to_string()
+}
+
+/// Grok Build 的 `search_replace` 完成事件以 `content[].type = diff` 表示文件修改。
+/// 它不是 unified diff，因此根据 old/new 文本和行号生成前端共用的结构化 DiffHunk。
+fn grok_file_change(update: &Value) -> (Option<String>, Option<Vec<DiffHunk>>) {
+    let Some(change) = update
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|item| item.get("type").and_then(Value::as_str) == Some("diff"))
+    else {
+        return (None, None);
+    };
+
+    let file_path = change
+        .get("path")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            update
+                .pointer("/rawOutput/EditsApplied/absolute_path")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            update
+                .pointer("/rawInput/file_path")
+                .and_then(Value::as_str)
+        })
+        .map(str::to_owned);
+    let old_text = change.get("oldText").and_then(Value::as_str);
+    let new_text = change.get("newText").and_then(Value::as_str);
+    let old_start = change
+        .pointer("/_meta/details/0/old_line")
+        .or_else(|| change.pointer("/_meta/old_line"))
+        .and_then(Value::as_u64)
+        .and_then(|line| u32::try_from(line).ok())
+        .unwrap_or(1);
+    let new_start = change
+        .pointer("/_meta/details/0/new_line")
+        .or_else(|| change.pointer("/_meta/new_line"))
+        .and_then(Value::as_u64)
+        .and_then(|line| u32::try_from(line).ok())
+        .unwrap_or(old_start);
+
+    let diff = match (old_text, new_text) {
+        (Some(old_text), Some(new_text)) => Some(vec![grok_diff_hunk(
+            old_text, new_text, old_start, new_start,
+        )]),
+        _ => None,
+    };
+    (file_path, diff)
+}
+
+/// 以 LCS 保留替换片段中的未改动行。Grok 的 search_replace 通常是小片段；为避免异常
+/// 大输入造成二次方内存消耗，超出阈值时退化为一段删除后追加，仍完整保留变更语义。
+fn grok_diff_hunk(old_text: &str, new_text: &str, old_start: u32, new_start: u32) -> DiffHunk {
+    let old_lines = old_text.lines().collect::<Vec<_>>();
+    let new_lines = new_text.lines().collect::<Vec<_>>();
+    let old_len = old_lines.len();
+    let new_len = new_lines.len();
+    let use_lcs = old_len.saturating_mul(new_len) <= 1_000_000;
+    let mut lcs = if use_lcs {
+        vec![vec![0usize; new_len + 1]; old_len + 1]
+    } else {
+        Vec::new()
+    };
+
+    if use_lcs {
+        for old_index in (0..old_len).rev() {
+            for new_index in (0..new_len).rev() {
+                lcs[old_index][new_index] = if old_lines[old_index] == new_lines[new_index] {
+                    lcs[old_index + 1][new_index + 1] + 1
+                } else {
+                    lcs[old_index + 1][new_index].max(lcs[old_index][new_index + 1])
+                };
+            }
+        }
+    }
+
+    let mut lines = Vec::with_capacity(old_len + new_len);
+    let mut old_index = 0;
+    let mut new_index = 0;
+    let mut old_no = old_start;
+    let mut new_no = new_start;
+    let mut push = |kind: &str, text: &str, old_no: Option<u32>, new_no: Option<u32>| {
+        lines.push(DiffLine {
+            kind: kind.to_string(),
+            old_no,
+            new_no,
+            text: text.to_string(),
+        });
+    };
+
+    while old_index < old_len || new_index < new_len {
+        if old_index < old_len
+            && new_index < new_len
+            && old_lines[old_index] == new_lines[new_index]
+        {
+            push("ctx", old_lines[old_index], Some(old_no), Some(new_no));
+            old_index += 1;
+            new_index += 1;
+            old_no += 1;
+            new_no += 1;
+        } else if old_index < old_len
+            && (!use_lcs
+                || new_index == new_len
+                || lcs[old_index + 1][new_index] >= lcs[old_index][new_index + 1])
+        {
+            push("del", old_lines[old_index], Some(old_no), None);
+            old_index += 1;
+            old_no += 1;
+        } else if new_index < new_len {
+            push("add", new_lines[new_index], None, Some(new_no));
+            new_index += 1;
+            new_no += 1;
+        }
+    }
+
+    DiffHunk {
+        old_start,
+        new_start,
+        lines,
+    }
 }
 
 fn tool_input(update: &Value) -> String {
@@ -706,8 +847,25 @@ fn system_note_message(event: &Value, text: String) -> Msg {
     meta_message(event, "meta", text)
 }
 
+fn recap_message(event: &Value, text: String) -> Msg {
+    meta_message(event, "recap", text)
+}
+
 fn session_recap_text(update: &Value) -> Option<String> {
     nonempty_string(update, "summary").map(str::to_owned)
+}
+
+/// Grok 将后台任务完成通知作为 `user_message_chunk` 写入，但正文带有明确的
+/// `<system-reminder>` 包装，且标记 `hideFromScrollback`。它不是用户输入，应以
+/// 现有的 System note 样式展示。
+fn system_reminder_text(update: &Value) -> Option<String> {
+    let text = update
+        .pointer("/content/text")
+        .and_then(Value::as_str)?
+        .trim();
+    let text = text.strip_prefix("<system-reminder>")?.trim();
+    let text = text.strip_suffix("</system-reminder>")?.trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 fn task_completion(update: &Value) -> Option<(String, String, bool)> {
@@ -808,7 +966,12 @@ fn read_updates(path: &Path) -> Result<Vec<Msg>, String> {
             .unwrap_or("");
         match kind {
             "user_message_chunk" => {
-                append_chunk(&mut messages, &mut last_chunk, &event, "user", "text", None)
+                if let Some(text) = system_reminder_text(update) {
+                    last_chunk = None;
+                    messages.push(system_note_message(&event, text));
+                } else {
+                    append_chunk(&mut messages, &mut last_chunk, &event, "user", "text", None);
+                }
             }
             "agent_message_chunk" => append_chunk(
                 &mut messages,
@@ -879,11 +1042,14 @@ fn read_updates(path: &Path) -> Result<Vec<Msg>, String> {
                         }
                     }
                 }
+                let (file_path, diff) = grok_file_change(update);
                 let result_block = Block {
                     kind: "tool_result".to_string(),
                     text: Some(tool_output(update)),
                     tool_id: id.clone(),
                     is_error: failed,
+                    file_path,
+                    diff,
                     ..Default::default()
                 };
                 upsert_tool_result(
@@ -937,10 +1103,9 @@ fn read_updates(path: &Path) -> Result<Vec<Msg>, String> {
             "session_recap" => {
                 last_chunk = None;
                 if let Some(text) = session_recap_text(update) {
-                    // Grok 在会话收尾时写入的简要回顾属于系统注记，不是用户可见的
-                    // 未知协议错误。使用已有的 `meta` 类型，使其与 Claude 的
-                    // System note 使用同一套轻量折叠展示。
-                    messages.push(system_note_message(&event, text));
+                    // 收尾回顾不是用户消息，也不应被通用 System note 默认折叠隐藏。
+                    // 用独立的 recap 类型交给前端以轻量正文、默认展开的方式呈现。
+                    messages.push(recap_message(&event, text));
                 }
             }
             "task_backgrounded" => {
@@ -2116,6 +2281,90 @@ mod tests {
     }
 
     #[test]
+    fn parser_renders_grok_edit_diffs_and_system_reminders_as_meta() {
+        let root = scratch("edit-and-system-reminder");
+        let updates = create_session(
+            &root,
+            "%2Ftmp%2Fdemo",
+            "session-a",
+            serde_json::json!({"info":{"id":"session-a","cwd":"/tmp/demo"}}),
+            &[
+                event(
+                    "reminder",
+                    "p1",
+                    "user_message_chunk",
+                    serde_json::json!({
+                        "content":{"type":"text","text":"<system-reminder>\nBackground task completed.\n</system-reminder>"},
+                        "_meta":{"hideFromScrollback":true}
+                    }),
+                ),
+                event(
+                    "edit-call",
+                    "p1",
+                    "tool_call",
+                    serde_json::json!({
+                        "toolCallId":"edit-1",
+                        "title":"search_replace",
+                        "rawInput":{"file_path":"src/style.css","old_string":"before","new_string":"after"},
+                        "_meta":{"x.ai/tool":{"name":"search_replace","kind":"edit","label":"Edit"}}
+                    }),
+                ),
+                event(
+                    "edit-result",
+                    "p1",
+                    "tool_call_update",
+                    serde_json::json!({
+                        "toolCallId":"edit-1",
+                        "status":"completed",
+                        "content":[{
+                            "type":"diff",
+                            "path":"/tmp/demo/src/style.css",
+                            "oldText":"same\nbefore\ntail",
+                            "newText":"same\nafter\ntail",
+                            "_meta":{"details":[{"old_line":10,"new_line":10}]}
+                        }]
+                    }),
+                ),
+            ],
+        );
+
+        let messages = read_updates(&updates).unwrap();
+        let reminder = messages
+            .iter()
+            .find(|message| message.meta_kind.is_some())
+            .unwrap();
+        assert_eq!(reminder.meta_kind.as_deref(), Some("meta"));
+        assert_eq!(
+            reminder.blocks[0].text.as_deref(),
+            Some("Background task completed.")
+        );
+
+        let call = messages
+            .iter()
+            .flat_map(|message| &message.blocks)
+            .find(|block| block.kind == "tool_use")
+            .unwrap();
+        assert_eq!(call.tool_name.as_deref(), Some("Edit"));
+        let result = messages
+            .iter()
+            .flat_map(|message| &message.blocks)
+            .find(|block| block.kind == "tool_result")
+            .unwrap();
+        assert_eq!(result.file_path.as_deref(), Some("/tmp/demo/src/style.css"));
+        let lines = &result.diff.as_ref().unwrap()[0].lines;
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0].kind, "ctx");
+        assert_eq!(lines[0].old_no, Some(10));
+        assert_eq!(lines[1].kind, "del");
+        assert_eq!(lines[1].old_no, Some(11));
+        assert_eq!(lines[2].kind, "add");
+        assert_eq!(lines[2].new_no, Some(11));
+        assert_eq!(lines[3].kind, "ctx");
+        assert_eq!(lines[3].new_no, Some(12));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn parser_groups_grok_prompt_index_attachments_with_their_text() {
         fn user_chunk(id: &str, prompt_index: u64, content: Value) -> Value {
             let mut value = event(
@@ -2307,7 +2556,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_renders_session_recap_as_a_system_note() {
+    fn parser_renders_session_recap_as_a_visible_recap() {
         let root = scratch("session-recap");
         let updates = create_session(
             &root,
@@ -2327,7 +2576,7 @@ mod tests {
 
         let messages = read_updates(&updates).unwrap();
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].meta_kind.as_deref(), Some("meta"));
+        assert_eq!(messages[0].meta_kind.as_deref(), Some("recap"));
         assert_eq!(
             messages[0].blocks[0].text.as_deref(),
             Some("The requested Markdown examples were rendered.")

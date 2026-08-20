@@ -862,6 +862,7 @@ function systemEventLabel(m: Msg): string | null {
 const META_KIND_KEY: Record<string, string> = {
   compact: 'chat.metaKind.compact',
   meta: 'chat.metaKind.meta',
+  recap: 'chat.metaKind.recap',
   'task-notification': 'chat.metaKind.taskNotification',
   system: 'chat.metaKind.system',
   'command-output': 'chat.metaKind.commandOutput',
@@ -876,7 +877,7 @@ function metaKindLabel(kind: string | undefined): string {
  *  但以终端 / 信息 / 提醒图标明确区分来源。Task notification 与 Context Summary
  *  同属系统过程信息，也保持这套无边框的轻量折叠样式。 */
 function usesLightweightMetaStyle(kind: string | undefined): boolean {
-  return kind === 'command-output' || kind === 'meta' || kind === 'compact' || kind === 'task-notification'
+  return kind === 'command-output' || kind === 'meta' || kind === 'recap' || kind === 'compact' || kind === 'task-notification'
 }
 
 function lightweightMetaIcon(kind: string | undefined) {
@@ -2209,22 +2210,28 @@ function onDocClick(e: MouseEvent) {
               {{ assistantName }}
             </span>
           </div>
-          <details
-            :class="usesLightweightMetaStyle(m.metaKind) ? 'thinking-block meta-lightweight-block' : 'block-card'"
-            :open="isDetailOpen(vr.index, -1)"
+          <component
+            :is="m.metaKind === 'recap' ? 'div' : 'details'"
+            :class="m.metaKind === 'recap'
+              ? 'thinking-block meta-lightweight-block recap-block'
+              : usesLightweightMetaStyle(m.metaKind) ? 'thinking-block meta-lightweight-block' : 'block-card'"
+            :open="m.metaKind === 'recap' ? undefined : isDetailOpen(vr.index, -1)"
             @toggle="onDetailToggle(vr.index, -1, $event)"
           >
-            <summary :class="usesLightweightMetaStyle(m.metaKind) ? 'thinking-summary' : 'block-summary'">
+            <component
+              :is="m.metaKind === 'recap' ? 'div' : 'summary'"
+              :class="usesLightweightMetaStyle(m.metaKind) ? 'thinking-summary' : 'block-summary'"
+            >
               <template v-if="usesLightweightMetaStyle(m.metaKind)">
                 <component :is="lightweightMetaIcon(m.metaKind)" class="thinking-icon" aria-hidden="true" />
                 <span class="thinking-label">{{ metaKindLabel(m.metaKind) }}</span>
-                <span class="thinking-chev"><IconChevronRight /></span>
+                <span v-if="m.metaKind !== 'recap'" class="thinking-chev"><IconChevronRight /></span>
               </template>
               <template v-else>
                 <span class="chev"><IconChevronRight /></span>
                 <span class="label meta-summary-label">{{ metaKindLabel(m.metaKind) }}</span>
               </template>
-            </summary>
+            </component>
             <div :class="usesLightweightMetaStyle(m.metaKind) ? 'thinking-content' : 'block-body'">
               <template v-for="(b, bi) in m.blocks" :key="bi">
                 <template v-if="b.kind === 'text'">
@@ -2239,7 +2246,7 @@ function onDocClick(e: MouseEvent) {
                 </template>
               </template>
             </div>
-          </details>
+          </component>
         </div>
 
         <div v-else-if="isToolOnly(m)" style="max-width: 86%; min-width: 0">
