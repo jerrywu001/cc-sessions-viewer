@@ -17,6 +17,7 @@ const VALID_AGENTS: ReadonlySet<Agent> = new Set([
   'agy',
   'opencode',
   'grok',
+  'kimicode',
 ])
 
 export interface ExportRecord {
@@ -40,18 +41,20 @@ function load(): ExportRecord[] {
     return arr.flatMap((raw): ExportRecord[] => {
       if (!raw || typeof raw !== 'object') return []
       const r = raw as Partial<ExportRecord>
+      const storedAgent = (r as { agent?: unknown }).agent
+      const agent = storedAgent === 'kimi' ? 'kimicode' : storedAgent
       if (
         !r.path ||
         typeof r.path !== 'string' ||
-        !r.agent ||
-        typeof r.agent !== 'string' ||
-        !VALID_AGENTS.has(r.agent as Agent)
+        !agent ||
+        typeof agent !== 'string' ||
+        !VALID_AGENTS.has(agent as Agent)
       ) {
         return []
       }
       return [{
         path: r.path,
-        agent: r.agent as Agent,
+        agent: agent as Agent,
         title: typeof r.title === 'string' ? r.title : '',
         sessionId: typeof r.sessionId === 'string' ? r.sessionId : '',
         cwd: typeof r.cwd === 'string' ? r.cwd : undefined,

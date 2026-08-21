@@ -159,6 +159,7 @@ fn metadata_for(
     project_label: &str,
     deleted_at: u64,
     unit: &SessionStorageUnit,
+    source_metadata: Value,
 ) -> Value {
     serde_json::json!({
         "agent": agent,
@@ -168,6 +169,7 @@ fn metadata_for(
         "storageKind": unit.kind.as_str(),
         "projectLabel": project_label,
         "deletedAt": deleted_at,
+        "sourceMetadata": source_metadata,
     })
 }
 
@@ -231,7 +233,14 @@ fn soft_delete_in(
     let trash_name = unique_trash_name(directory, &base);
     let destination = directory.join(&trash_name);
     let meta_path = directory.join(format!("{trash_name}.meta"));
-    let meta = metadata_for(agent, project_label, deleted_at, &unit);
+    let source_metadata = source.trash_metadata(&unit)?;
+    let meta = metadata_for(
+        agent,
+        project_label,
+        deleted_at,
+        &unit,
+        source_metadata.clone(),
+    );
 
     // Install metadata first. If the move then fails, remove the sidecar; if the
     // process exits after the move, the item remains recoverable.
@@ -244,6 +253,21 @@ fn soft_delete_in(
             let _ = fs::remove_file(&meta_path);
         }
         return Err(error);
+    }
+    if let Err(error) = source.after_soft_delete(&unit, &source_metadata) {
+        match move_storage(&destination, &unit.root_path, unit.kind) {
+            Ok(()) => {
+                let _ = fs::remove_file(&meta_path);
+                return Err(format!(
+                    "Failed to finalize source metadata after moving session to trash; the session was restored: {error}"
+                ));
+            }
+            Err(rollback_error) => {
+                return Err(format!(
+                    "Failed to finalize source metadata after moving session to trash: {error}; the session remains recoverable in trash but rollback failed: {rollback_error}"
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -419,6 +443,30 @@ fn restore_in(directory: &Path, trash_file: &str) -> Result<(), String> {
     }
     move_storage(&source_path, &root_path, kind)
         .map_err(|error| format!("Failed to restore session: {error}"))?;
+    let unit = SessionStorageUnit {
+        root_path: root_path.clone(),
+        entry_relative_path: meta
+            .get("entryRelativePath")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .unwrap_or_default(),
+        kind,
+    };
+    let source_metadata = meta.get("sourceMetadata").unwrap_or(&Value::Null);
+    if let Err(error) = source.after_restore(&unit, source_metadata) {
+        match move_storage(&root_path, &source_path, kind) {
+            Ok(()) => {
+                return Err(format!(
+                    "Failed to finalize source metadata after restoring session; the session was returned to trash: {error}"
+                ));
+            }
+            Err(rollback_error) => {
+                return Err(format!(
+                    "Failed to finalize source metadata after restoring session: {error}; rollback to trash failed: {rollback_error}"
+                ));
+            }
+        }
+    }
     let _ = fs::remove_file(&meta_path);
     Ok(())
 }
@@ -507,7 +555,7 @@ mod tests {
             entry_relative_path: PathBuf::from("updates.jsonl"),
             kind: SessionStorageKind::Directory,
         };
-        let meta = metadata_for("grok", "/tmp/project", 123, &unit);
+        let meta = metadata_for("grok", "/tmp/project", 123, &unit, Value::Null);
 
         move_storage(&source, &trashed, SessionStorageKind::Directory).unwrap();
         assert!(!source.exists());

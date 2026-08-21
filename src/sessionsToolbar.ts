@@ -65,7 +65,11 @@ export function resetSessionsToolbar() {
  *  只够匹配 title / id 两列。读取模块 refs，故在 computed 里调用即响应式；
  *  返回新数组，不改动入参。体积 / 消息数排序在并列时回退到「时间最新」以保证稳定。 */
 function sessionCreatedTime(session: SessionMeta): number {
-  const created = session.created ? Date.parse(session.created) : Number.NaN
+  const created = session.created
+    ? (/^\d+$/.test(session.created.trim())
+      ? Number(session.created)
+      : Date.parse(session.created))
+    : Number.NaN
   return Number.isFinite(created) ? created : session.modified
 }
 

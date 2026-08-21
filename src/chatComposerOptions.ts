@@ -77,6 +77,7 @@ export const CHAT_MODEL_MENU: Record<Agent, ModelMenuConfig> = {
   agy: { unavailable: [], primary: [], more: [], showFastMode: false },
   opencode: { unavailable: [], primary: [], more: [], showFastMode: false },
   grok: { unavailable: [], primary: [], more: [], showFastMode: false },
+  kimicode: { unavailable: [], primary: [], more: [], showFastMode: false },
 }
 
 /** Claude 在 API-key / 第三方兼容端点下改走 alias，让本地 settings.json 模型映射接管。 */
@@ -192,6 +193,7 @@ export const CHAT_EFFORT_LEVELS: Record<Agent, string[]> = {
   agy: [],
   opencode: [],
   grok: [],
+  kimicode: [],
 }
 
 /** Claude 多一档「ultracode」的模型（排在 max 之后）。 */

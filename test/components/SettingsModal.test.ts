@@ -182,6 +182,20 @@ const fullHookStatus = {
       managed: true,
     }],
   },
+  kimicode: {
+    installed: true,
+    configPath: '/home/test/.kimi-code/config.toml',
+    events: ['TurnStarted', 'Stop', 'StopFailure', 'PermissionRequest', 'Interrupt']
+      .map((name) => ({ name, installed: true })),
+    hooks: [{
+      event: 'Stop',
+      category: null,
+      matcher: null,
+      hookType: 'command',
+      detail: 'Managed status hook',
+      managed: true,
+    }],
+  },
 }
 
 beforeEach(() => {
@@ -478,8 +492,8 @@ describe('SettingsModal', () => {
     const wrapper = factory({ initialTab: 'hooks' })
 
     const files = wrapper.findAll('.set-hook-file')
-    expect(files).toHaveLength(4)
-    expect(wrapper.text()).toContain('4 files')
+    expect(files).toHaveLength(5)
+    expect(wrapper.text()).toContain('5 files')
     expect(wrapper.text()).toContain('2 hooks')
     expect(wrapper.text()).not.toContain('echo external-hook')
     expect(wrapper.find('.set-desktop-pet-card').exists()).toBe(false)
@@ -510,7 +524,7 @@ describe('SettingsModal', () => {
     expect(turnHookStatusMock).toHaveBeenCalledOnce()
     expect(installTurnHooksMock).not.toHaveBeenCalled()
     expect(wrapper.find('.set-hooks-enable').text()).toContain('Enable session status tracking')
-    expect(wrapper.findAll('.set-hook-file')).toHaveLength(3)
+    expect(wrapper.findAll('.set-hook-file')).toHaveLength(4)
   })
 
   it('keeps the hook action enabled for a partial install and refreshes after repair', async () => {

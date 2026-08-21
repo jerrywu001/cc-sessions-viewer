@@ -1000,7 +1000,7 @@ pub fn post_process_session_msgs(msgs: &mut [Msg]) {
         for block in std::mem::take(&mut msg.blocks) {
             if block.kind == "text" {
                 if let Some(text) = &block.text {
-                    let (lifted, remaining_text) = lift_paths_from_text(text);
+                    let (lifted, remaining_text) = lift_paths_from_text_with_clipboard_tags(text);
                     for lifted_block in lifted {
                         if let Some(key) = attachment_key(&lifted_block) {
                             if !attachment_keys.insert(key) {
@@ -1022,6 +1022,7 @@ pub fn post_process_session_msgs(msgs: &mut [Msg]) {
             new_blocks.push(block);
         }
         msg.blocks = new_blocks;
+        finalize_clipboard_image_tags(msg);
         bind_inline_image_placeholders(msg);
     }
 }
@@ -1090,6 +1091,43 @@ fn bind_inline_image_placeholders(msg: &mut Msg) {
     }
 }
 
+const CLIPBOARD_IMAGE_TAG: &str = "__CSV_CLIPBOARD_IMAGE_TAG__";
+
+fn finalize_clipboard_image_tags(msg: &mut Msg) {
+    let mut attachment_position = 0usize;
+    let mut tags = Vec::new();
+    for block in &mut msg.blocks {
+        if block.kind != "image" && block.kind != "file" {
+            continue;
+        }
+        attachment_position += 1;
+        if block.kind == "image"
+            && block.inline_placeholder.is_none()
+            && block
+                .image_src
+                .as_deref()
+                .is_some_and(is_clipboard_image_path)
+        {
+            tags.push(format!("[Image #{attachment_position}]"));
+        }
+    }
+    if tags.is_empty() {
+        return;
+    }
+    let mut next = 0usize;
+    for block in &mut msg.blocks {
+        if block.kind != "text" {
+            continue;
+        }
+        if let Some(text) = block.text.as_mut() {
+            while text.contains(CLIPBOARD_IMAGE_TAG) && next < tags.len() {
+                *text = text.replacen(CLIPBOARD_IMAGE_TAG, &tags[next], 1);
+                next += 1;
+            }
+        }
+    }
+}
+
 fn attachment_key(block: &Block) -> Option<String> {
     match block.kind.as_str() {
         "file" => block.file_path.as_ref().map(|path| format!("file:{path}")),
@@ -1153,6 +1191,14 @@ pub fn edge_reference_flags(text: &str, refs: &[(usize, usize)]) -> Vec<bool> {
 }
 
 fn lift_paths_from_text(text: &str) -> (Vec<Block>, String) {
+    lift_paths_from_text_inner(text, false)
+}
+
+fn lift_paths_from_text_with_clipboard_tags(text: &str) -> (Vec<Block>, String) {
+    lift_paths_from_text_inner(text, true)
+}
+
+fn lift_paths_from_text_inner(text: &str, preserve_clipboard_tags: bool) -> (Vec<Block>, String) {
     let mut lifted = Vec::new();
     let mut cleaned_text = text.to_string();
 
@@ -1241,6 +1287,9 @@ fn lift_paths_from_text(text: &str) -> (Vec<Block>, String) {
         }
 
         temp.push_str(&cleaned_text[last..capture_start]);
+        if preserve_clipboard_tags && is_clipboard_image_path(&path) {
+            temp.push_str(CLIPBOARD_IMAGE_TAG);
+        }
         last = whole.end();
         lift_path_block(&path, &mut lifted);
     }
@@ -1266,6 +1315,9 @@ fn lift_paths_from_text(text: &str) -> (Vec<Block>, String) {
 
         if let Some(path) = parse_line_as_path(trimmed_line) {
             lift_path_block(&path, &mut lifted);
+            if preserve_clipboard_tags && is_clipboard_image_path(&path) {
+                remaining_lines.push(CLIPBOARD_IMAGE_TAG);
+            }
         } else {
             remaining_lines.push(line);
         }
@@ -1316,6 +1368,14 @@ fn lift_path_block(path: &str, lifted: &mut Vec<Block>) {
             ..Default::default()
         });
     }
+}
+
+fn is_clipboard_image_path(path: &str) -> bool {
+    let name = Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    name.starts_with("clipboard-") && is_image_file(&expand_home(path))
 }
 
 fn parse_line_as_path(line: &str) -> Option<String> {

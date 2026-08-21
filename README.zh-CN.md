@@ -11,7 +11,7 @@
 
 [English](README.md) · **中文** · [日本語](README.ja.md) · [CHANGELOG](CHANGELOG.md)
 
-<p align="center">一个专为 <strong>Claude Code</strong>、<strong>Codex</strong>、<strong>Grok Build</strong>、<strong>Antigravity CLI</strong> 和 <strong>opencode</strong> 打造的原生桌面浏览器。<br/>在一处读取、搜索并管理五个 CLI 的本地会话记录。</p>
+<p align="center">一个专为 <strong>Claude Code</strong>、<strong>Codex</strong>、<strong>Grok Build</strong>、<strong>Kimi Code</strong>、<strong>Antigravity CLI</strong> 和 <strong>opencode</strong> 打造的原生桌面浏览器。<br/>在一处读取、搜索并管理六个 CLI 的本地会话记录。</p>
 
 </div>
 
@@ -25,6 +25,7 @@ https://github.com/user-attachments/assets/9bcb92a8-e5b8-40e5-b492-af252162309b
 - **全局搜索** — 跨项目秒搜（⌘⇧F）直达具体消息
 - **应用内对话** — 在内置聊天里新开或续聊 Claude Code、Codex 会话，实时切换模型、推理强度（含 Opus **Ultracode**）与权限模式，无需打开终端
 - **Grok Build 历史与 TUI** — 浏览、搜索、导出、统计、重命名、回收站恢复和续跑本地 Grok 会话；明确不提供 Grok GUI Chat
+- **Kimi Code 历史与 TUI** — 浏览、搜索、导出、统计主/子 agent 用量、重命名、回收站恢复和续跑本地 Kimi 会话；明确不提供 Kimi GUI Chat
 - **一键恢复** — 在窗口内嵌终端或外部终端中直接恢复/新建会话——支持 **Terminal.app**、**cmux**、**iTerm2**、**Ghostty** 和 **Warp**
 - **Shell 终端标签** — 在 agent 会话旁开启纯 shell 标签页，直接在项目目录执行任意命令；标签状态跨重启保留
 - **分屏** — 把任意项目拆成左右并排或上下堆叠的多个分屏，每个分屏有独立的标签栏；标签可在分屏内重新排序，也可拖到其他分屏，每个操作都有快捷键（见 设置 → 快捷键）。每个项目的分屏布局跨重启保留
@@ -127,6 +128,16 @@ Linux 上 `.AppImage` 是便携格式 —— `chmod +x` 后直接运行。`.deb`
 ```bash
 sudo apt install ./cc-sessions-viewer_<ver>_amd64.deb
 ```
+
+## Kimi Code
+
+Kimi Code 会话从 `$KIMI_CODE_HOME` 发现，默认目录为 `~/.kimi-code`。应用读取每个会话的 `state.json` 与 `agents/main/wire.jsonl`，统计时会纳入 `agents/*/wire.jsonl` 的子 agent 用量。恢复会话执行 `kimi --session <id>`；新会话会在当前项目目录执行 `kimi`。
+
+Kimi 会话以目录为存储单元。重命名更新 Kimi 会话 metadata；删除、恢复和永久删除都以完整会话目录为单位，并同步 `session_index.jsonl`。worktree 会话按真实 `cwd` 归类。
+
+设置页可在 `$KIMI_CODE_HOME/config.toml` 安装五个用户级 Kimi 状态 hooks。应用只修改自己管理的 hooks；TOML 无法解析或顶层类型不兼容时不会写入。本版本不支持 Kimi GUI Chat。
+
+隐私方面，应用不会读取 `credentials/`、全局日志、MCP 配置或 Skills。Markdown/HTML 导出只使用当前查看的会话；应用不会调用 `kimi export`，其诊断 ZIP 可能包含全局日志，分享前请自行检查。
 
 ## 开发
 

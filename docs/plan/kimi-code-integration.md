@@ -9,7 +9,15 @@
 - [ ] 阶段 1 剩余：state/main wire 的原子一致 snapshot、读取前后 revision 重试与 watcher debounce，随 Live tail 一并完成。
 - [x] 阶段 2：主 wire 的 user/assistant text/thinking/tool call/tool result 解析，物理顺序、嵌套 result、并发/乱序工具的 `toolCallId` 关联、fallback、搜索边界与安全截断。
 - [x] 阶段 2.1：Kimi AskUserQuestion 的 `multi_select` 规范化、JSON answers/取消/后台等待只读卡片语义，以及共享卡片的 agent label 泛化。
-- [ ] 阶段 3–8：重命名/回收站、统计、完整前端 agent 接入、CLI、hooks、托盘与文档。
+- [x] 阶段 3 核心：保留未知字段的 `state.json` 标题更新、目录型软删/恢复/硬删、根 `session_index.jsonl` 原子同步与失败回滚；索引发现改为真实 `$KIMI_CODE_HOME/session_index.jsonl` 路径。
+- [ ] 阶段 3 剩余：隔离原生 `/title` 的跨版本字段组合手工验收，以及外部 Kimi 连续写入时的冲突压力测试。
+- [x] 阶段 4：扫描 main/subagent 顶层 `usage.record`、缓存 token 映射、`step.end` 去重、严格定价缺失标识、工具/shell/MCP carrier，以及 session/统计链路汇总。
+- [x] 阶段 5 核心：`Agent`/capability/icon/标签注册、Kimi 默认可见及旧设置迁移、终端启动参数持久化、统计 scope、导出标签与 worktree session 清理；`guiChat=false` 保持不接入聊天协议。
+- [x] 阶段 6：CLI 环境卡注册 Kimi 官方安装命令、登录 shell 的 `kimi --version`、多安装诊断和仅安装后运行的只读 `kimi doctor`；doctor 成功不回传输出，失败摘要会截断并清理敏感值。Kimi 不进入自动升级路径，且升级 API 明确拒绝后台 `kimi upgrade`。内嵌/外部终端继续以结构化 `kimi --session <id>` / `kimi` 在 login + interactive shell 中运行；Rust worktree gate 已包含 Kimi。
+- [x] 阶段 7：Kimi 用户级 `config.toml` 的五项 `[[hooks]]` 安全合并、状态映射、fail-open relay、session ID/cwd 到 main wire 的有限重试解析，以及 Settings hooks inventory、桌面宠物通用状态链路。只移除引用 viewer 当前或旧 relay script 的 hook，顶层类型不兼容或 TOML 无法解析时拒绝写入。
+- [x] 阶段 8：Kimi 纳入 tray enabled-agent 过滤和零活动 summary；README 英文、中文、日文补齐数据根、恢复、统计、目录型删除、hooks、worktree、隐私和 GUI Chat 限制说明。
+- [x] 集成回归修正：应用规范 agent ID 统一为 `kimicode`，保留历史 `kimi` 的 settings、tabs、导出记录和 hook signal 迁移/兼容；CLI 二进制与 `kimi doctor` 仍使用 `kimi`。替换为官方 `public/kimicode.png` 图标；列表和详情视觉上只显示 session ID 最后一段，复制仍返回完整 ID，创建时间不再展示。Kimi `Edit`/`Write`/`MultiEdit` 等文件变更统一使用 Codex 风格路径、变更类型、增删行和 diff 渲染；所有 Kimi tool result 不再渲染为独立详情内容。Kimi 历史读取也接入通用附件后处理，含前置说明文字的现存 `clipboard-*.png` 本地路径会提升为截图，并保留原始 `[#image n]` 标签。
+- [x] 统计与价格回归修正：统计 scope 增加规范名称 `kimicode`；模型价格查找支持任意层普通 provider 前缀（如 `deepseek/...`、`gateway/deepseek/...`），并继续使用已合并的原生 provider、OpenCode 和 models.dev 数据。`custom/`、`ollama/`、`local/`（包括多级网关前缀）不会误继承官方同名模型价格；只有严格查价仍未命中时才标记为缺少价格。
 
 ## 目标与范围
 
@@ -77,6 +85,7 @@ $KIMI_CODE_HOME/
 - 实际样本的 `AskUserQuestion` 是 `context.append_loop_event` 下的 `tool.call`，`event.name='AskUserQuestion'`。调用稳定使用 `turnId`、`step`、`stepUuid`、`uuid`、`toolCallId` 和 `args.questions[]`；对应 `tool.result` 仅以 `toolCallId`/`parentUuid` 关联，未重复 turn/step。样本有两次前台单题、每题三个选项，结果均为 `event.result.output` 中的 JSON `{ "answers": { "<question text>": "<selected label>" } }`，且 result 的 `parentUuid` 等于 call 的 `uuid`。
 - Kimi 内置契约允许每次 1–4 题、每题 2–4 选项、`multi_select`，并自动提供 Other。前台取消的成功结果为 `{ "answers": {}, "note": "User dismissed…" }`；不支持时是 error text。`background=true` 则先返回 task 状态文本，真正答案异步进入 background task，不能把这个即时回执误当作已选答案。
 - `usage.record` 记录每次模型调用的 `inputOther`、`output`、`inputCacheRead`、`inputCacheCreation`。`step.end.usage` 在样本中可能为空，且与 `usage.record` 重复，故不能两者相加。
+- 本机 `config.toml` 的默认模型别名为 `deepseek/deepseek-v4-flash`；wire 中的 `usage.record.model` 也可能携带该 provider 前缀，统计查价不得只按裸模型名做单层判断。
 - 同一 session 可含子 agent；主对话只应读取 `agents/main/wire.jsonl`，但统计必须包含每个 `agents/*/wire.jsonl` 的真实模型调用。
 - 另一条含子 agent 的真实样本确认：`usage.record` 是**顶层** wire event，不在 `context.append_loop_event` 内；两个 wire 合计 27 条 `llm.request`、26 条 `usage.record`，且两者都没有 `turnId`、`step` 或 `stepUuid`。同一 agent 的同一个 step 可并发写入多个 `tool.call`，随后分别写入 `tool.result`；结果必须由 `toolCallId` 关联。实际 `tool.result` 的值在 `event.result` object 内，`output` 与 `isError` 都在这个 object 中。样本工具输出虽引用图片本地路径，但 wire 没有二进制图片 content；viewer 不得依路径读取或嵌入本地文件。
 
@@ -200,6 +209,8 @@ KIMI_CODE_HOME
    - Kimi 可配置 OpenAI、Anthropic 或任意自定义 endpoint，不能从字符串猜测真实账单；未匹配价格时 cost 为 0 并增加 `unpricedCallCount`；
    - OAuth/订阅与第三方代理均将 USD 视为模型目录估算而非账单；若将来要显示“估算”标识，应使用通用的 provider-neutral 字段，而不是复用 Grok 专属文案。
 7. 为模型别名（例如 wire 中的 `provider/model`）添加严格归一化测试；仅在官方文档和价格目录都能证明等价时添加别名，不能因为名称相似而跨 provider 归并。
+   - 普通 provider 前缀被视为传输元数据，按最后一段模型 ID 查找，支持 `provider/model` 和 `gateway/provider/model`；先保留原始/去 pin/日期的精确键，再查合并后的官方与 OpenCode 价格表。
+   - `custom`、`ollama`、`local` 出现在任意前缀层级时保持隔离；只有价格表存在完整自定义键才可命中，否则返回严格缺价，不套用同名官方模型或 Claude 平均价。
 
 验收：一个 `usage.record` 恰好是一条 call；带 cache 的 session 总量正确；`step.end` 重复/空 usage 不会双算；主/子 agent 合计正确；未知或自定义 provider 不出现伪造 Claude 成本；范围筛选和 tray 三个时间窗口与 Stats 页面一致。
 
@@ -207,14 +218,14 @@ KIMI_CODE_HOME
 
 涉及：`src/types.ts`、`src/agentMeta.ts`、`src/settings.ts`、`src/App.vue`、`src/components/icons.ts`、`src/locales/{en,zh,zh-TW,ja}.ts`、相关 Vitest。
 
-1. 将 `kimi` 加入 `Agent` 联合类型、`ALL_AGENTS`、icons、avatar、四种语言的 agent/统计 scope 文案和所有 exhaustive map。
-2. 增加 `AGENT_META.kimi`：`history/terminal/worktree/hooks/stats/pricing = true`，`guiChat = false`。所有入口继续通过 capability gate 判断，不添加散落的 Kimi 名称白名单。
+1. 将 `kimicode` 作为应用规范 ID 加入 `Agent` 联合类型、`ALL_AGENTS`、icons、avatar、四种语言的 agent/统计 scope 文案和所有 exhaustive map；CLI 二进制 ID 仍是 `kimi`。
+2. 增加 `AGENT_META.kimicode`：`history/terminal/worktree/hooks/stats/pricing = true`，`guiChat = false`。所有入口继续通过 capability gate 判断，不添加散落的 Kimi 名称白名单。
 3. 持久化升级兼容：
-   - `enabledAgents:v1` 缺少 Kimi 时按新 agent rollout 规则启用；新安装的默认可见列表也包含 Kimi；
-   - `launchArgs:v1` 增加 `kimi` 字段，读取旧对象时补空字符串且不丢弃其它 agent 参数；
-   - 保持项目排序、最近记录、view tabs、导出历史按现有 `Agent` 键自动隔离。
+   - `enabledAgents:v1` 缺少 Kimi 时按新 agent rollout 规则启用；旧 `kimi` 键映射到 `kimicode`，新安装的默认可见列表也包含 Kimi；
+   - `launchArgs:v1` 使用 `kimicode` 字段，读取旧 `kimi` 对象时迁移且不丢弃其它 agent 参数；
+   - 保持项目排序、最近记录、view tabs、导出历史按现有 `Agent` 键自动隔离，并在读取旧持久化 tab/导出记录时迁移 `kimi`。
 4. 通用搜索、重命名、批量删除、回收站、会话级/全局统计和 Markdown/HTML 导出应在 source/type 接入后自然生效；Kimi 的 `AskUserQuestion` 复用既有 `ChatQuestionPrompt` 只读卡与 result-by-tool-id 合并机制，同时修复共享 parser 的 Kimi JSON answers、snake_case 多选和 agent 名称泛化。新增针对 Kimi 的端到端调用测试，避免因类型断言遗漏。
-5. 将 `kimi` 加入 `WORKTREE_AGENTS`。Kimi 的 `state.cwd` 必须使用真实 worktree 路径，使 worktree 创建后可被侧栏发现，移除 worktree 时会统计并 hard-delete 该 cwd 下的 Kimi session 目录及 index 行。
+5. 将 `kimicode` 加入 `WORKTREE_AGENTS`。Kimi 的 `state.cwd` 必须使用真实 worktree 路径，使 worktree 创建后可被侧栏发现，移除 worktree 时会统计并 hard-delete 该 cwd 下的 Kimi session 目录及 index 行。
 6. 更新 worktree 数量提示和注释为“能力驱动/包含 Kimi”，并验证 Kimi 没有会话时仍使用既有 worktree 占位项目逻辑。
 
 验收：升级前 localStorage 不报错且 Kimi 可见、启动参数重启后保留；Kimi 不出现 New Chat/quick-open Chat 入口；导出、搜索、重命名、回收站和删除 worktree 均正确指向 Kimi 数据。
@@ -248,7 +259,7 @@ KIMI_CODE_HOME
 
 2. 在 `$KIMI_CODE_HOME/config.toml` 中只合并 viewer 自己的 `[[hooks]]`：根据命令是否引用 viewer hook script 判断归属，先移除旧版 viewer 项再追加新版项；保留顺序和所有用户 hook。遇到 TOML 无法解析或顶层类型不兼容时停止并报错，绝不覆盖文件。
 3. `TurnHookInstallResult`、`TurnHookStatus`、设置页 hook inventory 和 i18n 均新增 Kimi，整体“已安装”状态需要包含已启用的 Kimi hooks；页面展示真实 Kimi config 路径。
-4. Kimi hook stdin 有 `session_id`、`cwd`，但没有 `transcript_path`。扩展 relay script 接受 `kimi` 并写入 session ID/cwd；在 Rust 侧新增 `find_main_wire_path(session_id, cwd)`，从 Kimi 会话源解析主 wire。目录刚创建而尚未落盘时使用有限重试，解析失败则不写假路径。
+4. Kimi hook stdin 有 `session_id`、`cwd`，但没有 `transcript_path`。relay script 以 `kimicode` 写出信号、同时接受历史 `kimi` 参数并规范化；在 Rust 侧新增 `find_main_wire_path(session_id, cwd)`，从 Kimi 会话源解析主 wire。目录刚创建而尚未落盘时使用有限重试，解析失败则不写假路径。
 5. hook 脚本继续 fail-open：任何 JSON、I/O 或路径解析异常均 exit 0，不能改变 Kimi 的 hook stdout/阻断语义；每个 hook timeout 设为 5 秒。
 6. 既有 `emit_turn_signal`、desktop task snapshot 和 `resolve_desktop_pet_session` 通过 source registry 找到 Kimi path/title。桌面宠物不需要 Kimi 专属动画；收到 started/blocked/completed/failed 后沿用现有优先级、通知和点击打开会话流程。
 
@@ -258,7 +269,7 @@ KIMI_CODE_HOME
 
 涉及：`src-tauri/src/stats/tray.rs`、`README.md`、`README.zh-CN.md`、必要的日文 README/产品文档、`docs/plan/kimi-code-integration.md`。
 
-1. 将 `kimi` 纳入 `TRAY_AGENT_NAMES`、可见性同步和 agent summary。只有用户在 Settings 中启用 Kimi 时才显示；没有近 30 天活动仍显示零值，和现有可计费 agent 一致。
+1. 将 `kimicode` 纳入 `TRAY_AGENT_NAMES`、可见性同步和 agent summary。只有用户在 Settings 中启用 Kimi 时才显示；没有近 30 天活动仍显示零值，和现有可计费 agent 一致。
 2. 更新支持 agent 的 README 段落：安装、会话数据根、恢复、KIMI_CODE_HOME、主/子 agent 统计、目录型删除恢复、hooks、worktree 与本期 GUI Chat 不支持。
 3. 明确安全/隐私文案：应用内导出不含 Kimi 全局日志；`kimi export` 的 ZIP 默认可能含全局日志，分享前应检查；viewer 不读取 credentials。
 4. 保留本文件作为设计与验收记录；实现完成后补充实际版本兼容范围、已验证的原生 `/title` state 写法和已知 Kimi 格式变更。
@@ -293,6 +304,13 @@ KIMI_CODE_HOME
 4. 分别从内嵌 terminal 和外部 terminal 恢复会话；验证 CLI 健康检查、PATH 缺失提示和 KIMI_CODE_HOME 自定义根。
 5. 安装 hooks 后，从普通 terminal 发 prompt、触发权限、完成、失败和中断；确认 tab、托盘、桌面宠物和点击回到会话的状态一致。
 6. 在 Kimi 连续调用工具时反复刷新详情、搜索、导出和统计；验证它们只在完整 snapshot 后一起更新，半写入尾行不产生重复 tool result/usage。随后在外部 Kimi 保持运行时尝试重命名、删除和恢复，确认 Viewer 阻止或报告 revision 冲突，未重写或拆分 session 数据。
+
+## 已完成验证
+
+- Kimi 样本与 CLI：基于本机 Kimi Code `0.38.0` 的 session/wire 格式实现；`kimi doctor` 实机返回成功。未把 `kimi upgrade` 纳入后台流程。
+- 阶段 6 实现后：`cargo test --lib`（412 passed, 3 ignored）、`npm run test:run -- test/agentMeta.test.ts test/settings.test.ts`（48 passed）和 `npm run build` 均通过。
+- 阶段 7–8 实现后：`cargo test --lib`（416 passed, 3 ignored）和 `npm run test:run`（80 files, 1006 passed）均通过。hook 测试覆盖 Kimi `[[hooks]]` 的新建、幂等重装、用户项保留、顶层类型拒绝、状态检查和 session ID 到主 wire 的安全解析；tray 测试覆盖 Kimi 零活动 summary。
+- 本次 Kimi 文件变更、统计 scope 和 provider 前缀查价修正后：`cargo test --lib`（420 passed, 3 ignored）、定价测试（32 passed）、`npm run test:run`（80 files, 1011 passed）和 `npm run build` 通过；新增覆盖多级 provider 前缀、`custom/ollama/local` 隔离、Kimi `Edit` diff 解析和统一渲染的回归测试。定向 Rust `rustfmt` 与 `git diff --check` 通过；全仓 `cargo fmt --check` 仍只报告未触及的 `src-tauri/src/util.rs` 既有格式差异。
 
 ### 质量门槛
 

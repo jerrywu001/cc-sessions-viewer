@@ -948,7 +948,13 @@ function pad(n: number): string {
 /** 把毫秒时间戳或 ISO 字符串格式化为本地时间。 */
 export function formatTime(input: number | string | undefined): string {
   if (input === undefined || input === '') return '—'
-  const d = new Date(input)
+  // JSON APIs commonly serialize millisecond timestamps as strings. Date
+  // parses a numeric string as a date string (and usually returns Invalid
+  // Date), so normalize it back to a number before constructing the date.
+  const dateInput = typeof input === 'string' && /^\d+$/.test(input.trim())
+    ? Number(input)
+    : input
+  const d = new Date(dateInput)
   if (isNaN(d.getTime())) return '—'
   const now = new Date()
   const sameDay =
@@ -966,6 +972,17 @@ export function formatTime(input: number | string | undefined): string {
   if (sameDay) return `${t('time.today')} ${hm}`
   if (isYesterday) return `${t('time.yesterday')} ${hm}`
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`
+}
+
+/**
+ * Compact session IDs for the list/detail UI while keeping the original ID
+ * available to tooltips and copy actions. IDs are usually UUIDs, but the
+ * slash-aware split also handles path-like IDs from third-party agents.
+ */
+export function displaySessionId(id: string): string {
+  const normalized = id.replace(/[\\/]+$/, '')
+  const parts = normalized.split(/[-\\/]/)
+  return parts[parts.length - 1] || normalized
 }
 
 /** 把运行秒数压成短标签：7s、16m 40s、1h 02m。 */

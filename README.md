@@ -11,7 +11,7 @@
 
 **English** · [中文](README.zh-CN.md) · [日本語](README.ja.md) · [CHANGELOG](CHANGELOG.md)
 
-<p align="center">A native desktop browser for <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Grok Build</strong>, <strong>Antigravity CLI</strong>, and <strong>opencode</strong>.<br/>Read, search, and manage local session transcripts from all five in one place.</p>
+<p align="center">A native desktop browser for <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Grok Build</strong>, <strong>Kimi Code</strong>, <strong>Antigravity CLI</strong>, and <strong>opencode</strong>.<br/>Read, search, and manage local session transcripts from all six in one place.</p>
 
 </div>
 
@@ -25,6 +25,7 @@ https://github.com/user-attachments/assets/9bcb92a8-e5b8-40e5-b492-af252162309b
 - **Global search** — cross-project instant search (⌘⇧F) jumps to the exact message
 - **In-app chat** — start or resume Claude Code or Codex sessions in a built-in chat with live model, reasoning-effort (incl. Opus **Ultracode**), and permission-mode pickers — no terminal required
 - **Grok Build history + TUI** — browse, search, export, analyze, rename, trash/restore, and resume local Grok sessions; Grok GUI Chat is intentionally not included
+- **Kimi Code history + TUI** — browse, search, export, analyze main and subagent usage, rename, trash/restore, and resume local Kimi sessions; Kimi GUI Chat is intentionally not included
 - **One-click resume** — resume or start a session in an embedded terminal or external app — supports **Terminal.app**, **cmux**, **iTerm2**, **Ghostty**, and **Warp**
 - **Shell terminal tabs** — open pure shell tabs alongside agent sessions for running arbitrary commands in the project directory; tabs persist across restarts
 - **Split panes** — split any project into side-by-side or stacked panes, each with its own tab strip; drag tabs to reorder within a pane or move them between panes, with keyboard shortcuts for every action (see Settings → Shortcuts). Every project remembers its own layout across restarts
@@ -127,6 +128,16 @@ On Linux the `.AppImage` is portable — `chmod +x` and run. The `.deb` installs
 ```bash
 sudo apt install ./cc-sessions-viewer_<ver>_amd64.deb
 ```
+
+## Kimi Code
+
+Kimi Code sessions are discovered from `$KIMI_CODE_HOME` (default: `~/.kimi-code`). The viewer reads each session's `state.json` and `agents/main/wire.jsonl`, and includes `agents/*/wire.jsonl` when calculating usage. Resume opens `kimi --session <id>`; new sessions run `kimi` in the selected project directory.
+
+Kimi sessions are directory-backed. Rename updates Kimi session metadata; trash, restore, and permanent deletion operate on the complete session directory and keep `session_index.jsonl` in sync. Kimi worktree sessions are grouped by their real `cwd`.
+
+Settings can install five user-level Kimi status hooks in `$KIMI_CODE_HOME/config.toml`. Only hooks managed by Sessions Viewer are changed, and invalid or incompatible TOML is left untouched. Kimi GUI Chat is not supported in this release.
+
+For privacy, the viewer does not read `credentials/`, global logs, MCP configuration, or skills. Its Markdown/HTML exports use the viewed session only. `kimi export` is not invoked by the app; its diagnostic ZIP can include global logs, so inspect it before sharing.
 
 ## Development
 

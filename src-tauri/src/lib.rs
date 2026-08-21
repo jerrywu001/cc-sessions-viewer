@@ -93,11 +93,11 @@ fn list_projects(
     Ok(out)
 }
 
-/// 支持本应用 worktree 展示/创建的 agent：Claude、Codex、Grok Build 都按 `cwd` 归属会话。
+/// 支持本应用 worktree 展示/创建的 agent：Claude、Codex、Grok Build、Kimi Code 都按 `cwd` 归属会话。
 /// opencode / agy 按 git 仓库归属会话，worktree 里起的会话会被 CLI 塞回主仓库，展示 worktree
 /// 反而误导，故对它们整体隐藏 worktree。这里不接管 Grok 自己的 worktree registry。
 fn agent_supports_worktrees(agent: &str) -> bool {
-    matches!(agent, "claude" | "codex" | "grok")
+    matches!(agent, "claude" | "codex" | "grok" | "kimicode")
 }
 
 /// 把磁盘上 `<项目根>/.claude/worktrees/*` 里的 worktree 注入项目列表 —— agent 无关，
@@ -498,6 +498,7 @@ mod codex_runtime_tests {
         assert!(agent_supports_worktrees("claude"));
         assert!(agent_supports_worktrees("codex"));
         assert!(agent_supports_worktrees("grok"));
+        assert!(agent_supports_worktrees("kimicode"));
         assert!(!agent_supports_worktrees("agy"));
         assert!(!agent_supports_worktrees("opencode"));
     }

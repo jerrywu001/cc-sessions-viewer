@@ -20,12 +20,12 @@ import {
   messagesToHtml,
   messagesToMarkdown,
 } from '../src/export'
-import { setExportHtmlShowMessageTime, setLang } from '../src/settings'
+import { setExportShowMessageTime, setLang } from '../src/settings'
 import { formatTime } from '../src/format'
 
 beforeEach(() => {
   setLang('en')
-  setExportHtmlShowMessageTime(true)
+  setExportShowMessageTime(true)
   saveMock.mockReset()
   writeFileMock.mockReset()
 })
@@ -212,6 +212,18 @@ describe('messagesToMarkdown', () => {
     expect(md).toContain('- Agent: `codex`')
   })
 
+  it('omits creation and message times when export times are disabled', () => {
+    const timestamp = '2026-08-20T09:15:00.000Z'
+    setExportShowMessageTime(false)
+    const md = messagesToMarkdown(
+      session({ created: timestamp }),
+      [msg('assistant', [text('timed reply')], { timestamp })],
+      'claude',
+    )
+    expect(md).not.toContain(formatTime(timestamp))
+    expect(md).toContain('0 prompts · 1 replies')
+  })
+
 })
 
 describe('messagesToHtml', () => {
@@ -222,14 +234,14 @@ describe('messagesToHtml', () => {
     expect(html).toContain('</html>')
   })
 
-  it('shows message times in HTML exports by default and can omit them', async () => {
+  it('shows message times in exports by default and HTML can omit them', async () => {
     const timestamp = '2026-08-20T09:15:00.000Z'
     const messages = [msg('assistant', [text('timed reply')], { timestamp })]
     const meta = session({ created: timestamp })
 
     expect(await messagesToHtml(meta, messages, 'claude')).toContain(formatTime(timestamp))
 
-    setExportHtmlShowMessageTime(false)
+    setExportShowMessageTime(false)
     const html = await messagesToHtml(meta, messages, 'claude')
     expect(html).not.toContain(formatTime(timestamp))
     expect(html).toContain('0 prompts · 1 replies')
@@ -517,6 +529,21 @@ describe('exportMarkdown / exportHtml', () => {
     expect(parsed.session.id).toBe('sess-1')
     expect(parsed.messages).toHaveLength(2)
     expect(parsed.messages[0].blocks[0].text).toBe('hi')
+  })
+
+  it('omits time fields from JSON exports when export times are disabled', () => {
+    const timestamp = '2026-08-20T09:15:00.000Z'
+    setExportShowMessageTime(false)
+    const parsed = JSON.parse(
+      buildExportEnvelope(
+        session({ created: timestamp, modified: Date.parse(timestamp) }),
+        [msg('assistant', [text('timed reply')], { timestamp })],
+        'claude',
+      ),
+    )
+    expect(parsed.session).not.toHaveProperty('created')
+    expect(parsed.session).not.toHaveProperty('modified')
+    expect(parsed.messages[0]).not.toHaveProperty('timestamp')
   })
 
   it('preserves Grok Build in JSON and batch exports', async () => {

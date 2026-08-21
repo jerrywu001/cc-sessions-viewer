@@ -392,6 +392,22 @@ const IconGrokRaw = defineComponent({
   },
 })
 
+const IconKimiRaw = defineComponent({
+  name: 'IconKimiCode',
+  setup() {
+    return () =>
+      h('img', {
+        src: '/kimicode.png',
+        width: 16,
+        height: 16,
+        alt: 'Kimi Code',
+        'aria-hidden': 'true',
+        class: 'iconify',
+        style: 'vertical-align: middle',
+      })
+  },
+})
+
 // Brand marks for the agents, pulled from iconify at build time so
 // runtime stays offline-friendly. Sources: `material-icon-theme:claude`,
 // our own `assets/codex.svg`, and inline render for agy / opencode.
@@ -402,6 +418,7 @@ export const IconCodex = IconCodexRaw
 export const IconAgy = IconAgyRaw
 export const IconOpencode = IconOpencodeRaw
 export const IconGrok = IconGrokRaw
+export const IconKimi = IconKimiRaw
 
 /**
  * Global dictionary of agent → brand-mark icon component. Use as
@@ -415,6 +432,7 @@ export const agentIcons: Record<Agent, Component> = {
   agy: IconAgyRaw,
   opencode: IconOpencodeRaw,
   grok: IconGrokRaw,
+  kimicode: IconKimiRaw,
 }
 
 // ---- 文件附件按扩展名分型的图标 ----

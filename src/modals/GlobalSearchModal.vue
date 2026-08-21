@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { Agent, SearchField, SearchHit, SearchScope, SessionMeta } from '../types'
 import { searchSessions, cancelSearch, nextSearchRequestId } from '../api'
 import { t } from '../i18n'
-import { shortName, highlightSegments } from '../format'
+import { displaySessionId, shortName, highlightSegments } from '../format'
 import { agentLabel } from '../agentMeta'
 import {
   recentSearches,
@@ -243,7 +243,7 @@ function segs(text: string) {
 }
 
 function sessionLabel(s: SessionMeta): string {
-  return s.title || (s.id ? s.id.slice(0, 8) : '—')
+  return s.title || (s.id ? displaySessionId(s.id) : '—')
 }
 
 function clearInput() {

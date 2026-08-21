@@ -1,4 +1,6 @@
-use crate::types::{CliDiagnosisResult, CliInstallation, CliUpgradeResult, CliVersionInfo};
+use crate::types::{
+    CliDiagnosisResult, CliHealthStatus, CliInstallation, CliUpgradeResult, CliVersionInfo,
+};
 use std::process::Command;
 use std::time::Duration;
 
@@ -21,6 +23,10 @@ struct CliSpec {
     install_unix: Option<&'static str>,
     /// Standalone install command for Windows (PowerShell, e.g. irm … | iex).
     install_windows: Option<&'static str>,
+    /// A non-interactive update is safe to run from the viewer.
+    background_upgrade: bool,
+    /// Optional read-only health probe. Its output is never returned to the UI.
+    health_check_command: Option<&'static str>,
 }
 
 const CLI_SPECS: &[CliSpec] = &[
@@ -34,6 +40,8 @@ const CLI_SPECS: &[CliSpec] = &[
         version_check_command: None,
         install_unix: Some("curl -fsSL https://claude.ai/install.sh | bash"),
         install_windows: Some("irm https://claude.ai/install.ps1 | iex"),
+        background_upgrade: true,
+        health_check_command: None,
     },
     CliSpec {
         name: "codex",
@@ -45,6 +53,8 @@ const CLI_SPECS: &[CliSpec] = &[
         version_check_command: None,
         install_unix: Some("curl -fsSL https://chatgpt.com/codex/install.sh | sh"),
         install_windows: Some("irm https://chatgpt.com/codex/install.ps1 | iex"),
+        background_upgrade: true,
+        health_check_command: None,
     },
     CliSpec {
         name: "agy",
@@ -58,6 +68,8 @@ const CLI_SPECS: &[CliSpec] = &[
         version_check_command: None,
         install_unix: Some("curl -fsSL https://antigravity.google/cli/install.sh | bash"),
         install_windows: Some("irm https://antigravity.google/cli/install.ps1 | iex"),
+        background_upgrade: true,
+        health_check_command: None,
     },
     CliSpec {
         name: "opencode",
@@ -69,6 +81,8 @@ const CLI_SPECS: &[CliSpec] = &[
         version_check_command: None,
         install_unix: Some("curl -fsSL https://opencode.ai/install | bash"),
         install_windows: None,
+        background_upgrade: true,
+        health_check_command: None,
     },
     CliSpec {
         name: "grok",
@@ -80,6 +94,22 @@ const CLI_SPECS: &[CliSpec] = &[
         version_check_command: Some("grok update --check --json"),
         install_unix: Some("curl -fsSL https://x.ai/cli/install.sh | bash"),
         install_windows: Some("irm https://x.ai/cli/install.ps1 | iex"),
+        background_upgrade: true,
+        health_check_command: None,
+    },
+    CliSpec {
+        name: "kimi",
+        binary: "kimi",
+        npm_package: "",
+        brew_upgrade: None,
+        builtin_update: None,
+        manifest_url: None,
+        version_check_command: None,
+        install_unix: Some("curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash"),
+        install_windows: Some("irm https://code.kimi.com/kimi-code/install.ps1 | iex"),
+        // `kimi upgrade` can prompt, while Kimi manages its own default updates.
+        background_upgrade: false,
+        health_check_command: Some("kimi doctor"),
     },
 ];
 
@@ -411,6 +441,54 @@ fn is_upgradable(
     })
 }
 
+fn redact_doctor_summary(error: &str) -> String {
+    let mut summary = error
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("Kimi doctor failed")
+        .to_string();
+    if let Some(home) = crate::util::home().to_str() {
+        summary = summary.replace(home, "~");
+    }
+    for pattern in [
+        r"(?i)(authorization|bearer|token|api[_-]?key|secret|password|credential|cookie)\s*(=|:|\s+)\S+",
+        r"(?i)([?&](?:token|api[_-]?key|secret|password|credential)=)[^&\s]+",
+    ] {
+        if let Ok(re) = regex_lite::Regex::new(pattern) {
+            let replacement = if pattern.starts_with("(?i)(authorization") {
+                "$1$2<redacted>"
+            } else {
+                "$1<redacted>"
+            };
+            summary = re.replace_all(&summary, replacement).into_owned();
+        }
+    }
+    let truncated: String = summary.chars().take(240).collect();
+    if truncated.is_empty() {
+        "Kimi doctor failed".to_string()
+    } else {
+        truncated
+    }
+}
+
+fn check_health(spec: &CliSpec, installed: bool) -> Option<CliHealthStatus> {
+    let command = spec.health_check_command?;
+    if !installed {
+        return None;
+    }
+    Some(match run_in_login_shell(command) {
+        Ok(_) => CliHealthStatus {
+            healthy: true,
+            summary: None,
+        },
+        Err(error) => CliHealthStatus {
+            healthy: false,
+            summary: Some(redact_doctor_summary(&error)),
+        },
+    })
+}
+
 fn check_cli_version(spec: &CliSpec) -> CliVersionInfo {
     let current = if spec.name == "grok" {
         get_grok_installed_version()
@@ -418,33 +496,41 @@ fn check_cli_version(spec: &CliSpec) -> CliVersionInfo {
         get_installed_version(spec)
     };
     let installed = current.is_some();
-    // Use npm registry for npm-based CLIs, manifest URL for others (e.g. agy)
-    let (latest, command_update_available) = if spec.name == "grok" {
-        match fetch_grok_latest_info() {
-            Ok(info) => (Ok(info.latest_version), info.update_available),
-            Err(e) => (Err(e), None),
-        }
-    } else if let Some(command) = spec.version_check_command {
-        match fetch_command_latest_info(command) {
-            Ok(info) => (Ok(info.latest_version), info.update_available),
-            Err(e) => (Err(e), None),
-        }
-    } else if !spec.npm_package.is_empty() {
-        (fetch_npm_latest(spec.npm_package), None)
-    } else if let Some(manifest_url) = spec.manifest_url {
-        (fetch_manifest_latest(manifest_url), None)
+    let health = check_health(spec, installed);
+    // Use npm registry for npm-based CLIs, manifest URL for others (e.g. agy).
+    // Kimi owns its update flow and `kimi upgrade` may prompt, so the viewer
+    // intentionally has no version source or background-upgrade action for it.
+    let (latest_version, error, command_update_available) = if !spec.background_upgrade {
+        (None, None, None)
     } else {
-        (Err("no version source configured".into()), None)
+        let (latest, command_update_available) = if spec.name == "grok" {
+            match fetch_grok_latest_info() {
+                Ok(info) => (Ok(info.latest_version), info.update_available),
+                Err(e) => (Err(e), None),
+            }
+        } else if let Some(command) = spec.version_check_command {
+            match fetch_command_latest_info(command) {
+                Ok(info) => (Ok(info.latest_version), info.update_available),
+                Err(e) => (Err(e), None),
+            }
+        } else if !spec.npm_package.is_empty() {
+            (fetch_npm_latest(spec.npm_package), None)
+        } else if let Some(manifest_url) = spec.manifest_url {
+            (fetch_manifest_latest(manifest_url), None)
+        } else {
+            (Err("no version source configured".into()), None)
+        };
+        match latest {
+            Ok(v) => (Some(v), None, command_update_available),
+            Err(e) => (None, Some(e), command_update_available),
+        }
     };
-    let (latest_version, error) = match latest {
-        Ok(v) => (Some(v), None),
-        Err(e) => (None, Some(e)),
-    };
-    let upgradable = is_upgradable(
-        current.as_deref(),
-        latest_version.as_deref(),
-        command_update_available,
-    );
+    let upgradable = spec.background_upgrade
+        && is_upgradable(
+            current.as_deref(),
+            latest_version.as_deref(),
+            command_update_available,
+        );
     CliVersionInfo {
         cli: spec.name.to_string(),
         npm_package: spec.npm_package.to_string(),
@@ -453,6 +539,7 @@ fn check_cli_version(spec: &CliSpec) -> CliVersionInfo {
         upgradable,
         installed,
         error,
+        health,
     }
 }
 
@@ -473,6 +560,7 @@ pub fn check_all_versions() -> Vec<CliVersionInfo> {
                     upgradable: false,
                     installed: false,
                     error: Some("thread panic".into()),
+                    health: None,
                 })
             })
             .collect()
@@ -634,6 +722,14 @@ fn extract_fallback_cmd(output: &str) -> Option<String> {
 
 pub fn upgrade_single(cli_name: &str) -> Result<CliUpgradeResult, String> {
     let spec = find_spec(cli_name)?;
+    if !spec.background_upgrade {
+        return Ok(CliUpgradeResult {
+            cli: spec.name.to_string(),
+            success: false,
+            new_version: None,
+            error: Some("background_upgrade_unsupported".into()),
+        });
+    }
     let prev_version = get_installed_version(spec);
     let cmd = resolve_upgrade_cmd(spec);
     match run_in_login_shell(&cmd) {
@@ -911,6 +1007,35 @@ mod tests {
         assert_eq!(extract_version("codex-cli 0.142.3"), Some("0.142.3".into()));
         assert_eq!(extract_version("0.43.0"), Some("0.43.0".into()));
         assert_eq!(extract_version("no version here"), None);
+    }
+
+    #[test]
+    fn kimi_cli_has_official_installer_and_never_background_upgrades() {
+        let kimi = find_spec("kimi").unwrap();
+        assert_eq!(kimi.binary, "kimi");
+        assert_eq!(
+            kimi.install_unix,
+            Some("curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash")
+        );
+        assert_eq!(
+            kimi.install_windows,
+            Some("irm https://code.kimi.com/kimi-code/install.ps1 | iex")
+        );
+        assert!(!kimi.background_upgrade);
+        assert_eq!(kimi.health_check_command, Some("kimi doctor"));
+    }
+
+    #[test]
+    fn doctor_failure_summary_redacts_secrets_and_home_path() {
+        let home = crate::util::home();
+        let input = format!(
+            "config {} token=super-secret-value\nignored",
+            home.join(".kimi-code/config.toml").display()
+        );
+        let summary = redact_doctor_summary(&input);
+        assert!(summary.contains("~/.kimi-code/config.toml"));
+        assert!(summary.contains("token=<redacted>"));
+        assert!(!summary.contains("super-secret-value"));
     }
 
     #[test]

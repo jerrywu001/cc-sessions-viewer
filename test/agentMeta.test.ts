@@ -11,4 +11,15 @@ describe('agent metadata', () => {
     expect(agentSupports('grok', 'stats')).toBe(true)
     expect(agentSupports('grok', 'pricing')).toBe(true)
   })
+
+  it('defines Kimi Code as historical/terminal-capable without GUI chat', () => {
+    expect(agentLabel('kimicode')).toBe('Kimi Code')
+    expect(AGENT_META.kimicode.cliName).toBe('kimi')
+    expect(agentSupports('kimicode', 'history')).toBe(true)
+    expect(agentSupports('kimicode', 'terminal')).toBe(true)
+    expect(agentSupports('kimicode', 'guiChat')).toBe(false)
+    expect(agentSupports('kimicode', 'worktree')).toBe(true)
+    expect(agentSupports('kimicode', 'stats')).toBe(true)
+    expect(agentSupports('kimicode', 'pricing')).toBe(true)
+  })
 })

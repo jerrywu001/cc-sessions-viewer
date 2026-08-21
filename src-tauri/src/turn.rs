@@ -50,6 +50,7 @@ pub struct TurnHookInstallResult {
     pub codex_hooks_path: String,
     pub agy_hooks_path: String,
     pub grok_config_path: String,
+    pub kimi_config_path: String,
 }
 
 #[derive(Serialize)]
@@ -86,6 +87,7 @@ pub struct TurnHookStatus {
     pub codex: TurnHookAgentStatus,
     pub agy: TurnHookAgentStatus,
     pub grok: TurnHookAgentStatus,
+    pub kimicode: TurnHookAgentStatus,
 }
 
 const CLAUDE_TURN_HOOKS: [(&str, &str, Option<&str>); 5] = [
@@ -117,6 +119,14 @@ const GROK_TURN_HOOKS: [(&str, &str, Option<&str>); 6] = [
     ("Notification", "blocked", Some("permission_prompt")),
 ];
 
+const KIMI_TURN_HOOKS: [(&str, &str); 5] = [
+    ("TurnStarted", "started"),
+    ("Stop", "completed"),
+    ("StopFailure", "failed"),
+    ("PermissionRequest", "blocked"),
+    ("Interrupt", "completed"),
+];
+
 fn default_turn_signal_source() -> String {
     "hook".to_string()
 }
@@ -129,8 +139,9 @@ struct SignalState {
 
 static SIGNAL_STATE: OnceLock<Mutex<Option<SignalState>>> = OnceLock::new();
 static DESKTOP_TASKS: OnceLock<Mutex<HashMap<String, DesktopTask>>> = OnceLock::new();
-static PENDING_GROK_SIGNALS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static PENDING_PATH_SIGNALS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static GROK_CONFIG_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static KIMI_CONFIG_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn signal_state() -> &'static Mutex<Option<SignalState>> {
     SIGNAL_STATE.get_or_init(|| Mutex::new(None))
@@ -140,12 +151,16 @@ fn desktop_tasks() -> &'static Mutex<HashMap<String, DesktopTask>> {
     DESKTOP_TASKS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn pending_grok_signals() -> &'static Mutex<HashSet<String>> {
-    PENDING_GROK_SIGNALS.get_or_init(|| Mutex::new(HashSet::new()))
+fn pending_path_signals() -> &'static Mutex<HashSet<String>> {
+    PENDING_PATH_SIGNALS.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
 fn grok_config_lock() -> &'static Mutex<()> {
     GROK_CONFIG_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn kimi_config_lock() -> &'static Mutex<()> {
+    KIMI_CONFIG_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn normalized_session_path(path: &str) -> String {
@@ -285,29 +300,42 @@ fn legacy_hook_script_path() -> Result<PathBuf, String> {
 }
 
 pub fn emit_turn_signal(app: &AppHandle, mut payload: TerminalTurnPayload) -> Result<(), String> {
-    if !matches!(payload.agent.as_str(), "claude" | "codex" | "agy" | "grok") {
+    if payload.agent == "kimi" {
+        payload.agent = "kimicode".to_string();
+    }
+    if !matches!(
+        payload.agent.as_str(),
+        "claude" | "codex" | "agy" | "grok" | "kimicode"
+    ) {
         return Err("Unknown agent".to_string());
     }
-    if payload.agent == "grok" && payload.path.trim().is_empty() {
+    if matches!(payload.agent.as_str(), "grok" | "kimicode") && payload.path.trim().is_empty() {
         payload.path = payload
             .session_id
             .as_deref()
-            .and_then(|session_id| {
-                crate::agents::grok::find_updates_path(session_id, payload.cwd.as_deref())
+            .and_then(|session_id| match payload.agent.as_str() {
+                "grok" => {
+                    crate::agents::grok::find_updates_path(session_id, payload.cwd.as_deref())
+                }
+                "kimicode" => {
+                    crate::agents::kimi::find_main_wire_path(session_id, payload.cwd.as_deref())
+                }
+                _ => None,
             })
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default();
         if payload.path.trim().is_empty() {
             let Some(session_id) = payload.session_id.clone() else {
-                return Err("Missing Grok session id".to_string());
+                return Err(format!("Missing {} session id", payload.agent));
             };
             let key = format!(
-                "{}\0{}\0{}",
+                "{}\0{}\0{}\0{}",
+                payload.agent,
                 session_id,
                 payload.prompt_id.as_deref().unwrap_or(""),
                 payload.state
             );
-            let should_spawn = pending_grok_signals()
+            let should_spawn = pending_path_signals()
                 .lock()
                 .map_err(|error| error.to_string())?
                 .insert(key.clone());
@@ -317,21 +345,28 @@ pub fn emit_turn_signal(app: &AppHandle, mut payload: TerminalTurnPayload) -> Re
                 std::thread::spawn(move || {
                     for _ in 0..30 {
                         std::thread::sleep(Duration::from_millis(100));
-                        let path = crate::agents::grok::find_updates_path(
-                            &session_id,
-                            retry_payload.cwd.as_deref(),
-                        );
+                        let path = match retry_payload.agent.as_str() {
+                            "grok" => crate::agents::grok::find_updates_path(
+                                &session_id,
+                                retry_payload.cwd.as_deref(),
+                            ),
+                            "kimicode" => crate::agents::kimi::find_main_wire_path(
+                                &session_id,
+                                retry_payload.cwd.as_deref(),
+                            ),
+                            _ => None,
+                        };
                         if let Some(path) = path {
                             let mut resolved = retry_payload.clone();
                             resolved.path = path.to_string_lossy().into_owned();
-                            if let Ok(mut pending) = pending_grok_signals().lock() {
+                            if let Ok(mut pending) = pending_path_signals().lock() {
                                 pending.remove(&key);
                             }
                             let _ = emit_turn_signal(&app, resolved);
                             return;
                         }
                     }
-                    if let Ok(mut pending) = pending_grok_signals().lock() {
+                    if let Ok(mut pending) = pending_path_signals().lock() {
                         pending.remove(&key);
                     }
                 });
@@ -460,6 +495,8 @@ fn process_signal_file(app: &AppHandle, path: &Path) {
 }
 
 pub fn install_turn_hooks() -> Result<TurnHookInstallResult, String> {
+    let kimi_config_path = crate::agents::kimi::config_path();
+    validate_kimi_hooks_config(&kimi_config_path)?;
     let signal_path = signal_file_path()?;
     if let Some(parent) = signal_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Failed to create state directory: {e}"))?;
@@ -534,12 +571,14 @@ pub fn install_turn_hooks() -> Result<TurnHookInstallResult, String> {
 
     let grok_config_path = crate::agents::grok::config_path();
     install_grok_turn_hooks(&grok_config_path, &script_path, &signal_path)?;
+    install_kimi_turn_hooks(&kimi_config_path, &script_path, &signal_path)?;
 
     Ok(TurnHookInstallResult {
         claude_settings_path: settings_path.to_string_lossy().to_string(),
         codex_hooks_path: codex_hooks_path.to_string_lossy().to_string(),
         agy_hooks_path: agy_hooks_path.to_string_lossy().to_string(),
         grok_config_path: grok_config_path.to_string_lossy().to_string(),
+        kimi_config_path: kimi_config_path.to_string_lossy().to_string(),
     })
 }
 
@@ -622,12 +661,30 @@ pub fn turn_hook_status() -> Result<TurnHookStatus, String> {
     let grok_hooks = collect_grok_hooks(&grok_config, &script_path, &legacy_script_path);
     let grok = hook_agent_status(grok_path, grok_events, grok_hooks);
 
+    let kimi_path = crate::agents::kimi::config_path();
+    let kimi_config = read_toml_document(&kimi_path, "Kimi config.toml")?;
+    let kimi_events = KIMI_TURN_HOOKS
+        .iter()
+        .map(|(event, state)| TurnHookEventStatus {
+            name: (*event).to_string(),
+            installed: script_installed
+                && has_kimi_turn_hook(&kimi_config, event, state, &script_path, &signal_path),
+        })
+        .collect::<Vec<_>>();
+    let kimi_hooks = collect_kimi_hooks(&kimi_config, &script_path, &legacy_script_path);
+    let kimicode = hook_agent_status(kimi_path, kimi_events, kimi_hooks);
+
     Ok(TurnHookStatus {
-        enabled: claude.installed && codex.installed && agy.installed && grok.installed,
+        enabled: claude.installed
+            && codex.installed
+            && agy.installed
+            && grok.installed
+            && kimicode.installed,
         claude,
         codex,
         agy,
         grok,
+        kimicode,
     })
 }
 
@@ -1243,6 +1300,163 @@ fn collect_grok_hooks(
     entries
 }
 
+fn kimi_hook_command(state: &str, script_path: &Path, signal_path: &Path) -> String {
+    format!(
+        "node {} kimicode {} {}",
+        shell_path_arg(script_path),
+        shell_string_arg(state),
+        shell_path_arg(signal_path)
+    )
+}
+
+fn is_kimi_hook_handler(table: &Table, script_path: &Path, legacy_script_path: &Path) -> bool {
+    table
+        .get("command")
+        .and_then(Item::as_str)
+        .is_some_and(|command| {
+            command_references_path(command, script_path)
+                || command_references_path(command, legacy_script_path)
+        })
+}
+
+fn kimi_hook_table(event: &str, state: &str, script_path: &Path, signal_path: &Path) -> Table {
+    let mut table = Table::new();
+    table.insert("event", Item::Value(TomlValue::from(event)));
+    table.insert(
+        "command",
+        Item::Value(TomlValue::from(kimi_hook_command(
+            state,
+            script_path,
+            signal_path,
+        ))),
+    );
+    table.insert("timeout", Item::Value(TomlValue::from(5)));
+    table
+}
+
+/// Kimi stores hooks as a top-level `[[hooks]]` array. Do not coerce a user
+/// table or scalar to that type: an incompatible config must fail intact.
+fn merge_kimi_turn_hooks(
+    doc: &mut Document,
+    script_path: &Path,
+    legacy_script_path: &Path,
+    signal_path: &Path,
+) -> Result<(), String> {
+    let hooks = doc
+        .as_table_mut()
+        .entry("hooks")
+        .or_insert(Item::ArrayOfTables(ArrayOfTables::new()));
+    let Some(existing) = hooks.as_array_of_tables_mut() else {
+        return Err("Kimi config.toml hooks must be an array of tables".to_string());
+    };
+
+    let mut kept = ArrayOfTables::new();
+    for hook in existing.iter() {
+        if !is_kimi_hook_handler(hook, script_path, legacy_script_path) {
+            kept.push(hook.clone());
+        }
+    }
+    for (event, state) in KIMI_TURN_HOOKS {
+        kept.push(kimi_hook_table(event, state, script_path, signal_path));
+    }
+    *existing = kept;
+    Ok(())
+}
+
+fn validate_kimi_hooks_config(path: &Path) -> Result<(), String> {
+    let doc = read_toml_document(path, "Kimi config.toml")?;
+    if doc
+        .as_table()
+        .get("hooks")
+        .is_some_and(|item| !item.is_array_of_tables())
+    {
+        return Err("Kimi config.toml hooks must be an array of tables".to_string());
+    }
+    Ok(())
+}
+
+fn install_kimi_turn_hooks(
+    path: &Path,
+    script_path: &Path,
+    signal_path: &Path,
+) -> Result<(), String> {
+    let _guard = kimi_config_lock()
+        .lock()
+        .map_err(|error| format!("Failed to lock Kimi config: {error}"))?;
+    let legacy = legacy_hook_script_path()?;
+    for attempt in 0..2 {
+        let source = read_toml_source(path, "Kimi config.toml")?;
+        let mut doc = source
+            .parse::<Document>()
+            .map_err(|error| format!("Kimi config.toml is not valid TOML: {error}"))?;
+        merge_kimi_turn_hooks(&mut doc, script_path, &legacy, signal_path)?;
+        if read_toml_source(path, "Kimi config.toml")? != source {
+            if attempt == 0 {
+                continue;
+            }
+            return Err("Kimi config changed while installing hooks; try again".to_string());
+        }
+        return atomic_write_toml(path, &doc);
+    }
+    unreachable!()
+}
+
+fn has_kimi_turn_hook(
+    doc: &Document,
+    event: &str,
+    state: &str,
+    script_path: &Path,
+    signal_path: &Path,
+) -> bool {
+    let expected = kimi_hook_command(state, script_path, signal_path);
+    doc.as_table()
+        .get("hooks")
+        .and_then(Item::as_array_of_tables)
+        .is_some_and(|hooks| {
+            hooks.iter().any(|hook| {
+                hook.get("event").and_then(Item::as_str) == Some(event)
+                    && hook.get("command").and_then(Item::as_str) == Some(expected.as_str())
+                    && hook.get("timeout").and_then(Item::as_integer) == Some(5)
+            })
+        })
+}
+
+fn collect_kimi_hooks(
+    doc: &Document,
+    script_path: &Path,
+    legacy_script_path: &Path,
+) -> Vec<TurnHookEntry> {
+    let mut entries = Vec::new();
+    let Some(hooks) = doc
+        .as_table()
+        .get("hooks")
+        .and_then(Item::as_array_of_tables)
+    else {
+        return entries;
+    };
+    for hook in hooks.iter() {
+        if !is_kimi_hook_handler(hook, script_path, legacy_script_path) {
+            continue;
+        }
+        let Some(event) = hook.get("event").and_then(Item::as_str) else {
+            continue;
+        };
+        entries.push(TurnHookEntry {
+            event: event.to_string(),
+            category: None,
+            matcher: hook
+                .get("matcher")
+                .and_then(Item::as_str)
+                .map(str::to_string),
+            hook_type: "command".to_string(),
+            detail: "Managed status hook".to_string(),
+            managed: true,
+        });
+    }
+    sort_hook_entries(&mut entries);
+    entries
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1684,6 +1898,51 @@ hooks = [{ type = "command", command = "echo keep-this-handler" }]
             Path::new("/app/claude-turn-signal-hook.cjs"),
         )
         .is_empty());
+    }
+
+    #[test]
+    fn kimi_hook_merge_is_idempotent_and_preserves_user_hooks() {
+        let script = Path::new("/app/turn-signal-hook.cjs");
+        let legacy = Path::new("/app/claude-turn-signal-hook.cjs");
+        let signal = Path::new("/app/turn-signals.jsonl");
+        let mut config = r#"# Keep this comment and user hook.
+[[hooks]]
+event = "Stop"
+command = "echo keep-this-handler"
+timeout = 2
+"#
+        .parse::<Document>()
+        .unwrap();
+
+        merge_kimi_turn_hooks(&mut config, script, legacy, signal).unwrap();
+        let first = config.to_string();
+        let mut second_config = first.parse::<Document>().unwrap();
+        merge_kimi_turn_hooks(&mut second_config, script, legacy, signal).unwrap();
+
+        assert_eq!(first, second_config.to_string());
+        assert!(first.contains("echo keep-this-handler"));
+        for (event, state) in KIMI_TURN_HOOKS {
+            assert!(has_kimi_turn_hook(
+                &second_config,
+                event,
+                state,
+                script,
+                signal,
+            ));
+        }
+        assert_eq!(collect_kimi_hooks(&second_config, script, legacy).len(), 5);
+    }
+
+    #[test]
+    fn kimi_hook_merge_refuses_incompatible_top_level_without_rewriting() {
+        let script = Path::new("/app/turn-signal-hook.cjs");
+        let legacy = Path::new("/app/claude-turn-signal-hook.cjs");
+        let signal = Path::new("/app/turn-signals.jsonl");
+        let mut config = "hooks = []\n".parse::<Document>().unwrap();
+        let before = config.to_string();
+
+        assert!(merge_kimi_turn_hooks(&mut config, script, legacy, signal).is_err());
+        assert_eq!(config.to_string(), before);
     }
 
     #[test]

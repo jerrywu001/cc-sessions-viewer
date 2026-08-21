@@ -283,6 +283,7 @@ export type TurnHookInstallResult = {
   codexHooksPath: string
   agyHooksPath: string
   grokConfigPath: string
+  kimiConfigPath: string
 }
 
 export type TurnHookEventStatus = {
@@ -312,6 +313,7 @@ export type TurnHookStatus = {
   codex: TurnHookAgentStatus
   agy: TurnHookAgentStatus
   grok: TurnHookAgentStatus
+  kimicode: TurnHookAgentStatus
 }
 
 export const installTurnHooks = () => invoke<TurnHookInstallResult>('install_turn_hooks')

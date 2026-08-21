@@ -24,7 +24,8 @@ const ENABLED_AGENTS_KEY = 'enabledAgents:v1'
 const QUICK_OPEN_KEY = 'quickOpenTarget:v1'
 const USE_RECLAUDE_KEY = 'useReclaude:v1'
 const SHOW_TOOL_CALLS_KEY = 'showToolCalls:v1'
-const EXPORT_HTML_SHOW_MESSAGE_TIME_KEY = 'exportHtmlShowMessageTime:v1'
+const EXPORT_SHOW_MESSAGE_TIME_KEY = 'exportShowMessageTime:v1'
+const LEGACY_EXPORT_HTML_SHOW_MESSAGE_TIME_KEY = 'exportHtmlShowMessageTime:v1'
 const CHAT_SPACING_KEY = 'chatSpacing:v1'
 const SHOW_CHAT_RAIL_KEY = 'showChatRail:v1'
 const CHAT_RAIL_COUNT_KEY = 'chatRailCount:v1'
@@ -90,12 +91,19 @@ export function setShowToolCalls(v: boolean) {
   localStorage.setItem(SHOW_TOOL_CALLS_KEY, v ? '1' : '0')
 }
 
-/** HTML 会话导出默认附带每条消息的时间；关闭后只影响导出文件，不影响详情页。 */
-export const exportHtmlShowMessageTime = ref(localStorage.getItem(EXPORT_HTML_SHOW_MESSAGE_TIME_KEY) !== '0')
-export function setExportHtmlShowMessageTime(v: boolean) {
-  exportHtmlShowMessageTime.value = v
-  localStorage.setItem(EXPORT_HTML_SHOW_MESSAGE_TIME_KEY, v ? '1' : '0')
+/** 导出默认附带创建和消息时间；关闭后只影响导出文件，不影响详情页。 */
+const storedExportShowMessageTime =
+  localStorage.getItem(EXPORT_SHOW_MESSAGE_TIME_KEY) ??
+  localStorage.getItem(LEGACY_EXPORT_HTML_SHOW_MESSAGE_TIME_KEY)
+export const exportShowMessageTime = ref(storedExportShowMessageTime !== '0')
+export function setExportShowMessageTime(v: boolean) {
+  exportShowMessageTime.value = v
+  localStorage.setItem(EXPORT_SHOW_MESSAGE_TIME_KEY, v ? '1' : '0')
 }
+
+// Backward-compatible aliases for callers using the old HTML-specific name.
+export const exportHtmlShowMessageTime = exportShowMessageTime
+export const setExportHtmlShowMessageTime = setExportShowMessageTime
 
 export const showChatRail = ref(localStorage.getItem(SHOW_CHAT_RAIL_KEY) !== '0')
 export function setShowChatRail(v: boolean) {
@@ -280,7 +288,7 @@ export function setQuickOpenTarget(v: QuickOpenTarget) {
   localStorage.setItem(QUICK_OPEN_KEY, v)
 }
 
-export type LaunchArgs = { claude: string; codex: string; agy: string; opencode: string; grok: string }
+export type LaunchArgs = { claude: string; codex: string; agy: string; opencode: string; grok: string; kimicode: string }
 function readLaunchArgs(): LaunchArgs {
   try {
     const v = localStorage.getItem(LAUNCH_ARGS_KEY)
@@ -292,10 +300,11 @@ function readLaunchArgs(): LaunchArgs {
         agy: parsed.agy ?? '',
         opencode: parsed.opencode ?? '',
         grok: parsed.grok ?? '',
+        kimicode: parsed.kimicode ?? (parsed as { kimi?: string }).kimi ?? '',
       }
     }
   } catch { /* ignore */ }
-  return { claude: '', codex: '', agy: '', opencode: '', grok: '' }
+  return { claude: '', codex: '', agy: '', opencode: '', grok: '', kimicode: '' }
 }
 export const launchArgs = ref<LaunchArgs>(readLaunchArgs())
 
@@ -307,11 +316,11 @@ export function setLaunchArgs(agent: keyof LaunchArgs, args: string) {
 // ---------- Agent 显隐开关 ----------
 // 只用 cc 的用户可以把 codex 关掉，让侧栏/主页的 agent 切换更清爽。
 // 固定顺序 claude → codex → grok → agy → opencode；至少保留一个启用，否则整个 app 无内容可看。
-export const ALL_AGENTS: Agent[] = ['claude', 'codex', 'grok', 'agy', 'opencode']
+export const ALL_AGENTS: Agent[] = ['claude', 'codex', 'grok', 'kimicode', 'agy', 'opencode']
 type EnabledAgents = Record<Agent, boolean>
 
 function readEnabledAgents(): EnabledAgents {
-  const defaults: EnabledAgents = { claude: true, codex: true, grok: true, agy: false, opencode: false }
+  const defaults: EnabledAgents = { claude: true, codex: true, grok: true, kimicode: true, agy: false, opencode: false }
   try {
     const v = localStorage.getItem(ENABLED_AGENTS_KEY)
     if (v) {
@@ -320,6 +329,7 @@ function readEnabledAgents(): EnabledAgents {
         claude: parsed.claude ?? true,
         codex: parsed.codex ?? true,
         grok: parsed.grok ?? true,
+        kimicode: parsed.kimicode ?? (parsed as { kimi?: boolean }).kimi ?? true,
         agy: parsed.agy ?? true,
         opencode: parsed.opencode ?? true,
       }
@@ -496,7 +506,7 @@ export function clearAppCache() {
   localStorage.removeItem(LAUNCH_ARGS_KEY)
   terminalApp.value = 'terminal'
   useExternalTerminal.value = false
-  launchArgs.value = { claude: '', codex: '', agy: '', opencode: '', grok: '' }
+  launchArgs.value = { claude: '', codex: '', agy: '', opencode: '', grok: '', kimicode: '' }
 }
 
 // ---------- Statistics 页的 scope / range 持久化 ----------
@@ -506,8 +516,9 @@ export function clearAppCache() {
 
 function readStatsScope(): StatsScope {
   const v = localStorage.getItem(STATS_SCOPE_KEY)
-  return v === 'claude' || v === 'codex' || v === 'grok' || v === 'opencode' || v === 'all'
-    ? v
+  if (v === 'kimi') return 'kimicode'
+  return v === 'claude' || v === 'codex' || v === 'grok' || v === 'kimicode' || v === 'opencode' || v === 'all'
+    ? v as StatsScope
     : 'all'
 }
 function readStatsRange(): StatsRange {
@@ -550,9 +561,9 @@ export function resetSettings() {
   setBackgroundImageOpacity(BACKGROUND_IMAGE_OPACITY_DEFAULT)
   setBackgroundBorderOpacity(BACKGROUND_BORDER_OPACITY_DEFAULT)
   setQuickOpenTarget('session')
-  launchArgs.value = { claude: '', codex: '', agy: '', opencode: '', grok: '' }
+  launchArgs.value = { claude: '', codex: '', agy: '', opencode: '', grok: '', kimicode: '' }
   localStorage.removeItem(LAUNCH_ARGS_KEY)
-  enabledAgents.value = { claude: true, codex: true, grok: true, agy: false, opencode: false }
+  enabledAgents.value = { claude: true, codex: true, grok: true, kimicode: true, agy: false, opencode: false }
   localStorage.removeItem(ENABLED_AGENTS_KEY)
   setFontScale(FONT_SCALE_DEFAULT)
   applyFontScale()

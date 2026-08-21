@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   cleanMetaText,
+  displaySessionId,
   formatElapsedSeconds,
   formatSize,
   formatTime,
@@ -733,12 +734,24 @@ describe('formatTime', () => {
     expect(formatTime(new Date(2026, 4, 22, 9, 5).getTime())).toBe('Today 09:05')
   })
 
+  it('parses millisecond timestamps serialized as strings', () => {
+    expect(formatTime(String(new Date(2026, 4, 22, 9, 5).getTime()))).toBe('Today 09:05')
+  })
+
   it('labels the previous calendar day as Yesterday', () => {
     expect(formatTime(new Date(2026, 4, 21, 23, 59).getTime())).toBe('Yesterday 23:59')
   })
 
   it('formats older timestamps as YYYY-MM-DD HH:MM', () => {
     expect(formatTime(new Date(2026, 0, 3, 8, 7).getTime())).toBe('2026-01-03 08:07')
+  })
+})
+
+describe('displaySessionId', () => {
+  it('shows the last UUID/path segment while preserving simple IDs', () => {
+    expect(displaySessionId('session_57e7460b-4876-4a76-a417-6b7bf386a138')).toBe('6b7bf386a138')
+    expect(displaySessionId('/sessions/project/session_abc-def')).toBe('def')
+    expect(displaySessionId('session_abc')).toBe('session_abc')
   })
 })
 

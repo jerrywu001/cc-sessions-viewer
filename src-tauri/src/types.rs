@@ -617,6 +617,14 @@ pub struct CliVersionInfo {
     pub upgradable: bool,
     pub installed: bool,
     pub error: Option<String>,
+    pub health: Option<CliHealthStatus>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CliHealthStatus {
+    pub healthy: bool,
+    pub summary: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -662,6 +670,7 @@ mod tests {
             upgradable: true,
             installed: true,
             error: None,
+            health: None,
         };
 
         let json = serde_json::to_string(&info).unwrap();

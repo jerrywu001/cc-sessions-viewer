@@ -93,6 +93,20 @@ export const AGENT_META: Record<Agent, AgentMeta> = {
       pricing: true,
     },
   },
+  kimicode: {
+    label: 'Kimi Code',
+    shortLabel: 'Kimi Code',
+    cliName: 'kimi',
+    capabilities: {
+      history: true,
+      terminal: true,
+      guiChat: false,
+      worktree: true,
+      hooks: true,
+      stats: true,
+      pricing: true,
+    },
+  },
 }
 
 export function agentLabel(agent: Agent, long = false): string {

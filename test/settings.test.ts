@@ -360,47 +360,47 @@ describe('agent visibility (enabledAgents / visibleAgents / setAgentEnabled)', (
     return import('../src/settings')
   }
 
-  it('defaults to Claude, Codex, and Grok Build when nothing is stored', async () => {
+  it('defaults to Claude, Codex, Grok Build, and Kimi Code when nothing is stored', async () => {
     const mod = await freshAgents()
-    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok'])
+    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok', 'kimicode'])
   })
 
   it('restores a persisted subset, preserving the canonical order', async () => {
     const mod = await freshAgents(
       JSON.stringify({ claude: true, codex: false, grok: false, agy: true, opencode: false }),
     )
-    expect(mod.visibleAgents.value).toEqual(['claude', 'agy'])
+    expect(mod.visibleAgents.value).toEqual(['claude', 'kimicode', 'agy'])
   })
 
   it('treats agents missing from stored data as enabled (new agent rollout)', async () => {
     // 旧版本存的 JSON 没有 Grok Build / opencode 键 —— 升级后它们应默认可见，
     // 其它 agent 的用户选择保持不变。
     const mod = await freshAgents(JSON.stringify({ claude: true, codex: false, agy: false }))
-    expect(mod.visibleAgents.value).toEqual(['claude', 'grok', 'opencode'])
+    expect(mod.visibleAgents.value).toEqual(['claude', 'grok', 'kimicode', 'opencode'])
   })
 
   it('falls back to the default agents when stored data has every agent off', async () => {
     const mod = await freshAgents(
-      JSON.stringify({ claude: false, codex: false, grok: false, agy: false, opencode: false }),
+      JSON.stringify({ claude: false, codex: false, grok: false, kimi: false, agy: false, opencode: false }),
     )
-    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok'])
+    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok', 'kimicode'])
   })
 
   it('falls back to all-enabled on corrupt JSON', async () => {
     const mod = await freshAgents('{not json')
-    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok'])
+    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok', 'kimicode'])
   })
 
   it('setAgentEnabled disables an agent and persists', async () => {
     const mod = await freshAgents()
     mod.setAgentEnabled('grok', false)
-    expect(mod.visibleAgents.value).toEqual(['claude', 'codex'])
+    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'kimicode'])
     expect(JSON.parse(localStorage.getItem('enabledAgents:v1')!).grok).toBe(false)
   })
 
   it('refuses to disable the last remaining agent', async () => {
     const mod = await freshAgents(
-      JSON.stringify({ claude: true, codex: false, grok: false, agy: false, opencode: false }),
+      JSON.stringify({ claude: true, codex: false, grok: false, kimi: false, agy: false, opencode: false }),
     )
     mod.setAgentEnabled('claude', false)
     expect(mod.visibleAgents.value).toEqual(['claude'])
@@ -408,7 +408,7 @@ describe('agent visibility (enabledAgents / visibleAgents / setAgentEnabled)', (
 
   it('re-enables a previously hidden agent', async () => {
     const mod = await freshAgents(
-      JSON.stringify({ claude: true, codex: false, grok: false, agy: false, opencode: false }),
+      JSON.stringify({ claude: true, codex: false, grok: false, kimi: false, agy: false, opencode: false }),
     )
     mod.setAgentEnabled('codex', true)
     expect(mod.visibleAgents.value).toEqual(['claude', 'codex'])
@@ -426,6 +426,15 @@ describe('agent visibility (enabledAgents / visibleAgents / setAgentEnabled)', (
       claude: '--legacy-claude',
       codex: '--legacy-codex',
       grok: '',
+      kimicode: '',
     })
+  })
+
+  it('migrates the legacy Kimi launch arguments to kimicode', async () => {
+    localStorage.clear()
+    localStorage.setItem('launchArgs:v1', JSON.stringify({ kimi: '--model k2' }))
+    vi.resetModules()
+    const mod = await import('../src/settings')
+    expect(mod.launchArgs.value.kimicode).toBe('--model k2')
   })
 })

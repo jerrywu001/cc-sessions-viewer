@@ -21,7 +21,7 @@ struct Boundaries {
     month_ms: u64,
 }
 
-const TRAY_AGENT_NAMES: [&str; 4] = ["claude", "codex", "grok", "opencode"];
+const TRAY_AGENT_NAMES: [&str; 5] = ["claude", "codex", "grok", "kimicode", "opencode"];
 static ENABLED_TRAY_AGENTS: OnceLock<RwLock<HashSet<String>>> = OnceLock::new();
 
 fn enabled_tray_agents() -> &'static RwLock<HashSet<String>> {
@@ -30,7 +30,7 @@ fn enabled_tray_agents() -> &'static RwLock<HashSet<String>> {
 }
 
 /// Sync the user-facing agent visibility setting into the native tray worker.
-/// Grok/Claude/Codex/opencode are supported by tray stats; agy is intentionally
+/// Grok/Claude/Codex/Kimi/opencode are supported by tray stats; agy is intentionally
 /// ignored because it has no usage statistics source.
 pub fn set_enabled_agents(agents: &[String]) {
     let allowed: HashSet<&str> = TRAY_AGENT_NAMES.into_iter().collect();
@@ -94,7 +94,7 @@ struct AgentAcc {
 fn append_agent_summary(result: &mut TrayStats, agent_name: &str, acc: AgentAcc) {
     // Visibility is controlled by the Settings agent toggles. Keep an enabled
     // agent in the tray even when it has no activity in the current 30-day
-    // window, otherwise an installed but idle OpenCode is indistinguishable
+    // window, otherwise an installed but idle agent is indistinguishable
     // from a disabled one. agy is excluded by TRAY_AGENT_NAMES.
     result.total_today_tokens += acc.today_tokens;
     result.total_today_cost += acc.today_cost;
@@ -264,6 +264,7 @@ mod tests {
         ]);
         assert!(is_enabled("claude"));
         assert!(is_enabled("grok"));
+        assert!(!is_enabled("kimicode"));
         assert!(!is_enabled("codex"));
         assert!(!is_enabled("opencode"));
         // agy is not a tray-stat agent even if the frontend sends it.
@@ -285,6 +286,16 @@ mod tests {
 
         assert_eq!(result.agents.len(), 1);
         assert_eq!(result.agents[0].agent, "opencode");
+        assert_eq!(result.agents[0].session_count, 0);
+    }
+
+    #[test]
+    fn enabled_kimi_is_retained_when_the_current_window_is_empty() {
+        let mut result = TrayStats::default();
+        append_agent_summary(&mut result, "kimicode", AgentAcc::default());
+
+        assert_eq!(result.agents.len(), 1);
+        assert_eq!(result.agents[0].agent, "kimicode");
         assert_eq!(result.agents[0].session_count, 0);
     }
 }

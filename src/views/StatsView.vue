@@ -469,7 +469,7 @@ function emptyHint(arr: { length: number } | undefined): boolean {
 }
 
 function asAgent(name: string): Agent {
-  const known: Agent[] = ['claude', 'codex', 'grok', 'agy', 'opencode']
+  const known: Agent[] = ['claude', 'codex', 'grok', 'kimicode', 'agy', 'opencode']
   return known.includes(name as Agent) ? name as Agent : 'claude'
 }
 </script>

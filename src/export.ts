@@ -9,7 +9,7 @@ import type { Msg, Block, SessionMeta, Agent, DiffHunk } from './types'
 import { writeFile } from './api'
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog'
 import { t } from './i18n'
-import { exportHtmlShowMessageTime } from './settings'
+import { exportShowMessageTime } from './settings'
 import { formatTime, isCaveatOnlyMsg, parseSystemEvent, renderText, cleanMetaText, metaKindIsPre, parseMetaFields, parseTeammateMessage, stripImagePlaceholders } from './format'
 import {
   highlightJsonInPlace,
@@ -223,14 +223,14 @@ function msgToMd(
   // System event (e.g. /rename) — emit as a horizontal-rule-bracketed italic line.
   const sysText = systemEventText(m)
   if (sysText) {
-    const ts = m.timestamp ? ` · ${formatTime(m.timestamp)}` : ''
+    const ts = exportedMessageTime(m.timestamp)
     return `_${sysText}${ts}_`
   }
   // System-injected user records (compaction summary, skill, command output, …):
   // labeled by kind, never "Me". Notification-style pseudo-XML → key/value list;
   // other pre kinds → code fence; markdown kinds → raw markdown.
   if (m.metaKind) {
-    const ts = m.timestamp ? ` · ${formatTime(m.timestamp)}` : ''
+    const ts = exportedMessageTime(m.timestamp)
     const head = `## ${roleLabel('assistant', agent)} · ${metaKindLabelText(m.metaKind)}${ts}`
     const pre = metaKindIsPre(m.metaKind)
     const body = m.blocks
@@ -244,7 +244,7 @@ function msgToMd(
       .join('\n\n')
     return body ? `${head}\n\n${body}` : head
   }
-  const ts = m.timestamp ? ` · ${formatTime(m.timestamp)}` : ''
+  const ts = exportedMessageTime(m.timestamp)
   const model = m.model ? ` · ${m.model}` : ''
   const displayRole = isToolOnly(m) ? 'tool' : m.role
   const head = `## ${roleLabel(displayRole, agent)}${model}${ts}`
@@ -268,7 +268,7 @@ export function messagesToMarkdown(
 ): string {
   const ctx = buildInlinedResults(messages)
   const { u, a } = computeStats(messages)
-  const statsLine = t('chat.stats', {
+  const statsLine = t(exportShowMessageTime.value ? 'chat.stats' : 'chat.statsNoTime', {
     u,
     a,
     time: session.created ? formatTime(session.created) : '—',
@@ -1211,7 +1211,7 @@ function toolResultLabel(b: Block): string {
 }
 
 function exportedMessageTime(timestamp?: string): string {
-  return exportHtmlShowMessageTime.value && timestamp ? escapeHtml(formatTime(timestamp)) : ''
+  return exportShowMessageTime.value && timestamp ? escapeHtml(formatTime(timestamp)) : ''
 }
 
 function blockToHtml(
@@ -1433,7 +1433,7 @@ export async function messagesToHtml(
   const title = escapeHtml(session.title)
   const { u, a } = computeStats(messages)
   const statsLine = escapeHtml(
-    t(exportHtmlShowMessageTime.value ? 'chat.stats' : 'chat.statsNoTime', {
+    t(exportShowMessageTime.value ? 'chat.stats' : 'chat.statsNoTime', {
       u,
       a,
       time: session.created ? formatTime(session.created) : '—',
@@ -1544,15 +1544,30 @@ async function pickAndWrite(
   return writeFile(chosen, content)
 }
 
-/** 无损 JSON 导出的信封：自包含（带 messages），可在任意机器上重新导入还原。
- *  `__type` 是导入端识别本格式的标记；`version` 留给以后格式演进。 */
+/** JSON 导出的信封：自包含（带 messages），可在任意机器上重新导入还原。
+ *  关闭导出时间后，时间字段会按设置移除；`__type` 是导入端识别本格式的标记，
+ *  `version` 留给以后格式演进。 */
 export function buildExportEnvelope(
   session: SessionMeta,
   messages: Msg[],
   agent: Agent,
 ): string {
+  const exportSession = exportShowMessageTime.value
+    ? session
+    : Object.fromEntries(
+        Object.entries(session).filter(([key]) => key !== 'created' && key !== 'modified'),
+      )
+  const exportMessages = exportShowMessageTime.value
+    ? messages
+    : messages.map(({ timestamp: _timestamp, ...message }) => message)
   return JSON.stringify(
-    { __type: 'cc-session-viewer-export', version: 1, agent, session, messages },
+    {
+      __type: 'cc-session-viewer-export',
+      version: 1,
+      agent,
+      session: exportSession,
+      messages: exportMessages,
+    },
     null,
     2,
   )
@@ -1635,7 +1650,7 @@ export async function exportHtmlToDir(
   return writeFile(`${dir}/${batchFileName(session, 'html')}`, html)
 }
 
-/** 把一条会话以无损 JSON 写到目录里，返回最终绝对路径。 */
+/** 把一条会话以 JSON 写到目录里，返回最终绝对路径。 */
 export async function exportJsonToDir(
   session: SessionMeta,
   messages: Msg[],

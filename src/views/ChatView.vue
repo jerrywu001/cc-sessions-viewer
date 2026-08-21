@@ -4,7 +4,7 @@ import type { DirectiveBinding } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
 import type { Agent, Msg, SessionMeta, Block, ChatQuestionRequest } from '../types'
 import { agentLabel } from '../agentMeta'
-import { renderText, renderTextUncached, formatTime, formatElapsedSeconds, historicalMessageExecutionMs, isCaveatOnlyMsg, isAskUserQuestionInstructionOnlyMsg, parseSystemEvent, cleanMetaText, metaKindIsPre, parseMetaFields, parseTeammateMessage, parseFileRef } from '../format'
+import { renderText, renderTextUncached, displaySessionId, formatTime, formatElapsedSeconds, historicalMessageExecutionMs, isCaveatOnlyMsg, isAskUserQuestionInstructionOnlyMsg, parseSystemEvent, cleanMetaText, metaKindIsPre, parseMetaFields, parseTeammateMessage, parseFileRef } from '../format'
 import type { MetaField } from '../format'
 import { prettifyAndHighlightJson } from '../jsonHighlight'
 import { renderAllMermaid, resetMermaidForTheme } from '../mermaid'
@@ -20,7 +20,7 @@ import { parseContextUsage, type ContextUsage } from '../contextUsage'
 // 图片灯箱只在点开预览时用 —— 懒加载，不进首屏（vue-easy-lightbox 不算大但能省一点）。
 const VueEasyLightbox = defineAsyncComponent(() => import('vue-easy-lightbox'))
 import { highlightDiff, looksLikeDiff } from '../diffHighlight'
-import { renderCodexApplyPatchHtml } from '../codexApplyPatch'
+import { renderCodexApplyPatchHtml, renderCodexFileChangeHtml } from '../codexApplyPatch'
 import { codexPluginLinkForUri, renderCodexPluginLinkHtml, renderCodexPluginMentionHtmlText } from '../codexPluginMentions'
 import { isFileChangeResult, isFileMutatingToolName, shouldAttachToolResult, shouldPreferToolResult } from '../toolResultRouting'
 import {
@@ -312,11 +312,6 @@ watch(
   () => { readToolCallsOverride.value = null },
 )
 
-function shortId(id: string): string {
-  if (!id) return ''
-  return id.length > 8 ? id.slice(0, 8) : id
-}
-
 function isToolOnly(m: Msg): boolean {
   return m.role === 'user' && m.blocks.every((b) => b.kind === 'tool_result' || (b.kind === 'image' && b.toolId))
 }
@@ -376,6 +371,10 @@ function isCodexInlineCodeToolUse(b: Block): boolean {
   return props.agent === 'codex' && b.kind === 'tool_use' && b.toolName === 'apply_patch' && !b.isError
 }
 
+function isStructuredFileChangeToolUse(b: Block): boolean {
+  return b.kind === 'tool_use' && !!b.filePath && !!b.fileChangeType
+}
+
 function renderNumberedCodeHtml(html: string): string {
   const lines = html.split('\n')
   return lines
@@ -396,6 +395,11 @@ function toolUseCodeHtml(b: Block): string {
     ? highlightDiff(input)
     : prettifyAndHighlightJson(input)
   return renderNumberedCodeHtml(highlighted)
+}
+
+function fileChangeToolHtml(b: Block): string {
+  if (!b.filePath) return ''
+  return renderCodexFileChangeHtml(b.diff, b.filePath, b.fileChangeType, props.cwd)
 }
 
 function isCodexApplyPatchStructured(b: Block): boolean {
@@ -509,6 +513,7 @@ function isAttachedResult(b: Block): boolean {
 function shouldShowAttachedResult(b: Block): boolean {
   const result = attachedResultFor(b)
   if (!result) return false
+  if (props.agent === 'kimicode') return false
   return result.isError || !isCodexApplyPatchStructured(b)
 }
 
@@ -532,6 +537,7 @@ function isAlwaysVisibleToolResult(b: Block): boolean {
 function shouldShowToolUse(b: Block): boolean {
   if (b.kind !== 'tool_use') return false
   if (isAskUserQuestion(b)) return true
+  if (props.agent === 'kimicode' && isFileMutatingToolName(b.toolName)) return true
   if (readToolCallsVisible.value) return true
   return isCodexInlineCodeToolUse(b)
 }
@@ -540,6 +546,7 @@ function shouldShowToolUse(b: Block): boolean {
  * 文件结果则强制保留。 */
 function shouldShowToolResult(b: Block): boolean {
   if (b.kind !== 'tool_result') return false
+  if (props.agent === 'kimicode') return false
   if (shouldHideToolResult(b) || isInlinedResult(b) || isAttachedResult(b)) return false
   return readToolCallsVisible.value || isAlwaysVisibleToolResult(b)
 }
@@ -1217,9 +1224,19 @@ function flashMessage(idx: number, uuid?: string) {
   cancelFlashStick()
   cancelScroll()
 
-  // 虚拟器直接滚到目标行并居中。动态高度下,目标行挂载/测量、以及其上方行被 Shiki/图片
-  // 撑高后偏移会变 —— 用一个短 rAF 循环反复 scrollToIndex 把它稳定到位;用户一动即让位。
-  rowVirtualizer.value.scrollToIndex(realIdx, { align: 'center' })
+  // 短会话关闭虚拟化，虚拟器的 scrollToIndex 在 enabled=false 时不会改变滚动位置；
+  // 这类会话直接滚动已挂载的消息行。长会话继续交给虚拟器处理窗口外的行。
+  const scrollTarget = () => {
+    if (shouldVirtualize.value) {
+      rowVirtualizer.value.scrollToIndex(realIdx, { align: 'center' })
+      return
+    }
+    const row = innerEl.value?.querySelector<HTMLElement>(
+      `.msg-vrow[data-index="${realIdx}"]`,
+    )
+    row?.scrollIntoView({ block: 'center', behavior: 'auto' })
+  }
+  scrollTarget()
   let userBailed = false
   const onUserInput = () => {
     userBailed = true
@@ -1231,7 +1248,7 @@ function flashMessage(idx: number, uuid?: string) {
   let raf = 0
   const tick = () => {
     if (userBailed || performance.now() - t0 > 1200) return cleanup()
-    rowVirtualizer.value.scrollToIndex(realIdx, { align: 'center' })
+    scrollTarget()
     raf = requestAnimationFrame(tick)
   }
   const cleanup = () => {
@@ -2072,12 +2089,12 @@ function onDocClick(e: MouseEvent) {
       </div>
       <div class="s">
         <span>{{
-          t('chat.stats', {
+          t('chat.statsNoTime', {
             u: stats.u,
             a: stats.a,
-            time: formatTime(session.created),
           })
         }}</span>
+        <span v-if="session.modified" class="session-time">{{ t('session.updated', { time: formatTime(session.modified) }) }}</span>
         <span
           v-if="live && !trashed"
           class="live-badge"
@@ -2091,7 +2108,7 @@ function onDocClick(e: MouseEvent) {
         </span>
         <span v-if="session.id" class="session-id" v-tooltip="session.id">
           <span class="session-id-label">{{ t('session.id') }}</span>
-          <span class="session-id-text">{{ shortId(session.id) }}</span>
+          <span class="session-id-text">{{ displaySessionId(session.id) }}</span>
           <button
             class="session-id-copy"
             v-tooltip="t('chat.action.copyId')"
@@ -2465,6 +2482,17 @@ function onDocClick(e: MouseEvent) {
                 </summary>
                 <div class="thinking-content" v-rich-html="renderText(b.text ?? '')" />
               </details>
+
+              <div
+                v-else-if="isStructuredFileChangeToolUse(b) && shouldShowToolUse(b)"
+                class="inline-tool-code inline-tool-code-flat"
+                :data-search-scope="toolUseScope(b)"
+              >
+                <div
+                  class="codex-apply-patch"
+                  v-html="fileChangeToolHtml(b)"
+                />
+              </div>
 
               <div
                 v-else-if="isCodexInlineCodeToolUse(b) && shouldShowToolUse(b)"

@@ -26,6 +26,7 @@ const cliLabels: Record<string, string> = {
   agy: 'Antigravity CLI',
   opencode: 'opencode',
   grok: 'Grok Build CLI',
+  kimi: 'Kimi Code',
 }
 
 const cliUrls: Record<string, string> = {
@@ -34,6 +35,7 @@ const cliUrls: Record<string, string> = {
   agy: 'https://antigravity.google/docs/cli/getting-started',
   opencode: 'https://opencode.ai/docs/',
   grok: 'https://docs.x.ai/docs/grok-cli',
+  kimi: 'https://www.kimi.com/code/en',
 }
 
 const pmLabels: Record<string, string> = {
@@ -53,6 +55,10 @@ function platformLabel() {
   if (p.includes('mac')) return 'macOS'
   if (p.includes('win')) return 'Windows'
   return 'Linux'
+}
+
+function agentIconForCli(cli: string) {
+  return agentIcons[cli === 'kimi' ? 'kimicode' : cli as keyof typeof agentIcons]
 }
 
 function msgText(cli: string) {
@@ -141,13 +147,21 @@ onMounted(() => {
         <!-- row 1: icon + name + badge -->
         <div class="ce-row-top">
           <div class="ce-id">
-            <component :is="agentIcons[info.cli as keyof typeof agentIcons]" class="ce-icon" />
+            <component :is="agentIconForCli(info.cli)" class="ce-icon" />
             <span class="ce-name">{{ cliLabels[info.cli] || info.cli }}</span>
             <span class="ce-tag">{{ platformLabel() }}</span>
           </div>
           <span v-if="info.upgradable" class="ce-badge ce-badge-up">{{ t('settings.cli.upgradable') }}</span>
           <span v-else-if="info.installed && info.latestVersion" class="ce-badge ce-badge-ok">{{ t('settings.cli.upToDate') }}</span>
           <span v-else-if="!info.installed" class="ce-badge ce-badge-na">{{ t('settings.cli.notInstalled') }}</span>
+          <span
+            v-if="info.health"
+            class="ce-badge"
+            :class="info.health.healthy ? 'ce-badge-health-ok' : 'ce-badge-health-error'"
+            :title="info.health.summary || undefined"
+          >
+            {{ info.health.healthy ? t('settings.cli.healthOk') : t('settings.cli.healthFailed') }}
+          </span>
         </div>
 
         <!-- row 2: versions + actions -->
@@ -273,6 +287,15 @@ onMounted(() => {
 .ce-btn-sm {
   padding: 3px 10px;
   font-size: 11px;
+}
+
+.ce-badge-health-ok {
+  color: var(--green, #2d8a5b);
+  border-color: color-mix(in srgb, var(--green, #2d8a5b) 35%, var(--border));
+}
+.ce-badge-health-error {
+  color: var(--red, #c84b4b);
+  border-color: color-mix(in srgb, var(--red, #c84b4b) 35%, var(--border));
 }
 
 /* ---- cards ---- */
