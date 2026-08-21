@@ -41,9 +41,9 @@ struct WatchState {
     /// 当前打开的目标文件。
     #[allow(dead_code)]
     path: PathBuf,
-    /// notify 实际监听的目录（目标文件的父目录）。
+    /// notify 实际监听的目录（各目标文件的父目录）。
     #[allow(dead_code)]
-    watch_root: PathBuf,
+    watch_roots: Vec<PathBuf>,
     #[allow(dead_code)]
     agent: String,
 }
@@ -77,11 +77,11 @@ fn debounce_seq_map() -> &'static Mutex<std::collections::HashMap<String, u64>> 
 /// 因为我们 watch 的是父目录（见文件头注释），同目录里**别的**会话文件被追加也会派事件；
 /// 若每次都对目标大文件（可达数十 MB）做全量 read_session，就会被无关写入反复全量重读、CPU 打满。
 /// 处理前先比指纹：目标文件没变就直接跳过昂贵的重解析。真正的追加会改 mtime/size,照常被捕获。
-static LAST_STAT: OnceLock<Mutex<std::collections::HashMap<String, (std::time::SystemTime, u64)>>> =
+type FileFingerprint = Vec<(PathBuf, std::time::SystemTime, u64)>;
+static LAST_STAT: OnceLock<Mutex<std::collections::HashMap<String, FileFingerprint>>> =
     OnceLock::new();
 
-fn last_stat_map() -> &'static Mutex<std::collections::HashMap<String, (std::time::SystemTime, u64)>>
-{
+fn last_stat_map() -> &'static Mutex<std::collections::HashMap<String, FileFingerprint>> {
     LAST_STAT.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
@@ -90,6 +90,15 @@ fn last_stat_map() -> &'static Mutex<std::collections::HashMap<String, (std::tim
 fn file_fingerprint(path: &str) -> Option<(std::time::SystemTime, u64)> {
     let md = std::fs::metadata(path).ok()?;
     Some((md.modified().ok()?, md.len()))
+}
+
+fn files_fingerprint(paths: &[PathBuf]) -> Option<FileFingerprint> {
+    let mut fingerprint = Vec::with_capacity(paths.len());
+    for path in paths {
+        let (modified, size) = file_fingerprint(&path.to_string_lossy())?;
+        fingerprint.push((path.clone(), modified, size));
+    }
+    Some(fingerprint)
 }
 
 fn watch_root_for(path: &Path) -> Result<PathBuf, String> {
@@ -126,14 +135,20 @@ pub fn watch_session(app: AppHandle, agent: String, path: String) -> Result<(), 
     let src = agents::source(&agent)?;
     // 实际盯的磁盘文件由 agent 决定：文件型 = 会话文件自身；agy = transcript_full 优先；
     // opencode（虚拟路径）= 库的 -wal 文件。notify 挂在目标文件的父目录上（原子替换兜底）。
-    let target = src
-        .watch_target(&path)
-        .ok_or_else(|| format!("No watchable file for: {path}"))?;
-    if !target.exists() {
-        return Err(format!("File does not exist: {}", target.display()));
+    let targets = src.watch_targets(&path);
+    if targets.is_empty() {
+        return Err(format!("No watchable file for: {path}"));
     }
-    let watch_root = watch_root_for(&target)?;
-    let target_path = target.to_string_lossy().to_string();
+    if let Some(missing) = targets.iter().find(|target| !target.exists()) {
+        return Err(format!("File does not exist: {}", missing.display()));
+    }
+    let mut watch_roots = Vec::new();
+    for target in &targets {
+        let root = watch_root_for(target)?;
+        if !watch_roots.contains(&root) {
+            watch_roots.push(root);
+        }
+    }
     let p = PathBuf::from(&path);
 
     // 先把 baseline 写好，避免 watcher 起来后回调先到 process_change 时拿不到 count。
@@ -143,7 +158,7 @@ pub fn watch_session(app: AppHandle, agent: String, path: String) -> Result<(), 
         m.insert(path.clone(), initial.len());
     }
     // 记下初始指纹（使用对应目标真实落盘文件的指纹）,后续无关目录事件才能被廉价短路掉
-    if let Some(fp) = file_fingerprint(&target_path) {
+    if let Some(fp) = files_fingerprint(&targets) {
         if let Ok(mut m) = last_stat_map().lock() {
             m.insert(path.clone(), fp);
         }
@@ -187,9 +202,11 @@ pub fn watch_session(app: AppHandle, agent: String, path: String) -> Result<(), 
         })
         .map_err(|e| format!("notify init failed: {e}"))?;
 
-    watcher
-        .watch(&watch_root, RecursiveMode::NonRecursive)
-        .map_err(|e| format!("watch failed: {e}"))?;
+    for watch_root in &watch_roots {
+        watcher
+            .watch(watch_root, RecursiveMode::NonRecursive)
+            .map_err(|e| format!("watch failed: {e}"))?;
+    }
 
     // notify 事件偶发漏报时，轮询兜底仍能把新消息补进来。process_change 内部会按
     // active watcher 校验 path/agent，并且只在 Msg 数增长时 emit 尾段，所以这里
@@ -225,7 +242,7 @@ pub fn watch_session(app: AppHandle, agent: String, path: String) -> Result<(), 
         *slot = Some(WatchState {
             _watcher: watcher,
             path: p,
-            watch_root,
+            watch_roots,
             agent,
         });
     }
@@ -259,12 +276,12 @@ fn process_change(app: &AppHandle, agent: &str, path: &str) {
         Ok(s) => s,
         Err(_) => return,
     };
-    let target_path = src
-        .watch_target(path)
-        .map(|t| t.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.to_string());
+    let targets = src.watch_targets(path);
+    if targets.is_empty() {
+        return;
+    }
 
-    if !Path::new(&target_path).exists() {
+    if targets.iter().any(|target| !target.exists()) {
         let _ = app.emit(
             "session:gone",
             PathPayload {
@@ -285,13 +302,13 @@ fn process_change(app: &AppHandle, agent: &str, path: &str) {
 
     // 廉价短路：目标文件指纹（mtime+size）与上次处理时相同 → 这次事件是同目录里**别的**文件在写,
     // 直接返回,别对大文件做全量 read_session。真有追加会改指纹,走到下面重读。
-    let cur_fp = file_fingerprint(&target_path);
-    if let Some(fp) = cur_fp {
+    let cur_fp = files_fingerprint(&targets);
+    if let Some(ref fp) = cur_fp {
         let unchanged = last_stat_map()
             .lock()
             .ok()
-            .and_then(|m| m.get(path).copied())
-            == Some(fp);
+            .and_then(|m| m.get(path).cloned())
+            == Some(fp.clone());
         if unchanged {
             return;
         }

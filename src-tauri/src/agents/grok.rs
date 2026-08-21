@@ -24,7 +24,9 @@ use crate::stats::types::{CallRecord, Turn};
 use crate::types::{
     Block, DiffHunk, DiffLine, Msg, ProjectInfo, SessionMeta, SessionPage, UsageSummary,
 };
-use crate::util::{clean_title, home, mtime_millis, now_millis, text_block, validate_rename_name};
+use crate::util::{
+    clean_title, home, is_image_file, mtime_millis, now_millis, text_block, validate_rename_name,
+};
 
 pub struct GrokSource;
 
@@ -290,22 +292,73 @@ fn image_src(value: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|url| !url.trim().is_empty());
     if let Some(url) = direct {
-        return Some(url.to_string());
+        if !url.starts_with("file:") {
+            return Some(url.to_string());
+        }
     }
-    let data = value
+    if let Some(data) = value
         .get("data")
         .or_else(|| value.pointer("/source/data"))
-        .and_then(Value::as_str)?;
-    let mime = value
-        .get("mimeType")
-        .or_else(|| value.get("mime_type"))
-        .or_else(|| value.pointer("/source/media_type"))
         .and_then(Value::as_str)
-        .unwrap_or("image/png");
-    if data.starts_with("data:") {
-        Some(data.to_string())
-    } else {
-        Some(format!("data:{mime};base64,{data}"))
+    {
+        let mime = value
+            .get("mimeType")
+            .or_else(|| value.get("mime_type"))
+            .or_else(|| value.pointer("/source/media_type"))
+            .and_then(Value::as_str)
+            .unwrap_or("image/png");
+        return if data.starts_with("data:") {
+            Some(data.to_string())
+        } else {
+            Some(format!("data:{mime};base64,{data}"))
+        };
+    }
+    direct.and_then(local_image_uri_path).or_else(|| {
+        value
+            .get("uri")
+            .or_else(|| value.pointer("/source/uri"))
+            .and_then(Value::as_str)
+            .and_then(local_image_uri_path)
+    })
+}
+
+/// Grok persists a `file:///...` URI alongside pasted image data. Usually the
+/// base64 data above is available, but this fallback keeps older/trimmed
+/// sessions renderable. Convert the URI to the native path before it reaches
+/// `convertFileSrc`: Windows requires `C:\...` or `\\server\share`, not a
+/// POSIX-looking file URI.
+fn local_image_uri_path(uri: &str) -> Option<String> {
+    let path = file_uri_to_local_path(uri)?;
+    let path_buf = PathBuf::from(&path);
+    (path_buf.is_file() && is_image_file(&path_buf)).then_some(path)
+}
+
+fn file_uri_to_local_path(uri: &str) -> Option<String> {
+    let decoded = percent_decode(uri.strip_prefix("file://")?);
+
+    #[cfg(windows)]
+    {
+        let local = decoded.strip_prefix("localhost/").unwrap_or(&decoded);
+        if let Some(drive_path) = local.strip_prefix('/') {
+            if drive_path.len() >= 2 && drive_path.as_bytes()[1] == b':' {
+                return Some(drive_path.replace('/', "\\"));
+            }
+        }
+        if !local.starts_with('/') {
+            return Some(format!(r"\\{}", local.replace('/', "\\")));
+        }
+        Some(local.replace('/', "\\"))
+    }
+
+    #[cfg(not(windows))]
+    {
+        if decoded.starts_with('/') {
+            Some(decoded)
+        } else {
+            decoded
+                .strip_prefix("localhost/")
+                .map(|path| format!("/{path}"))
+        }
     }
 }
 
@@ -2016,6 +2069,60 @@ mod tests {
                 }
             }
         })
+    }
+
+    #[test]
+    fn image_file_uri_fallback_uses_a_real_local_image() {
+        let root = scratch("file-uri-image");
+        fs::create_dir_all(&root).unwrap();
+        let image = root.join("clipboard-image.png");
+        fs::write(&image, []).unwrap();
+        #[cfg(windows)]
+        let uri = format!("file:///{}", image.to_string_lossy().replace('\\', "/"));
+        #[cfg(not(windows))]
+        let uri = format!("file://{}", image.to_string_lossy());
+
+        let src = image_src(&serde_json::json!({"type":"image", "uri":uri}));
+        assert_eq!(src.as_deref(), image.to_str());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn image_data_remains_preferred_over_a_local_file_uri() {
+        let root = scratch("image-data-priority");
+        fs::create_dir_all(&root).unwrap();
+        let image = root.join("clipboard-image.png");
+        fs::write(&image, []).unwrap();
+        #[cfg(windows)]
+        let uri = format!("file:///{}", image.to_string_lossy().replace('\\', "/"));
+        #[cfg(not(windows))]
+        let uri = format!("file://{}", image.to_string_lossy());
+
+        let src = image_src(&serde_json::json!({
+            "type":"image", "uri":uri, "data":"AQID", "mimeType":"image/png"
+        }));
+        assert_eq!(src.as_deref(), Some("data:image/png;base64,AQID"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn file_uri_conversion_handles_native_windows_forms() {
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                file_uri_to_local_path("file:///C:/Users/Jane%20Doe/AppData/Local/Temp/a.png"),
+                Some(r"C:\Users\Jane Doe\AppData\Local\Temp\a.png".to_string())
+            );
+            assert_eq!(
+                file_uri_to_local_path("file://server/share/clipboard/a.png"),
+                Some(r"\\server\share\clipboard\a.png".to_string())
+            );
+        }
+        #[cfg(not(windows))]
+        assert_eq!(
+            file_uri_to_local_path("file:///tmp/Jane%20Doe/clipboard/a.png"),
+            Some("/tmp/Jane Doe/clipboard/a.png".to_string())
+        );
     }
 
     #[test]

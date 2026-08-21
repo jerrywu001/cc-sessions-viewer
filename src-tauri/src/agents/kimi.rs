@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use chrono::{TimeZone, Utc};
 use rayon::prelude::*;
@@ -38,6 +39,8 @@ const MAX_TOOL_RESULT_BYTES: usize = 128 * 1024;
 const MAX_QUESTION_TEXT_BYTES: usize = 8 * 1024;
 const MAX_OPTION_LABEL_BYTES: usize = 1024;
 const MAX_OPTION_DESCRIPTION_BYTES: usize = 8 * 1024;
+const SNAPSHOT_RETRIES: usize = 4;
+const SNAPSHOT_RETRY_DELAY: Duration = Duration::from_millis(20);
 
 #[derive(Clone)]
 struct KimiSessionRecord {
@@ -49,6 +52,8 @@ struct KimiSessionRecord {
     created: Option<String>,
     modified: u64,
 }
+
+type WireSnapshot = Vec<(PathBuf, Vec<u8>)>;
 
 pub fn kimi_home() -> PathBuf {
     let configured = std::env::var_os("KIMI_CODE_HOME")
@@ -100,6 +105,99 @@ fn read_state(session_dir: &Path) -> Option<Value> {
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .filter(Value::is_object)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileRevision {
+    size: u64,
+    modified: SystemTime,
+    identity: (u64, u64),
+}
+
+#[cfg(unix)]
+fn file_identity(metadata: &fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+
+    (metadata.dev(), metadata.ino())
+}
+
+#[cfg(not(unix))]
+fn file_identity(_metadata: &fs::Metadata) -> (u64, u64) {
+    (0, 0)
+}
+
+fn file_revision(path: &Path) -> Result<FileRevision, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "Failed to inspect Kimi Code file {}: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(format!(
+            "Kimi Code file is not a regular file: {}",
+            path.display()
+        ));
+    }
+    let modified = metadata.modified().map_err(|error| {
+        format!(
+            "Failed to read Kimi Code file mtime {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(FileRevision {
+        size: metadata.len(),
+        modified,
+        identity: file_identity(&metadata),
+    })
+}
+
+/// Read a group of Kimi files only when every file remains the same before and
+/// after the read. This prevents a partial state.json or wire line from being
+/// paired with data from a different revision during live tail/stat scans.
+fn read_stable_files(paths: &[PathBuf], state_index: usize) -> Result<Vec<Vec<u8>>, String> {
+    for attempt in 0..SNAPSHOT_RETRIES {
+        let before = paths
+            .iter()
+            .map(|path| file_revision(path))
+            .collect::<Result<Vec<_>, _>>()?;
+        let bytes = paths
+            .iter()
+            .map(|path| {
+                fs::read(path).map_err(|error| {
+                    format!("Failed to read Kimi Code file {}: {error}", path.display())
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let valid_state = serde_json::from_slice::<Value>(&bytes[state_index])
+            .ok()
+            .is_some_and(|state| state.is_object());
+        let after = paths
+            .iter()
+            .map(|path| file_revision(path))
+            .collect::<Result<Vec<_>, _>>()?;
+        if valid_state && before == after {
+            return Ok(bytes);
+        }
+        if attempt + 1 < SNAPSHOT_RETRIES {
+            std::thread::sleep(SNAPSHOT_RETRY_DELAY);
+        }
+    }
+    Err("Kimi Code session changed while reading; retry later".to_string())
+}
+
+fn session_dir_for_main_wire(path: &Path) -> Result<PathBuf, String> {
+    path.parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "Invalid Kimi Code main wire path".to_string())
+}
+
+fn read_stable_main_wire(path: &Path) -> Result<Vec<u8>, String> {
+    let session_dir = session_dir_for_main_wire(path)?;
+    let paths = vec![session_dir.join(STATE_FILE), path.to_path_buf()];
+    Ok(read_stable_files(&paths, 0)?[1].clone())
 }
 
 fn state_timestamp(state: &Value, key: &str) -> Option<String> {
@@ -296,11 +394,14 @@ fn is_user_prompt(event: &Value) -> bool {
 }
 
 fn main_user_prompts(path: &Path) -> Result<Vec<(Option<String>, String)>, String> {
-    let file = fs::File::open(path)
-        .map_err(|error| format!("Failed to open Kimi Code session: {error}"))?;
+    let bytes = read_stable_main_wire(path)?;
+    main_user_prompts_from_bytes(&bytes)
+}
+
+fn main_user_prompts_from_bytes(bytes: &[u8]) -> Result<Vec<(Option<String>, String)>, String> {
     let mut prompts = Vec::new();
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+    for line in String::from_utf8_lossy(bytes).lines() {
+        let Ok(event) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         if event.get("type").and_then(Value::as_str) != Some("turn.prompt")
@@ -590,13 +691,17 @@ fn fallback_append_messages(events: &[Value]) -> Vec<Msg> {
     messages
 }
 
+#[cfg(test)]
 fn read_main_wire(path: &Path) -> Result<Vec<Msg>, String> {
-    let file = fs::File::open(path)
-        .map_err(|error| format!("Failed to open Kimi Code session: {error}"))?;
-    let events: Vec<Value> = BufReader::new(file)
+    let bytes =
+        fs::read(path).map_err(|error| format!("Failed to open Kimi Code session: {error}"))?;
+    parse_main_wire_bytes(&bytes)
+}
+
+fn parse_main_wire_bytes(bytes: &[u8]) -> Result<Vec<Msg>, String> {
+    let events: Vec<Value> = String::from_utf8_lossy(bytes)
         .lines()
-        .map_while(Result::ok)
-        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .collect();
     let has_primary_events = events.iter().any(|event| {
         matches!(
@@ -1078,7 +1183,22 @@ fn kimi_index_metadata(root: &Path, unit: &SessionStorageUnit) -> Result<Value, 
     Ok(serde_json::json!({
         "sessionId": session_id,
         "indexEntries": entries,
+        "sessionRevision": session_revision_stamp(root, &unit.entry_path())?,
     }))
+}
+
+fn verify_session_revision(
+    root: &Path,
+    unit: &SessionStorageUnit,
+    metadata: &Value,
+) -> Result<(), String> {
+    let expected = metadata
+        .get("sessionRevision")
+        .ok_or_else(|| "Kimi Code trash metadata is missing session revision".to_string())?;
+    if session_revision_stamp(root, &unit.entry_path())? != *expected {
+        return Err("Kimi Code session changed while preparing delete; try again".to_string());
+    }
+    Ok(())
 }
 
 fn metadata_session_id(metadata: &Value) -> Result<&str, String> {
@@ -1158,7 +1278,11 @@ fn restore_index_session(
     write_index_lines(root, &retained)
 }
 
-fn write_state_atomically(path: &Path, state: &Value) -> Result<(), String> {
+fn write_state_atomically(
+    path: &Path,
+    state: &Value,
+    expected_revision: &FileRevision,
+) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Kimi Code state.json has no parent directory".to_string())?;
@@ -1180,6 +1304,10 @@ fn write_state_atomically(path: &Path, state: &Value) -> Result<(), String> {
         return Err(format!("Failed to write Kimi Code state.json: {error}"));
     }
     drop(file);
+    if file_revision(path)? != *expected_revision {
+        let _ = fs::remove_file(&temporary);
+        return Err("Kimi Code state.json changed while preparing rename; try again".to_string());
+    }
     if let Err(first_error) = fs::rename(&temporary, path) {
         let backup = parent.join(format!(
             ".{STATE_FILE}.viewer-{}-{}.bak",
@@ -1208,23 +1336,24 @@ fn write_state_atomically(path: &Path, state: &Value) -> Result<(), String> {
 fn rename_session_at(root: &Path, path: &Path, name: &str) -> Result<(), String> {
     let title = validate_rename_name(name)?;
     let unit = validate_existing_storage(root, path)?;
-    let revision = session_files_mtime(&unit.root_path);
+    let revision = session_revision_stamp(root, &unit.entry_path())?;
     let state_path = unit.root_path.join(STATE_FILE);
-    let mut state = read_state(&unit.root_path)
-        .ok_or_else(|| "Failed to read Kimi Code state.json".to_string())?;
+    let (mut state, _) = read_stable_session_wires(root, &unit.entry_path())?;
+    let state_revision = file_revision(&state_path)?;
     let object = state
         .as_object_mut()
         .ok_or_else(|| "Kimi Code state.json must be a JSON object".to_string())?;
     object.insert("title".to_string(), Value::String(title.to_string()));
     object.insert("isCustomTitle".to_string(), Value::Bool(true));
-    if session_files_mtime(&unit.root_path) != revision {
+    if session_revision_stamp(root, &unit.entry_path())? != revision {
         return Err("Kimi Code session changed while preparing rename; try again".to_string());
     }
-    write_state_atomically(&state_path, &state)
+    write_state_atomically(&state_path, &state, &state_revision)
 }
 
 fn hard_delete_session_at(root: &Path, path: &Path) -> Result<(), String> {
     let unit = validate_existing_storage(root, path)?;
+    let revision = session_revision_stamp(root, &unit.entry_path())?;
     let session_id = state_session_id(&unit.root_path)?;
     let index_before = index_lines(root)?;
     let index_after: Vec<String> = index_before
@@ -1232,8 +1361,17 @@ fn hard_delete_session_at(root: &Path, path: &Path) -> Result<(), String> {
         .filter(|line| index_line_session_id(line).as_deref() != Some(session_id.as_str()))
         .cloned()
         .collect();
+    if session_revision_stamp(root, &unit.entry_path())? != revision {
+        return Err("Kimi Code session changed while preparing delete; try again".to_string());
+    }
     if index_after.len() != index_before.len() {
         write_index_lines(root, &index_after)?;
+    }
+    if session_revision_stamp(root, &unit.entry_path())? != revision {
+        if index_after.len() != index_before.len() {
+            let _ = write_index_lines(root, &index_before);
+        }
+        return Err("Kimi Code session changed while preparing delete; try again".to_string());
     }
     if let Err(error) = fs::remove_dir_all(&unit.root_path) {
         if index_after.len() != index_before.len() {
@@ -1275,6 +1413,74 @@ fn session_wire_paths(root: &Path, main_wire: &Path) -> Result<Vec<PathBuf>, Str
     }
     wires.sort();
     Ok(wires)
+}
+
+fn revision_value(path: &Path) -> Result<Value, String> {
+    let revision = file_revision(path)?;
+    let duration = revision
+        .modified
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    Ok(serde_json::json!({
+        "path": path,
+        "size": revision.size,
+        "mtimeSeconds": duration.as_secs(),
+        "mtimeNanos": duration.subsec_nanos(),
+        "device": revision.identity.0,
+        "inode": revision.identity.1,
+    }))
+}
+
+fn session_revision_stamp(root: &Path, main_wire: &Path) -> Result<Value, String> {
+    let unit = validate_existing_storage(root, main_wire)?;
+    let mut paths = vec![unit.root_path.join(STATE_FILE)];
+    paths.extend(session_wire_paths(root, main_wire)?);
+    let entries = paths
+        .iter()
+        .map(|path| revision_value(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Value::Array(entries))
+}
+
+fn session_cache_revision(root: &Path, main_wire: &Path) -> u64 {
+    let Ok(stamp) = session_revision_stamp(root, main_wire) else {
+        return mtime_millis(main_wire);
+    };
+    // FNV-1a is only a cache invalidation token, not a security digest. Unlike
+    // a maximum mtime, it also changes when state.json updates behind a newer
+    // wire file or when a subagent wire is added.
+    serde_json::to_vec(&stamp)
+        .unwrap_or_default()
+        .into_iter()
+        .fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        })
+}
+
+fn read_stable_session_wires(
+    root: &Path,
+    main_wire: &Path,
+) -> Result<(Value, WireSnapshot), String> {
+    let unit = validate_existing_storage(root, main_wire)?;
+    for attempt in 0..SNAPSHOT_RETRIES {
+        let wires = session_wire_paths(root, main_wire)?;
+        let mut paths = Vec::with_capacity(wires.len() + 1);
+        paths.push(unit.root_path.join(STATE_FILE));
+        paths.extend(wires.iter().cloned());
+        let bytes = read_stable_files(&paths, 0)?;
+        if session_wire_paths(root, main_wire)? == wires {
+            let state = serde_json::from_slice::<Value>(&bytes[0])
+                .map_err(|error| format!("Failed to parse Kimi Code state.json: {error}"))?;
+            return Ok((
+                state,
+                wires.into_iter().zip(bytes.into_iter().skip(1)).collect(),
+            ));
+        }
+        if attempt + 1 < SNAPSHOT_RETRIES {
+            std::thread::sleep(SNAPSHOT_RETRY_DELAY);
+        }
+    }
+    Err("Kimi Code session agent list changed while reading; retry later".to_string())
 }
 
 fn usage_from_record(event: &Value) -> UsageSummary {
@@ -1319,19 +1525,17 @@ fn is_shell_tool(name: &str) -> bool {
     matches!(name, "Bash" | "Shell" | "Terminal" | "Execute")
 }
 
-fn read_turns_from_wire(
-    wire: &Path,
+fn read_turns_from_wire_bytes(
+    bytes: &[u8],
     session_id: &str,
     project_path: &str,
     include_user_prompts: bool,
 ) -> Result<Vec<Turn>, String> {
-    let file =
-        fs::File::open(wire).map_err(|error| format!("Failed to open Kimi Code wire: {error}"))?;
     let mut turns = Vec::new();
     let mut current_prompt = String::new();
 
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+    for line in String::from_utf8_lossy(bytes).lines() {
+        let Ok(event) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         let event_type = event
@@ -1411,11 +1615,10 @@ fn read_turns_from_wire(
 
 fn all_usage(root: &Path, main_wire: &Path) -> Result<UsageSummary, String> {
     let mut total = UsageSummary::default();
-    for wire in session_wire_paths(root, main_wire)? {
-        let file = fs::File::open(&wire)
-            .map_err(|error| format!("Failed to open Kimi Code wire: {error}"))?;
-        for line in BufReader::new(file).lines().map_while(Result::ok) {
-            let Ok(event) = serde_json::from_str::<Value>(&line) else {
+    let (_, wires) = read_stable_session_wires(root, main_wire)?;
+    for (_, bytes) in wires {
+        for line in String::from_utf8_lossy(&bytes).lines() {
+            let Ok(event) = serde_json::from_str::<Value>(line) else {
                 continue;
             };
             if event.get("type").and_then(Value::as_str) == Some("usage.record") {
@@ -1427,11 +1630,10 @@ fn all_usage(root: &Path, main_wire: &Path) -> Result<UsageSummary, String> {
 }
 
 fn latest_main_usage(main_wire: &Path) -> Result<UsageSummary, String> {
-    let file = fs::File::open(main_wire)
-        .map_err(|error| format!("Failed to open Kimi Code main wire: {error}"))?;
+    let bytes = read_stable_main_wire(main_wire)?;
     let mut latest = UsageSummary::default();
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+    for line in String::from_utf8_lossy(&bytes).lines() {
+        let Ok(event) = serde_json::from_str::<Value>(line) else {
             continue;
         };
         if event.get("type").and_then(Value::as_str) == Some("usage.record") {
@@ -1442,13 +1644,16 @@ fn latest_main_usage(main_wire: &Path) -> Result<UsageSummary, String> {
 }
 
 fn read_session_turns(root: &Path, main_wire: &Path) -> Result<Vec<Turn>, String> {
-    let unit = validate_existing_storage(root, main_wire)?;
-    let state = read_state(&unit.root_path).unwrap_or(Value::Null);
+    let main_entry = validate_existing_storage(root, main_wire)?.entry_path();
+    let (state, wires) = read_stable_session_wires(root, main_wire)?;
     let session_id = nonempty_string(&state, "id")
         .map(str::to_string)
         .unwrap_or_else(|| {
-            unit.root_path
-                .file_name()
+            main_wire
+                .parent()
+                .and_then(Path::parent)
+                .and_then(Path::parent)
+                .and_then(Path::file_name)
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string()
@@ -1457,10 +1662,10 @@ fn read_session_turns(root: &Path, main_wire: &Path) -> Result<Vec<Turn>, String
         .unwrap_or_default()
         .to_string();
     let mut turns = Vec::new();
-    for wire in session_wire_paths(root, main_wire)? {
-        let is_main = wire == unit.entry_path();
-        turns.extend(read_turns_from_wire(
-            &wire,
+    for (wire, bytes) in wires {
+        let is_main = wire == main_entry;
+        turns.extend(read_turns_from_wire_bytes(
+            &bytes,
             &session_id,
             &project_path,
             is_main,
@@ -1528,7 +1733,7 @@ impl SessionSource for KimiSource {
     }
 
     fn read_session(&self, path: &str) -> Result<Vec<Msg>, String> {
-        let mut messages = read_main_wire(Path::new(path))?;
+        let mut messages = parse_main_wire_bytes(&read_stable_main_wire(Path::new(path))?)?;
         crate::util::post_process_session_msgs(&mut messages);
         Ok(messages)
     }
@@ -1603,7 +1808,7 @@ impl SessionSource for KimiSource {
             .parent()
             .and_then(Path::parent)
             .and_then(Path::parent)
-            .map(session_files_mtime)
+            .map(|_| session_cache_revision(&kimi_home(), Path::new(path)))
             .unwrap_or_else(|| mtime_millis(Path::new(path)))
     }
 
@@ -1620,6 +1825,21 @@ impl SessionSource for KimiSource {
     fn watch_target(&self, path: &str) -> Option<PathBuf> {
         let path = PathBuf::from(path);
         is_regular_non_symlink(&path).then_some(path)
+    }
+
+    fn watch_targets(&self, path: &str) -> Vec<PathBuf> {
+        let wire = PathBuf::from(path);
+        if !is_regular_non_symlink(&wire) {
+            return Vec::new();
+        }
+        let Ok(session_dir) = session_dir_for_main_wire(&wire) else {
+            return Vec::new();
+        };
+        let state = session_dir.join(STATE_FILE);
+        if !is_regular_non_symlink(&state) {
+            return Vec::new();
+        }
+        vec![wire, state]
     }
 
     fn validate_session_path(&self, path: &Path) -> Result<(), String> {
@@ -1644,6 +1864,14 @@ impl SessionSource for KimiSource {
 
     fn trash_metadata(&self, unit: &SessionStorageUnit) -> Result<Value, String> {
         kimi_index_metadata(&kimi_home(), unit)
+    }
+
+    fn before_soft_delete(
+        &self,
+        unit: &SessionStorageUnit,
+        metadata: &Value,
+    ) -> Result<(), String> {
+        verify_session_revision(&kimi_home(), unit, metadata)
     }
 
     fn after_soft_delete(
@@ -1882,6 +2110,98 @@ mod tests {
             renamed.pointer("/custom/preserved"),
             Some(&Value::Bool(true))
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stable_snapshot_rejects_a_partially_written_state_file() {
+        let root = scratch("partial-state");
+        let wire = create_session(
+            &root,
+            "wd_project",
+            "session_valid",
+            state("id", "/tmp/project", "title"),
+            &["prompt"],
+        );
+        let state_path = wire
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join(STATE_FILE);
+        fs::write(&state_path, b"{\"id\":").unwrap();
+        let error = match KimiSource.read_session(wire.to_str().unwrap()) {
+            Ok(_) => panic!("partially written state must not be read"),
+            Err(error) => error,
+        };
+        assert!(error.contains("changed while reading"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_revision_and_watch_targets_include_state_and_subagent_wires() {
+        let root = scratch("revision-targets");
+        let wire = create_session(
+            &root,
+            "wd_project",
+            "session_valid",
+            state("id", "/tmp/project", "title"),
+            &["prompt"],
+        );
+        let unit = validate_existing_storage(&root, &wire).unwrap();
+        let before = session_cache_revision(&root, &wire);
+        let state_path = unit.root_path.join(STATE_FILE);
+        fs::write(
+            &state_path,
+            serde_json::to_vec(&state("id", "/tmp/project", "renamed elsewhere")).unwrap(),
+        )
+        .unwrap();
+        assert_ne!(before, session_cache_revision(&root, &wire));
+
+        let sub_wire = unit.root_path.join("agents/subagent/wire.jsonl");
+        fs::create_dir_all(sub_wire.parent().unwrap()).unwrap();
+        fs::write(&sub_wire, "").unwrap();
+        let revision = session_revision_stamp(&root, &wire).unwrap();
+        assert_eq!(revision.as_array().unwrap().len(), 3);
+
+        let targets = KimiSource.watch_targets(wire.to_str().unwrap());
+        assert_eq!(
+            targets,
+            vec![
+                wire.clone(),
+                wire.parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join(STATE_FILE),
+            ]
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn refuses_soft_delete_when_kimi_changed_the_session_after_metadata_snapshot() {
+        let root = scratch("delete-conflict");
+        let wire = create_session(
+            &root,
+            "wd_project",
+            "session_valid",
+            state("id", "/tmp/project", "title"),
+            &["prompt"],
+        );
+        let unit = validate_existing_storage(&root, &wire).unwrap();
+        let metadata = kimi_index_metadata(&root, &unit).unwrap();
+        append_events(
+            &wire,
+            &[serde_json::json!({"type": "usage.record", "usage": {"output": 1}})],
+        );
+        let error = verify_session_revision(&root, &unit, &metadata).unwrap_err();
+        assert!(error.contains("changed while preparing delete"));
+        assert!(unit.root_path.exists());
         let _ = fs::remove_dir_all(root);
     }
 

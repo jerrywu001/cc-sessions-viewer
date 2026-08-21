@@ -6,11 +6,11 @@
 ## 实施进度
 
 - [x] 阶段 1 核心：`KimiSource`、会话发现、目录型 storage/path 校验、main wire watch target、mtime 锚点、最小用户 prompt 读取与 registry 分派。
-- [ ] 阶段 1 剩余：state/main wire 的原子一致 snapshot、读取前后 revision 重试与 watcher debounce，随 Live tail 一并完成。
+- [x] 阶段 1 完成：state/main/subagent wire 读取使用 revision 一致 snapshot，读取前后校验 size、mtime 和文件身份，半写 state/wire 或 agent 列表变化会有限重试后要求刷新；Live tail 继续使用 200ms debounce，并同时监听主 wire 和 `state.json`。缓存失效 token 覆盖 state 与全部 agent wire，避免较新的主 wire 遮蔽 metadata 更新。
 - [x] 阶段 2：主 wire 的 user/assistant text/thinking/tool call/tool result 解析，物理顺序、嵌套 result、并发/乱序工具的 `toolCallId` 关联、fallback、搜索边界与安全截断。
 - [x] 阶段 2.1：Kimi AskUserQuestion 的 `multi_select` 规范化、JSON answers/取消/后台等待只读卡片语义，以及共享卡片的 agent label 泛化。
 - [x] 阶段 3 核心：保留未知字段的 `state.json` 标题更新、目录型软删/恢复/硬删、根 `session_index.jsonl` 原子同步与失败回滚；索引发现改为真实 `$KIMI_CODE_HOME/session_index.jsonl` 路径。
-- [ ] 阶段 3 剩余：隔离原生 `/title` 的跨版本字段组合手工验收，以及外部 Kimi 连续写入时的冲突压力测试。
+- [x] 阶段 3 完成：基于本机 Kimi Code `0.38.0` 的真实 state 字段（`title`、`isCustomTitle`、`titleKind`）确认 rename 只改前两项并保留未知字段；重命名、软删和永久删除均在写入/移动前复核 state 与全部 wire 的精确 revision。外部 append、state 更新或新增 subagent wire 会取消操作；删除在 index 更新后的二次复核失败时恢复原 index。Kimi 不提供跨进程 session lock，最终 rename/move 系统调用之间仍是 best-effort 的极小竞争窗口。
 - [x] 阶段 4：扫描 main/subagent 顶层 `usage.record`、缓存 token 映射、`step.end` 去重、严格定价缺失标识、工具/shell/MCP carrier，以及 session/统计链路汇总。
 - [x] 阶段 5 核心：`Agent`/capability/icon/标签注册、Kimi 默认可见及旧设置迁移、终端启动参数持久化、统计 scope、导出标签与 worktree session 清理；`guiChat=false` 保持不接入聊天协议。
 - [x] 阶段 6：CLI 环境卡注册 Kimi 官方安装命令、登录 shell 的 `kimi --version`、多安装诊断和仅安装后运行的只读 `kimi doctor`；doctor 成功不回传输出，失败摘要会截断并清理敏感值。Kimi 不进入自动升级路径，且升级 API 明确拒绝后台 `kimi upgrade`。内嵌/外部终端继续以结构化 `kimi --session <id>` / `kimi` 在 login + interactive shell 中运行；Rust worktree gate 已包含 Kimi。
@@ -131,7 +131,7 @@ KIMI_CODE_HOME
    - `created`/`modified` 使用 state 时间并以主 wire/state mtime 兜底。
 6. 实现 `validate_session_path`、`session_storage_unit`、`validate_restore_target` 和 `source_mtime`。storage unit 的 root 是 session 目录，entry 相对路径为 `agents/main/wire.jsonl`，并以所有相关 wire/state 的最大 mtime 作为缓存失效锚点。
 7. 设置 `watch_target` 为主 wire；新增 append 或 rewrite 后由既有 watcher 触发整段安全重读。主 wire 不存在时静默退回一次性读取，不监听子 agent wire。
-8. 对会话详情读取建立一致 snapshot：先读取 `state.json` 和 main wire 的完整 bytes，再复核 file identity、size、mtime；任一文件在读取期间变化则丢弃该次组合结果并短暂退避重试。watcher 对连续 append 做 debounce；半写入尾行只显示等待下一次刷新，不得把新 state、旧 wire 或不完整工具对分别提交给详情、搜索、导出和统计。全 agents usage 统计以同一轮 snapshot 的各 wire 为单位，子 agent 的后续刷新不得污染已提交 main transcript。
+8. 已完成：会话详情、用户 prompt 搜索、context usage、全 agents usage 与统计均通过一致 snapshot 读取 `state.json` 和相应 wire bytes，读取前后复核 size、mtime 和文件身份；任一文件在读取期间变化或 state 暂时无法解析时短暂退避重试，仍不稳定则要求下次刷新。watcher 对连续 append 使用 200ms debounce，并同时观察 main wire 和 `state.json`；半写入尾行不会提交不完整消息，state 更新也不会被较新的 wire mtime 遮蔽。扫描到新增/移除 subagent wire 会重试整轮 snapshot。
 
 验收：给出不存在根目录、空 index、失效 index、两项目、多 session、定制 `KIMI_CODE_HOME`、目录中含 symlink 等 fixture，项目和分页列表均稳定且不越界。
 
@@ -174,7 +174,7 @@ KIMI_CODE_HOME
 
 涉及：`src-tauri/src/agents/mod.rs`、`src-tauri/src/agents/kimi.rs`、`src-tauri/src/trash.rs`、必要的 `src-tauri/src/lib.rs` 调用点。
 
-1. 先用一个隔离的临时 Kimi 会话执行原生 `/title`，记录 CLI 实际写入的 `state.json` 标题字段组合；以该事实定义 rename，而不是猜测 `titleKind` 的枚举值。
+1. 已完成：本机 Kimi Code `0.38.0` 的真实 session state 确认标题字段为 `title`、`isCustomTitle` 与保留型 `titleKind`；rename 原子更新前两项并保留 `titleKind`、`custom` 等未知字段。由于 Kimi 未提供跨版本兼容承诺，后续 CLI 大版本升级仍需复验实际 `/title` 写入格式。
 2. `rename_session` 保留 `state.json` 的未知字段，仅原子更新官方确认的 title/custom-title 字段；沿用 `validate_rename_name`，写入失败不能留下截断 JSON。
 3. 扩展 `SessionSource` 的回收站扩展契约，使 directory source 能在移动前提供额外 metadata，并在软删、恢复、hard delete 后完成自有索引维护。该扩展应保持现有文件型 agent 无感。
 4. 软删 Kimi session 时：
@@ -185,7 +185,7 @@ KIMI_CODE_HOME
 5. 恢复时先严格验证目标仍在 Kimi sessions 根、目录名/state ID/主 wire 均匹配，目标目录不存在才移动；随后按 sidecar 的原始 index 行恢复且按 session ID 去重。冲突或损坏时保留 trash 原件并报错。
 6. 永久删除同时删除完整 directory unit 和相应 index 行；仅在确实为空时清理父 `workDirKey` 目录，绝不删除 `$KIMI_CODE_HOME/sessions` 本身。
 7. 回收站列表、标题提取、目录大小和恢复后的搜索/统计缓存失效均走 `KimiSource`，不为 Kimi 复制一套 UI。
-8. Kimi 没有跨进程 session lock。已知内嵌 terminal 仍在运行时禁用 rename/delete/restore；外部 CLI 只能 best-effort：操作前后 re-stat/reparse state、main/subagent wires 与 index，检测到变动即取消或报告冲突，绝不对增长中的 wire 做整体重写。rename 仅原子替换已验证 revision 的 state；目录移动与 index 更新失败时保留可恢复原件，不能让 state/index/wire 分裂。
+8. Kimi 没有跨进程 session lock。已知内嵌 terminal 仍在运行时禁用 rename/delete/restore；外部 CLI 使用 best-effort 精确 revision guard：操作前、metadata 准备后、index 更新后分别 re-stat state 与全部 main/subagent wire，检测到 append、state 更新、wire 增删即取消或回滚 index。rename 仅原子替换已验证 revision 的 state；目录移动与 index 更新失败时保留可恢复原件，不能让 state/index/wire 分裂。最终系统调用之间无法取得 Kimi 锁，仍保留极小竞争窗口。
 
 验收：软删后 `kimi --session <id>` 与 viewer 均不再发现；恢复后两者都能恢复；session 的 logs、plans、tasks 和子 agent wire 随目录完整往返；冲突、坏 metadata、越界路径、symlink、index 写失败均不损坏原数据。
 
@@ -311,6 +311,7 @@ KIMI_CODE_HOME
 - 阶段 6 实现后：`cargo test --lib`（412 passed, 3 ignored）、`npm run test:run -- test/agentMeta.test.ts test/settings.test.ts`（48 passed）和 `npm run build` 均通过。
 - 阶段 7–8 实现后：`cargo test --lib`（416 passed, 3 ignored）和 `npm run test:run`（80 files, 1006 passed）均通过。hook 测试覆盖 Kimi `[[hooks]]` 的新建、幂等重装、用户项保留、顶层类型拒绝、状态检查和 session ID 到主 wire 的安全解析；tray 测试覆盖 Kimi 零活动 summary。
 - 本次 Kimi 文件变更、统计 scope 和 provider 前缀查价修正后：`cargo test --lib`（420 passed, 3 ignored）、定价测试（32 passed）、`npm run test:run`（80 files, 1011 passed）和 `npm run build` 通过；新增覆盖多级 provider 前缀、`custom/ollama/local` 隔离、Kimi `Edit` diff 解析和统一渲染的回归测试。定向 Rust `rustfmt` 与 `git diff --check` 通过；全仓 `cargo fmt --check` 仍只报告未触及的 `src-tauri/src/util.rs` 既有格式差异。
+- 阶段 1/3 收尾后：`cargo test --lib`（423 passed, 3 ignored）、`cargo clippy --lib --tests -- -D warnings`、`cargo fmt -- --check`、`git diff --check` 均通过；此前 `npm run test:run`（80 files, 1011 passed）及 `npm run build` 通过。新增覆盖半写 `state.json` 拒绝读取、state/subagent wire 纳入 snapshot 与缓存 revision、Live tail 多目标监听，以及 metadata 创建后外部 append 导致软删被拒绝。
 
 ### 质量门槛
 

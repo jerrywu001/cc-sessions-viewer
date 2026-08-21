@@ -245,6 +245,10 @@ fn soft_delete_in(
     // Install metadata first. If the move then fails, remove the sidecar; if the
     // process exits after the move, the item remains recoverable.
     write_meta(&meta_path, &meta)?;
+    if let Err(error) = source.before_soft_delete(&unit, &source_metadata) {
+        let _ = fs::remove_file(&meta_path);
+        return Err(error);
+    }
     if let Err(error) = move_storage(&unit.root_path, &destination, unit.kind) {
         // A cross-filesystem fallback can finish the copy but fail while
         // removing the source. Keep metadata whenever the destination exists;

@@ -1255,14 +1255,22 @@ fn lift_paths_from_text_inner(text: &str, preserve_clipboard_tags: bool) -> (Vec
     }
 
     // 3. 提取行内绝对路径 / 家目录路径（支持中文粘连，如 "前缀/var/path.png"）
-    // 排除 URL 中的路径段（`://` 后面不是文件路径）
+    // 排除 URL 中的路径段（`://` 后面不是文件路径）。Windows 的盘符、UNC
+    // 共享路径和 `\\?\` 扩展路径也在这里处理；路径组件允许空格和 Unicode 用户名。
     let re_abs = regex_lite::Regex::new(
         r#"(?x)
         (?: ^ | \s | [^\x00-\x7F] | [^\w.@/:=-] )
         (
-            (?: ~[/\\] | /[a-zA-Z0-9] | [a-zA-Z]:[/\\] )
-            (?: [\w.@~-]+ [/\\] )*
-            [\w.@-]+ \. [a-zA-Z0-9]+
+            (?:
+                ~[/\\]
+                | /[^/\\\r\n]
+                | [a-zA-Z]:[/\\]
+                | \\\\ \? [/\\] [a-zA-Z]: [/\\]
+                | \\\\ \? [/\\] UNC [/\\] [^/\\\r\n]
+                | \\\\ [^/\\\r\n]
+            )
+            (?: [^/\\\r\n]+ [/\\] )*
+            [^/\\\r\n]+ \. [a-zA-Z0-9]+
             (?: :\d+(?::\d+)? )?
         )
         "#,
@@ -1372,11 +1380,24 @@ fn lift_path_block(path: &str, lifted: &mut Vec<Block>) {
 }
 
 fn is_clipboard_image_path(path: &str) -> bool {
-    let name = Path::new(path)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    name.starts_with("clipboard-") && is_image_file(&expand_home(path))
+    is_clipboard_image_reference(path) && is_image_file(&expand_home(path))
+}
+
+/// Kimi writes pasted images into a platform temp location. Do not assume the
+/// macOS `/var/.../T` layout: Windows can use a drive path, UNC path, or a
+/// `\\?\` prefixed path. Separator normalization is only for classification;
+/// the original path is still passed to the platform filesystem APIs.
+fn is_clipboard_image_reference(path: &str) -> bool {
+    let normalized = path.trim().replace('\\', "/");
+    let mut components = normalized
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .peekable();
+    let Some(name) = components.next_back() else {
+        return false;
+    };
+    name.to_ascii_lowercase().starts_with("clipboard-")
+        || components.any(|component| component.eq_ignore_ascii_case("clipboard"))
 }
 
 fn parse_line_as_path(line: &str) -> Option<String> {
@@ -1406,9 +1427,9 @@ fn parse_line_as_path(line: &str) -> Option<String> {
         || (s.len() >= 2 && s.as_bytes()[1] == b':');
 
     if is_abs {
-        if s.contains(char::is_whitespace) {
-            return None;
-        }
+        // Windows profile folders commonly contain spaces. An absolute path is
+        // still unambiguous when it includes a separator or a file extension;
+        // keep the stricter whitespace rule below for relative/plain text.
         let after_root = if s.starts_with("~/") || s.starts_with("~\\") {
             &s[2..]
         } else if s.starts_with('/') || s.starts_with('\\') {
@@ -1603,6 +1624,14 @@ Only after the original task is complete, process this follow-up in the order re
             parse_line_as_path("https://vjs.zencdn.net/v/oceans.mp4"),
             None
         );
+        assert_eq!(
+            parse_line_as_path(r#"C:\Users\Jane Doe\AppData\Local\Temp\clipboard-1.png"#),
+            Some(r#"C:\Users\Jane Doe\AppData\Local\Temp\clipboard-1.png"#.to_string())
+        );
+        assert_eq!(
+            parse_line_as_path(r#"\\?\C:\Users\Jane Doe\AppData\Local\Temp\clipboard-1.png"#),
+            Some(r#"\\?\C:\Users\Jane Doe\AppData\Local\Temp\clipboard-1.png"#.to_string())
+        );
     }
 
     #[test]
@@ -1745,6 +1774,33 @@ Only after the original task is complete, process this follow-up in the order re
         assert_eq!(blocks[0].kind, "file");
         assert_eq!(blocks[0].file_path.as_deref().unwrap(), "/var/folders/8h/ddvbjjrn74q1v55wywphwkdc0000gn/T/clipboard-2026-07-05-122944-350E5680.png");
         assert_eq!(remaining, "这个应该像Claude一样");
+    }
+
+    #[test]
+    fn test_lift_windows_clipboard_paths_with_spaces() {
+        let path = r#"C:\Users\Jane Doe\AppData\Local\Temp\clipboard-2026-08-21.png"#;
+        let text = format!("请看这个截图 {path} 并说明问题");
+        let (blocks, remaining) = lift_paths_from_text(&text);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].kind, "file");
+        assert_eq!(blocks[0].file_path.as_deref(), Some(path));
+        assert_eq!(remaining, "请看这个截图  并说明问题");
+    }
+
+    #[test]
+    fn test_clipboard_image_reference_is_cross_platform() {
+        assert!(is_clipboard_image_reference(
+            r#"C:\Users\Jane Doe\AppData\Local\Temp\clipboard-2026-08-21.png"#
+        ));
+        assert!(is_clipboard_image_reference(
+            r#"\\?\C:\Users\Jane Doe\AppData\Local\Temp\clipboard-2026-08-21.png"#
+        ));
+        assert!(is_clipboard_image_reference(
+            r#"\\server\share\clipboard\screen-2026-08-21.png"#
+        ));
+        assert!(!is_clipboard_image_reference(
+            r#"C:\Users\Jane Doe\AppData\Local\Temp\screen-2026-08-21.png"#
+        ));
     }
 
     #[test]

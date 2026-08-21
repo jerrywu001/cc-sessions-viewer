@@ -503,6 +503,13 @@ pub trait SessionSource: Send + Sync {
         Some(std::path::PathBuf::from(path))
     }
 
+    /// Real files that can invalidate a live session view. Most agents only
+    /// need the transcript; directory-backed agents may also watch metadata or
+    /// sidecar files whose changes must trigger the same refresh.
+    fn watch_targets(&self, path: &str) -> Vec<std::path::PathBuf> {
+        self.watch_target(path).into_iter().collect()
+    }
+
     /// rename 等写操作前的路径合法性检查（lib.rs 统一调用，不再自带 exists/.jsonl
     /// 硬编码）。文件型 agent 用默认实现；虚拟路径 agent（opencode）重写。
     fn validate_session_path(&self, path: &Path) -> Result<(), String> {
@@ -553,6 +560,17 @@ pub trait SessionSource: Send + Sync {
     /// index row, without leaking their storage format into `trash.rs`.
     fn trash_metadata(&self, _unit: &SessionStorageUnit) -> Result<Value, String> {
         Ok(Value::Null)
+    }
+
+    /// Last guard before a storage unit is moved into trash. Directory-backed
+    /// agents can reject an operation when an external CLI changed the session
+    /// after metadata was prepared.
+    fn before_soft_delete(
+        &self,
+        _unit: &SessionStorageUnit,
+        _metadata: &Value,
+    ) -> Result<(), String> {
+        Ok(())
     }
 
     /// Commit source-specific cleanup only after the storage unit has moved to
