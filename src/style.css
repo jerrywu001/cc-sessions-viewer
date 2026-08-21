@@ -6904,6 +6904,7 @@ body.is-tab-reordering * {
 }
 .session-id-text {
   letter-spacing: 0.02em;
+  overflow-wrap: anywhere;
 }
 .session-id-copy {
   display: inline-flex;
@@ -7313,6 +7314,11 @@ body.is-tab-reordering * {
 .chat-head-info .s > .session-id::before {
   content: '·';
   margin-right: 6px;
+  opacity: 0.6;
+}
+.chat-head-info .s > .session-time::before {
+  content: '·';
+  margin-right: 10px;
   opacity: 0.6;
 }
 

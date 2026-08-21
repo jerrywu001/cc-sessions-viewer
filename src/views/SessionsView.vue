@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { Agent, ProjectInfo, SessionMeta, UsageSummary } from '../types'
-import { formatSize, formatTime, formatTokens, highlightSegments, shortName } from '../format'
+import { displaySessionId, formatSize, formatTime, formatTokens, highlightSegments, shortName } from '../format'
 import { t } from '../i18n'
 import {
   filterSessions,
@@ -410,17 +410,12 @@ function onDocClick(e: MouseEvent) {
 onMounted(() => document.addEventListener('click', onDocClick))
 onUnmounted(() => document.removeEventListener('click', onDocClick))
 
-function shortId(id: string): string {
-  if (!id) return ''
-  return id.length > 8 ? id.slice(0, 8) : id
-}
-
 // 工具栏搜索时把标题 / ID 里命中的关键词切成高亮片段（命中段加 .kw-hit）。
 function titleSegs(title: string) {
   return highlightSegments(title, sessionSearch.value)
 }
 function idSegs(id: string) {
-  return highlightSegments(shortId(id), sessionSearch.value)
+  return highlightSegments(displaySessionId(id), sessionSearch.value)
 }
 
 function codexRankLabel(s: SessionMeta): string {
@@ -836,7 +831,7 @@ defineExpose({ scrollEl })
         <div class="session-meta">
           <span>{{ t('list.messages', { n: s.messageCount }) }}</span>
           <span>{{ formatSize(s.size) }}</span>
-          <span>{{ t('list.updated', { time: formatTime(s.modified) }) }}</span>
+          <span>{{ t('session.updated', { time: formatTime(s.modified) }) }}</span>
           <!-- Token 角标：IntersectionObserver 看到这条 chip 才发请求 (`observeUsageCard`)。
                cache 命中时显示 total；空数据显示 "—"；loading 显示空占位。 -->
           <span

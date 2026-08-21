@@ -823,7 +823,7 @@ async function confirmCreateWorktree() {
 // app 创建的 worktree 是 Claude / Codex / Grok Build 共享的物理目录。三个 agent 都按 cwd
 // 归属会话，删 worktree、统计会话数时必须一起覆盖，避免留下无法访问的会话目录。
 // 这不接管 Grok 自己的 worktree registry。
-const WORKTREE_AGENTS: Agent[] = ['claude', 'codex', 'grok']
+const WORKTREE_AGENTS: Agent[] = ['claude', 'codex', 'grok', 'kimicode']
 
 const normPath = (s: string) => s.replace(/\\/g, '/').replace(/\/+$/, '')
 

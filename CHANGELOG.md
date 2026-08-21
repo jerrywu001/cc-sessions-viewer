@@ -6,6 +6,19 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ---
 
+## [v0.3.22]
+
+### Features
+
+- **Kimi Code session support** — the viewer now discovers Kimi Code sessions from `$KIMI_CODE_HOME` (default `~/.kimi-code`), renders main-agent history including interactive questions and file changes, supports search, rename, directory-based trash/restore, Markdown/HTML export, embedded and external terminal resume, worktree cleanup, CLI health checks, lifecycle hooks, tray statistics, and desktop-pet activity. Kimi remains intentionally read-only in the GUI chat composer.
+- **Kimi Code usage and pricing** — main and subagent `usage.record` calls now feed session, project, tray, and global statistics. Pricing uses strict matching against the live models.dev/OpenCode-backed table and keeps unpriced calls explicit rather than applying an unrelated fallback cost.
+
+### Bug Fixes
+
+- **Kimi Code file-change rendering** — `Edit`, `Write`, `MultiEdit`, `NotebookEdit`, and `Delete` calls now use the same path, change summary, and diff presentation as other agents; tool results no longer appear as duplicate transcript entries.
+- **Kimi Code statistics and model aliases** — the `kimicode` statistics scope is recognized in single-agent and aggregate views. Model lookup now handles normal provider and multi-hop gateway prefixes such as `deepseek/...` and `gateway/deepseek/...`, while preserving `custom`, `ollama`, and `local` pricing isolation.
+- **Kimi Code session identity and attachments** — session IDs use the shared compact display with full-value copy, obsolete creation-time labels are hidden, and clipboard image paths embedded in text use the common screenshot rendering behavior without rewriting their `[#image n]` labels.
+
 ## [v0.3.21]
 
 ### Features

@@ -12,6 +12,13 @@ import { closeChat, type ChatSession } from './chatSessions'
 import type { TabStatusKind } from './tabStatus'
 import { activeViewTabId, panes, focusPane, ensureLayout } from './panes'
 
+function normalizeStoredAgent(agent: unknown): Agent | null {
+  if (agent === 'kimi') return 'kimicode'
+  return agent === 'claude' || agent === 'codex' || agent === 'agy' || agent === 'opencode' || agent === 'grok' || agent === 'kimicode'
+    ? agent
+    : null
+}
+
 let nextViewTabId = 1
 
 export interface ViewTab {
@@ -285,9 +292,12 @@ export function loadSavedViewTabs(): { tabs: SavedViewTab[]; activeIdx: number |
     if (!raw) return { tabs: [], activeIdx: null }
     const data = JSON.parse(raw)
     if (!data || !Array.isArray(data.tabs)) return { tabs: [], activeIdx: null }
-    const valid = data.tabs.filter((t: any) => t && t.agent && (
-      (t.type === 'session' && t.session) || t.type === 'chat' || (t.type === 'git' && t.gitCwd)
-    )) as SavedViewTab[]
+    const valid = data.tabs.flatMap((t: any): SavedViewTab[] => {
+      const agent = normalizeStoredAgent(t?.agent)
+      return agent && ((t.type === 'session' && t.session) || t.type === 'chat' || (t.type === 'git' && t.gitCwd))
+        ? [{ ...t, agent } as SavedViewTab]
+        : []
+    })
     const seen = new Set<string>()
     const deduped: SavedViewTab[] = []
     for (let i = valid.length - 1; i >= 0; i--) {

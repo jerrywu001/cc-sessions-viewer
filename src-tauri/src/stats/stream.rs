@@ -89,11 +89,12 @@ fn run_worker(
     request_id: u64,
 ) -> Result<crate::types::AgentStats, String> {
     let agents_to_scan: Vec<&'static str> = match scope {
-        "all" => vec!["claude", "codex", "grok", "opencode"],
+        "all" => vec!["claude", "codex", "grok", "opencode", "kimicode"],
         "claude" => vec!["claude"],
         "codex" => vec!["codex"],
         "grok" => vec!["grok"],
         "opencode" => vec!["opencode"],
+        "kimicode" => vec!["kimicode"],
         other => {
             // session 模式：scope = "session:<agent>:<path>"
             if let Some(rest) = other.strip_prefix("session:") {
@@ -108,6 +109,7 @@ fn run_worker(
                         "codex" => Some("codex"),
                         "grok" => Some("grok"),
                         "opencode" => Some("opencode"),
+                        "kimicode" => Some("kimicode"),
                         _ => None,
                     })
                     .collect()

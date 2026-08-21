@@ -6,6 +6,7 @@
 import { computed, reactive, ref } from 'vue'
 import { t } from '../i18n'
 import type { Agent, ChatQuestionItem, ChatQuestionRequest } from '../types'
+import { agentLabel } from '../agentMeta'
 import {
   allQuestionsAnswered,
   parseQuestionAnswers,
@@ -58,7 +59,7 @@ const cur = ref(0) // 当前展示第几题（翻页）
 const total = computed(() => props.request.questions.length)
 const current = computed(() => props.request.questions[cur.value])
 const isLast = computed(() => cur.value >= total.value - 1)
-const agentLabel = computed(() => (props.agent === 'codex' ? 'Codex' : 'Claude'))
+const agentDisplayName = computed(() => agentLabel(props.agent))
 
 const selections = computed<QuestionSelection[]>(() =>
   state.map((s) => ({
@@ -79,27 +80,39 @@ function answerFor(q: ChatQuestionItem): string {
   return historyAnswers.value[q.question] ?? ''
 }
 
-function answerIncludes(answer: string, label: string): boolean {
-  return answer
+function answerParts(q: ChatQuestionItem): string[] {
+  const answer = answerFor(q)
+  if (!answer) return []
+  const labels = q.options.map((option) => option.label)
+  if (labels.includes(answer)) return [answer]
+  // Kimi serializes multi-select values with commas. Do not split if a label
+  // itself contains one: that would mark a different option as selected.
+  if (labels.some((label) => label.includes(','))) return []
+  const parts = answer
     .split(',')
     .map((part) => part.trim())
     .filter(Boolean)
-    .includes(label)
+  return parts.length > 0 && new Set(parts).size === parts.length && parts.every((part) => labels.includes(part))
+    ? parts
+    : []
+}
+
+function answerIncludes(q: ChatQuestionItem, label: string): boolean {
+  return answerParts(q).includes(label)
 }
 
 function hasOtherAnswer(q: ChatQuestionItem): boolean {
   const answer = answerFor(q)
   if (!answer) return false
   const labels = new Set(q.options.map((option) => option.label))
-  return answer
-    .split(',')
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .some((part) => !labels.has(part))
+  if (labels.has(answer)) return false
+  if (labels.size !== q.options.length || q.options.some((option) => option.label.includes(','))) return true
+  const parts = answer.split(',').map((part) => part.trim()).filter(Boolean)
+  return parts.some((part) => !labels.has(part))
 }
 
-function historyStatus(): 'answered' | 'cancelled' | 'completed' | 'pending' {
-  if (!props.historyResult) return 'pending'
+function historyStatus(): 'answered' | 'cancelled' | 'completed' | 'pending' | 'backgroundPending' {
+  if (!props.historyResult) return props.request.background ? 'backgroundPending' : 'pending'
   const text = props.historyResult.text ?? ''
   if (
     props.historyResult.isError ||
@@ -108,6 +121,7 @@ function historyStatus(): 'answered' | 'cancelled' | 'completed' | 'pending' {
     return 'cancelled'
   }
   if (Object.keys(historyAnswers.value).length) return 'answered'
+  if (props.request.background) return 'backgroundPending'
   return 'completed'
 }
 
@@ -188,7 +202,7 @@ function proceed() {
   >
       <div class="q-head">
         <IconHelpCircle class="q-icon" />
-        <span class="q-title">{{ t('chat.question.title', { agent: agentLabel }) }}</span>
+        <span class="q-title">{{ t('chat.question.title', { agent: agentDisplayName }) }}</span>
         <span v-if="readonly" class="q-history-status" :class="`status-${historyStatus()}`">
           <span class="q-history-status-dot"></span>
           <span>{{ historyStatusLabel }}</span>
@@ -219,14 +233,14 @@ function proceed() {
                 v-for="opt in q.options"
                 :key="opt.label"
                 class="q-opt q-opt-static"
-                :class="{ selected: answerIncludes(answerFor(q), opt.label) }"
+                :class="{ selected: answerIncludes(q, opt.label) }"
               >
                 <span class="q-opt-text">
                   <span class="q-opt-label">{{ opt.label }}</span>
                   <span v-if="opt.description" class="q-opt-desc">{{ opt.description }}</span>
                 </span>
                 <IconCheck
-                  v-if="answerIncludes(answerFor(q), opt.label)"
+                  v-if="answerIncludes(q, opt.label)"
                   class="q-history-selected-icon"
                   aria-hidden="true"
                 />

@@ -414,13 +414,23 @@ export interface SavedView {
   mode: 'read' | 'chat'
 }
 
+function normalizeStoredAgent(agent: unknown): Agent | null {
+  if (agent === 'kimi') return 'kimicode'
+  return agent === 'claude' || agent === 'codex' || agent === 'agy' || agent === 'opencode' || agent === 'grok' || agent === 'kimicode'
+    ? agent
+    : null
+}
+
 export function loadSavedViews(): SavedView[] {
   try {
     const raw = localStorage.getItem(SAVED_VIEWS_KEY)
     if (!raw) return []
     const arr = JSON.parse(raw)
     if (!Array.isArray(arr)) return []
-    return arr.filter((v: any) => v && v.agent && v.dir && v.session && v.session.path)
+    return arr.flatMap((v: any): SavedView[] => {
+      const agent = normalizeStoredAgent(v?.agent)
+      return agent && v.dir && v.session?.path ? [{ ...v, agent } as SavedView] : []
+    })
   } catch {
     return []
   }
@@ -447,7 +457,10 @@ export function loadSavedActiveTui(): SavedActiveTui[] {
     if (!raw) return []
     const arr = JSON.parse(raw)
     if (!Array.isArray(arr)) return []
-    return arr.filter((v: any) => v && v.agent && v.dir)
+    return arr.flatMap((v: any): SavedActiveTui[] => {
+      const agent = normalizeStoredAgent(v?.agent)
+      return agent && v.dir ? [{ ...v, agent } as SavedActiveTui] : []
+    })
   } catch {
     return []
   }
@@ -467,9 +480,10 @@ function loadSavedTabs(): SavedTab[] {
     if (!raw) return []
     const arr = JSON.parse(raw)
     if (!Array.isArray(arr)) return []
-    const filtered = arr.filter(
-      (t: any) => t && t.agent && t.cwd,
-    ) as SavedTab[]
+    const filtered = arr.flatMap((t: any): SavedTab[] => {
+      const agent = normalizeStoredAgent(t?.agent)
+      return agent && t.cwd ? [{ ...t, agent } as SavedTab] : []
+    })
     for (let i = 0; i < filtered.length; i++) {
       if (!filtered[i].createdAt) filtered[i].createdAt = i + 1
     }
@@ -484,8 +498,8 @@ export function loadSavedNav(): SavedNav | null {
     const raw = localStorage.getItem(SAVED_NAV_KEY)
     if (!raw) return null
     const v = JSON.parse(raw)
-    if (!v || !v.agent) return null
-    return v
+    const agent = normalizeStoredAgent(v?.agent)
+    return agent ? { ...v, agent } as SavedNav : null
   } catch {
     return null
   }

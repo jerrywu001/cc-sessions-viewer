@@ -38,8 +38,8 @@ import {
   setUseReclaude,
   showToolCalls,
   setShowToolCalls,
-  exportHtmlShowMessageTime,
-  setExportHtmlShowMessageTime,
+  exportShowMessageTime,
+  setExportShowMessageTime,
   showChatRail,
   setShowChatRail,
   chatRailCount,
@@ -241,6 +241,11 @@ const turnHookAgents = computed(() => {
       id: 'grok' as const,
       label: 'Grok Build',
       events: ['UserPromptSubmit', 'Stop', 'StopFailure', 'StopCancelled', 'Notification:idle_prompt', 'Notification:permission_prompt'],
+    },
+    {
+      id: 'kimicode' as const,
+      label: 'Kimi Code',
+      events: ['TurnStarted', 'Stop', 'StopFailure', 'PermissionRequest', 'Interrupt'],
     },
   ]
   return definitions.map((definition) => {
@@ -771,12 +776,12 @@ async function refreshTurnHooks() {
                 <span class="set-toggle-thumb" />
               </span>
             </label>
-            <label class="set-row set-row-clickable" @click.prevent="setExportHtmlShowMessageTime(!exportHtmlShowMessageTime)">
+            <label class="set-row set-row-clickable" @click.prevent="setExportShowMessageTime(!exportShowMessageTime)">
               <div class="set-row-text">
-                <div class="set-row-title">{{ t('settings.exportHtmlShowMessageTime') }}</div>
-                <p class="set-row-desc">{{ t('settings.exportHtmlShowMessageTimeDesc') }}</p>
+                <div class="set-row-title">{{ t('settings.exportShowMessageTime') }}</div>
+                <p class="set-row-desc">{{ t('settings.exportShowMessageTimeDesc') }}</p>
               </div>
-              <span class="set-toggle-track set-row-control" :class="{ on: exportHtmlShowMessageTime }">
+              <span class="set-toggle-track set-row-control" :class="{ on: exportShowMessageTime }">
                 <span class="set-toggle-thumb" />
               </span>
             </label>
@@ -1186,20 +1191,20 @@ async function refreshTurnHooks() {
               <p class="set-group-desc">{{ t('settings.launchArgsDesc') }}</p>
             </div>
             <div class="set-launch-args">
-              <div class="set-launch-args-row" v-for="a in (['claude', 'codex', 'grok', 'agy', 'opencode'] as const)" :key="a">
+              <div class="set-launch-args-row" v-for="a in (['claude', 'codex', 'grok', 'kimicode', 'agy', 'opencode'] as const)" :key="a">
                 <component :is="agentIcons[a]" class="set-launch-args-icon" />
                 <input
                   class="set-launch-args-input"
                   :value="launchArgs[a]"
                   @input="setLaunchArgs(a, ($event.target as HTMLInputElement).value)"
-                  :placeholder="{ claude: '--dangerously-skip-permissions', codex: '--yolo', grok: '--yolo', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a]"
+                  :placeholder="{ claude: '--dangerously-skip-permissions', codex: '--yolo', grok: '--yolo', kimicode: '', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a]"
                   spellcheck="false"
                 />
                 <button
                   v-if="!launchArgs[a]"
                   class="set-launch-args-fill"
                   v-tooltip="t('settings.launchArgsFill')"
-                  @click="setLaunchArgs(a, { claude: '--dangerously-skip-permissions', codex: '--yolo', grok: '--yolo', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a])"
+                  @click="setLaunchArgs(a, { claude: '--dangerously-skip-permissions', codex: '--yolo', grok: '--yolo', kimicode: '', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a])"
                 >↵</button>
               </div>
             </div>

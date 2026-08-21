@@ -54,7 +54,7 @@ pub fn lookup(model: &str) -> Option<ModelCosts> {
         return None;
     }
 
-    // 1) 候选键：原名 / 剥 @+date 后的整名 / canonical（去 provider+pin+date） / alias 解析
+    // 1) 候选键：原名 / 剥 @+date 后的整名 / 去掉任意层 provider 前缀后的模型 ID。
     let mut with_prefix = model.to_string();
     if let Some(pos) = with_prefix.find('@') {
         with_prefix.truncate(pos);
@@ -62,13 +62,20 @@ pub fn lookup(model: &str) -> Option<ModelCosts> {
     if let Some(s) = strip_trailing_yyyymmdd(&with_prefix) {
         with_prefix = s;
     }
-    let canon = resolve_alias(&canonical(model));
+    // Provider prefixes are transport metadata for known providers. Keep
+    // user-owned/local endpoints isolated unless the table has an exact row.
+    let canon = if has_isolated_provider_prefix(&with_prefix) {
+        None
+    } else {
+        Some(resolve_alias(model_id_without_provider(&with_prefix)))
+    };
 
-    for key in [model, with_prefix.as_str(), canon.as_str()] {
+    for key in [model, with_prefix.as_str()] {
         if let Some(v) = table.get(key) {
             return Some(*v);
         }
     }
+    let canon = canon?;
 
     // 2) 前缀匹配：以 canonical 为目标，找表中最长且形如 `<canon>` 或 `<canon>-...` 的 key。
     //    `gpt-5-mini` 命中表里的 `gpt-5-mini`，不会塌成 `gpt-5`；
@@ -86,9 +93,10 @@ pub fn lookup(model: &str) -> Option<ModelCosts> {
 
 /// 严格价格查询：只接受精确 ID 及可证明安全的规范化形式，不做系列前缀推断。
 ///
-/// Grok 会允许用户配置自定义 endpoint/model。`custom/grok-3` 不能因为末段看起来像
-/// 官方模型就套用 xAI 价格，因此只有裸模型 ID和明确的 `xai/` provider 前缀可以
-/// 规范化；精确查询失败后，额外允许 `*-free` 去后缀查其基础模型。
+/// Grok 会允许用户配置自定义 endpoint/model。普通 provider 前缀（包括多级网关）
+/// 只是传输元数据，可以按末段模型 ID 规范化；`custom/`、`ollama/`、`local/`
+/// 及其多级前缀不能因为末段看起来像官方模型就套用官方价格。精确查询失败后，
+/// 额外允许 `*-free` 去后缀查其基础模型。
 pub fn lookup_strict(model: &str) -> Option<ModelCosts> {
     if model.is_empty() {
         return None;
@@ -113,9 +121,13 @@ pub fn lookup_strict(model: &str) -> Option<ModelCosts> {
         candidates.push(unpinned.clone());
     }
 
-    let lower = unpinned.to_ascii_lowercase();
-    if !unpinned.contains('/') || lower.starts_with("xai/") {
-        let canon = resolve_alias(&canonical(&unpinned));
+    // Provider prefixes are transport metadata, not part of the model ID.
+    // Match `deepseek/deepseek-v4-flash`, `gateway/foo/model`, etc. against
+    // the same source/opencode price row. Keep custom endpoints isolated so a
+    // user-owned `custom/grok-*` model cannot inherit an official price.
+    let custom_endpoint = has_isolated_provider_prefix(&unpinned);
+    if !custom_endpoint {
+        let canon = resolve_alias(model_id_without_provider(&unpinned));
         if !candidates.contains(&canon) {
             candidates.push(canon);
         }
@@ -304,6 +316,21 @@ fn resolve_alias(name: &str) -> String {
         }
     }
     name.to_string()
+}
+
+fn model_id_without_provider(model: &str) -> &str {
+    model.rsplit('/').next().unwrap_or(model)
+}
+
+/// `custom`, `ollama`, and `local` identify user-owned endpoints. They may
+/// appear after a gateway prefix (`gateway/custom/model`) and must not inherit
+/// an official provider's price by suffix matching.
+fn has_isolated_provider_prefix(model: &str) -> bool {
+    model.split('/').rev().skip(1).any(|provider| {
+        provider.eq_ignore_ascii_case("custom")
+            || provider.eq_ignore_ascii_case("ollama")
+            || provider.eq_ignore_ascii_case("local")
+    })
 }
 
 // ---------- 动态层（models.dev 数据镜像 + 原站兜底） ----------
@@ -1093,7 +1120,7 @@ mod tests {
             canonical("openrouter/anthropic/claude-opus-4-6"),
             "anthropic/claude-opus-4-6"
         );
-        // 注意：canonical 只剥第一段 provider；remote_lookup 会再用整名查一次
+        // 注意：canonical 只剥第一段 provider；lookup 会按末段模型 ID 处理多级前缀。
     }
 
     #[test]
@@ -1148,6 +1175,37 @@ mod tests {
                 None,
                 "custom endpoints must not inherit official xAI pricing"
             );
+        });
+    }
+
+    #[test]
+    fn strict_lookup_supports_known_direct_provider_prefixes() {
+        let rate = opus_4_7_costs();
+        with_remote(&[("deepseek-v4-flash", rate)], || {
+            assert_eq!(lookup_strict("deepseek/deepseek-v4-flash"), Some(rate));
+            assert_eq!(
+                lookup_strict("gateway/deepseek/deepseek-v4-flash"),
+                Some(rate)
+            );
+            assert_eq!(lookup_strict("custom/deepseek-v4-flash"), None);
+        });
+    }
+
+    #[test]
+    fn lookup_supports_multi_level_prefixes_without_leaking_local_prices() {
+        let rate = opus_4_7_costs();
+        with_remote(&[("deepseek-v4-flash", rate)], || {
+            assert_eq!(
+                lookup("gateway/deepseek/deepseek-v4-flash@20260818"),
+                Some(rate)
+            );
+            assert_eq!(
+                lookup("gateway/custom/deepseek-v4-flash"),
+                None,
+                "custom endpoints must not inherit official pricing"
+            );
+            assert_eq!(lookup("gateway/ollama/deepseek-v4-flash"), None);
+            assert_eq!(lookup("gateway/local/deepseek-v4-flash"), None);
         });
     }
 

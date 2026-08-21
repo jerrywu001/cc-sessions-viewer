@@ -104,6 +104,7 @@ pub mod agy;
 pub mod claude;
 pub mod codex;
 pub mod grok;
+pub mod kimi;
 pub mod opencode;
 
 /// A session's on-disk storage boundary.
@@ -544,6 +545,29 @@ pub trait SessionSource: Send + Sync {
         if !crate::util::is_jsonl(entry_path) {
             return Err("Restore target is not a JSONL file".to_string());
         }
+        Ok(())
+    }
+
+    /// Agent-owned metadata which must travel with a trashed storage unit.
+    /// Directory sources can use this for sidecar state such as a session
+    /// index row, without leaking their storage format into `trash.rs`.
+    fn trash_metadata(&self, _unit: &SessionStorageUnit) -> Result<Value, String> {
+        Ok(Value::Null)
+    }
+
+    /// Commit source-specific cleanup only after the storage unit has moved to
+    /// trash. A failure causes `trash.rs` to move the unit back to its source.
+    fn after_soft_delete(
+        &self,
+        _unit: &SessionStorageUnit,
+        _metadata: &Value,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Restore source-specific metadata after a storage unit returns to its
+    /// original location. A failure causes `trash.rs` to return it to trash.
+    fn after_restore(&self, _unit: &SessionStorageUnit, _metadata: &Value) -> Result<(), String> {
         Ok(())
     }
 
@@ -1009,6 +1033,7 @@ pub fn source(agent: &str) -> Result<Box<dyn SessionSource>, String> {
         "claude" => Ok(Box::new(claude::ClaudeSource)),
         "codex" => Ok(Box::new(codex::CodexSource)),
         "grok" => Ok(Box::new(grok::GrokSource)),
+        "kimicode" | "kimi" => Ok(Box::new(kimi::KimiSource)),
         "opencode" => Ok(Box::new(opencode::OpencodeSource)),
         other => Err(format!("Unknown agent: {other}")),
     }
