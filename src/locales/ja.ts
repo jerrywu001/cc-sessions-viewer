@@ -533,6 +533,8 @@ export default {
 
   'toast.moved': 'ゴミ箱へ移動しました',
   'toast.renamed': '名前を変更しました',
+  'toast.kimiRenamed': 'Viewer 内で名前を変更しました。Kimi CLI とのタイトル同期は引き続き調査中です。',
+  'toast.kimiRenameActiveTerminal': 'この Kimi セッションは内蔵ターミナルで実行中です。先に閉じるか、ターミナルで /rename を実行してください。',
   'toast.tabsCleared': 'すべてのタブを削除しました',
   'toast.renameFail': '名前の変更に失敗: {e}',
   'toast.projDeleted': 'プロジェクトをゴミ箱へ移動しました',
@@ -653,6 +655,7 @@ export default {
   'settings.cli.default': 'デフォルト',
   'settings.cli.healthOk': '設定を確認済み',
   'settings.cli.healthFailed': '設定エラー',
+  'settings.cli.kimiVersionStatusHint': 'Kimi Code を検出し、kimi doctor は成功しました。Kimi は自身で更新を管理するため、このアプリは最新バージョンの照会や自動アップグレードを行いません。',
   'settings.cli.platform.macos': 'macOS',
   'settings.cli.platform.windows': 'Windows',
   'settings.cli.platform.linux': 'Linux',

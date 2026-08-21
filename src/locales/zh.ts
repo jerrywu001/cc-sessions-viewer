@@ -529,6 +529,8 @@ export default {
 
   'toast.moved': '已移到回收站',
   'toast.renamed': '已重命名',
+  'toast.kimiRenamed': 'Viewer 中已重命名；Kimi CLI 的标题同步问题仍待修复。',
+  'toast.kimiRenameActiveTerminal': '该 Kimi 会话正在内嵌终端中运行。请先关闭终端，或在终端内执行 /rename。',
   'toast.tabsCleared': '所有标签已清除',
   'toast.renameFail': '重命名失败：{e}',
   'toast.projDeleted': '项目已全部移到回收站',
@@ -650,6 +652,7 @@ export default {
   'settings.cli.default': '默认',
   'settings.cli.healthOk': '配置可用',
   'settings.cli.healthFailed': '配置失败',
+  'settings.cli.kimiVersionStatusHint': '已检测到 Kimi Code 且 kimi doctor 通过。Kimi 由自身管理更新，应用不会自动升级或检查远程最新版本。',
   'settings.cli.platform.macos': 'macOS',
   'settings.cli.platform.windows': 'Windows',
   'settings.cli.platform.linux': 'Linux',

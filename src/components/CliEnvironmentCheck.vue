@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { t } from '../i18n'
-import { agentIcons } from './icons'
+import { agentIcons, IconInfo } from './icons'
 import {
   cliVersions,
   loading,
@@ -55,6 +55,12 @@ function platformLabel() {
   if (p.includes('mac')) return 'macOS'
   if (p.includes('win')) return 'Windows'
   return 'Linux'
+}
+
+function versionStatusHint(cli: string, installed: boolean, latestVersion?: string | null) {
+  return cli === 'kimi' && installed && !latestVersion
+    ? t('settings.cli.kimiVersionStatusHint')
+    : ''
 }
 
 function agentIconForCli(cli: string) {
@@ -161,6 +167,15 @@ onMounted(() => {
             :title="info.health.summary || undefined"
           >
             {{ info.health.healthy ? t('settings.cli.healthOk') : t('settings.cli.healthFailed') }}
+          </span>
+          <span
+            v-if="versionStatusHint(info.cli, info.installed, info.latestVersion)"
+            class="ce-version-hint"
+            v-tooltip="versionStatusHint(info.cli, info.installed, info.latestVersion)"
+            :aria-label="versionStatusHint(info.cli, info.installed, info.latestVersion)"
+            tabindex="0"
+          >
+            <IconInfo aria-hidden="true" />
           </span>
         </div>
 
@@ -296,6 +311,22 @@ onMounted(() => {
 .ce-badge-health-error {
   color: var(--red, #c84b4b);
   border-color: color-mix(in srgb, var(--red, #c84b4b) 35%, var(--border));
+}
+.ce-version-hint {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-mute);
+  cursor: help;
+  flex-shrink: 0;
+}
+.ce-version-hint :deep(svg) {
+  width: 14px;
+  height: 14px;
+}
+.ce-version-hint:focus-visible {
+  outline: 1px solid var(--accent, var(--text));
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 /* ---- cards ---- */

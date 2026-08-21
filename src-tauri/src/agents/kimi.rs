@@ -382,6 +382,83 @@ fn prompt_text(value: &Value) -> String {
     }
 }
 
+fn kimi_prompt_image_src(value: &Value) -> Option<String> {
+    let url = value
+        .pointer("/imageUrl/url")
+        .or_else(|| value.pointer("/image_url/url"))
+        .or_else(|| value.get("url"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())?;
+    matches!(url, url if url.starts_with("data:image/") || url.starts_with("http:") || url.starts_with("https:"))
+        .then(|| url.to_string())
+}
+
+/// Kimi's Windows prompt protocol interleaves `{type:"text"}` and
+/// `{type:"image_url", imageUrl:{url:"data:image/..."}}` items. Keep that
+/// order for the transcript; the text-only helper above remains responsible
+/// for list titles and search indexing.
+fn prompt_blocks(value: &Value) -> Vec<Block> {
+    let Some(items) = value.as_array() else {
+        let text = prompt_text(value);
+        return if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![text_block("text", &text)]
+        };
+    };
+
+    let has_image_token = items.iter().any(|item| {
+        item.get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains("[Image #"))
+    });
+    let image_count = items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item.get("type").and_then(Value::as_str),
+                Some("image_url" | "imageUrl" | "image")
+            ) && kimi_prompt_image_src(item).is_some()
+        })
+        .count();
+    let mut image_index = 0usize;
+    let mut blocks = Vec::with_capacity(items.len());
+    for item in items {
+        match item.get("type").and_then(Value::as_str) {
+            Some("image_url" | "imageUrl" | "image") => {
+                let Some(src) = kimi_prompt_image_src(item) else {
+                    continue;
+                };
+                image_index += 1;
+                blocks.push(Block {
+                    kind: "image".to_string(),
+                    image_src: Some(src),
+                    // The Windows wire has no visible image token. This is an
+                    // input image, not an ordinary attachment, so retain the
+                    // UI's pasted-image tag without adding text that Kimi did
+                    // not record. If Kimi did write `[Image #N]`, defer to the
+                    // shared binder to preserve its exact numbering.
+                    inline_placeholder: (!has_image_token && image_count > 0)
+                        .then(|| format!("[Image #{image_index}]")),
+                    ..Default::default()
+                });
+            }
+            _ => {
+                let text = item
+                    .get("text")
+                    .or_else(|| item.get("content"))
+                    .map(prompt_text)
+                    .unwrap_or_default();
+                if !text.is_empty() {
+                    blocks.push(text_block("text", &text));
+                }
+            }
+        }
+    }
+    blocks
+}
+
 fn is_user_prompt(event: &Value) -> bool {
     event
         .pointer("/origin/kind")
@@ -728,8 +805,8 @@ fn parse_main_wire_bytes(bytes: &[u8]) -> Result<Vec<Msg>, String> {
             if !is_user_prompt(&event) {
                 continue;
             }
-            let text = event.get("input").map(prompt_text).unwrap_or_default();
-            if text.is_empty() {
+            let blocks = event.get("input").map(prompt_blocks).unwrap_or_default();
+            if blocks.is_empty() {
                 continue;
             }
             messages.push(Msg {
@@ -742,7 +819,7 @@ fn parse_main_wire_bytes(bytes: &[u8]) -> Result<Vec<Msg>, String> {
                 timestamp: event.get("time").and_then(timestamp_from_millis),
                 model: None,
                 sidechain: false,
-                blocks: vec![text_block("text", &text)],
+                blocks,
                 meta_kind: None,
             });
             continue;
@@ -1345,6 +1422,11 @@ fn rename_session_at(root: &Path, path: &Path, name: &str) -> Result<(), String>
         .ok_or_else(|| "Kimi Code state.json must be a JSON object".to_string())?;
     object.insert("title".to_string(), Value::String(title.to_string()));
     object.insert("isCustomTitle".to_string(), Value::Bool(true));
+    // Kimi CLI normalizes a manually titled session to this exact three-field
+    // combination. Leaving an old `replaceable` kind makes the viewer title
+    // appear correct while Kimi's resume picker can still replace/show it as
+    // an automatic title.
+    object.insert("titleKind".to_string(), Value::String("custom".to_string()));
     if session_revision_stamp(root, &unit.entry_path())? != revision {
         return Err("Kimi Code session changed while preparing rename; try again".to_string());
     }
@@ -2104,7 +2186,7 @@ mod tests {
         assert_eq!(renamed.get("isCustomTitle"), Some(&Value::Bool(true)));
         assert_eq!(
             renamed.get("titleKind"),
-            Some(&Value::String("replaceable".to_string()))
+            Some(&Value::String("custom".to_string()))
         );
         assert_eq!(
             renamed.pointer("/custom/preserved"),
@@ -2582,6 +2664,89 @@ mod tests {
         assert_eq!(
             messages[0].blocks[1].text.as_deref(),
             Some("Please inspect [Image #1] and summarize it")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn renders_windows_inline_prompt_images_without_indexing_the_data_uri() {
+        let root = scratch("windows-inline-image");
+        let wire = create_session(
+            &root,
+            "wd_project",
+            "session_valid",
+            state("id", "/tmp/project", "title"),
+            &["visible prompt"],
+        );
+        append_events(
+            &wire,
+            &[serde_json::json!({
+                "type": "turn.prompt",
+                "promptId": "windows-image",
+                "origin": {"kind": "user"},
+                "input": [
+                    {"type": "text", "text": "hi, "},
+                    {"type": "image_url", "imageUrl": {"url": "data:image/png;base64,AQID"}},
+                    {"type": "text", "text": " , answer hi"},
+                ],
+            })],
+        );
+
+        let messages = read_main_wire(&wire).unwrap();
+        let message = messages.last().unwrap();
+        assert_eq!(message.role, "user");
+        assert_eq!(message.blocks.len(), 3);
+        assert_eq!(message.blocks[0].text.as_deref(), Some("hi,"));
+        assert_eq!(message.blocks[1].kind, "image");
+        assert_eq!(
+            message.blocks[1].image_src.as_deref(),
+            Some("data:image/png;base64,AQID")
+        );
+        assert_eq!(
+            message.blocks[1].inline_placeholder.as_deref(),
+            Some("[Image #1]")
+        );
+        assert_eq!(message.blocks[2].text.as_deref(), Some(", answer hi"));
+
+        let prompts = main_user_prompts(&wire).unwrap();
+        assert_eq!(prompts.last().unwrap().1, "hi,\n, answer hi");
+        assert!(!prompts.last().unwrap().1.contains("AQID"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn keeps_recorded_image_tokens_when_windows_prompt_has_inline_images() {
+        let root = scratch("windows-image-token");
+        let wire = create_session(
+            &root,
+            "wd_project",
+            "session_valid",
+            state("id", "/tmp/project", "title"),
+            &["visible prompt"],
+        );
+        append_events(
+            &wire,
+            &[serde_json::json!({
+                "type": "turn.prompt",
+                "promptId": "windows-image-token",
+                "origin": {"kind": "user"},
+                "input": [
+                    {"type": "text", "text": "[Image #1] inspect this"},
+                    {"type": "image_url", "imageUrl": {"url": "data:image/png;base64,AQID"}},
+                ],
+            })],
+        );
+
+        let messages = KimiSource.read_session(wire.to_str().unwrap()).unwrap();
+        let message = messages.last().unwrap();
+        assert_eq!(
+            message.blocks[0].text.as_deref(),
+            Some("[Image #1] inspect this")
+        );
+        assert_eq!(message.blocks[1].kind, "image");
+        assert_eq!(
+            message.blocks[1].inline_placeholder.as_deref(),
+            Some("[Image #1]")
         );
         let _ = fs::remove_dir_all(root);
     }

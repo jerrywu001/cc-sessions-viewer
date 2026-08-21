@@ -535,6 +535,8 @@ export default {
 
   'toast.moved': 'Moved to Trash',
   'toast.renamed': 'Renamed',
+  'toast.kimiRenamed': 'Renamed in the viewer; Kimi CLI title synchronization is still under investigation.',
+  'toast.kimiRenameActiveTerminal': 'This Kimi session is running in the embedded terminal. Close it first, or run /rename in the terminal.',
   'toast.tabsCleared': 'All tabs cleared',
   'toast.renameFail': 'Rename failed: {e}',
   'toast.projDeleted': 'Project moved to Trash',
@@ -656,6 +658,7 @@ export default {
   'settings.cli.default': 'Default',
   'settings.cli.healthOk': 'Configuration ready',
   'settings.cli.healthFailed': 'Configuration failed',
+  'settings.cli.kimiVersionStatusHint': 'Kimi Code was found and kimi doctor passed. Kimi manages its own updates, so the app does not check the remote latest version or upgrade it automatically.',
   'settings.cli.platform.macos': 'macOS',
   'settings.cli.platform.windows': 'Windows',
   'settings.cli.platform.linux': 'Linux',

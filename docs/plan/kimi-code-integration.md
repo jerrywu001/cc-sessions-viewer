@@ -10,14 +10,19 @@
 - [x] 阶段 2：主 wire 的 user/assistant text/thinking/tool call/tool result 解析，物理顺序、嵌套 result、并发/乱序工具的 `toolCallId` 关联、fallback、搜索边界与安全截断。
 - [x] 阶段 2.1：Kimi AskUserQuestion 的 `multi_select` 规范化、JSON answers/取消/后台等待只读卡片语义，以及共享卡片的 agent label 泛化。
 - [x] 阶段 3 核心：保留未知字段的 `state.json` 标题更新、目录型软删/恢复/硬删、根 `session_index.jsonl` 原子同步与失败回滚；索引发现改为真实 `$KIMI_CODE_HOME/session_index.jsonl` 路径。
-- [x] 阶段 3 完成：基于本机 Kimi Code `0.38.0` 的真实 state 字段（`title`、`isCustomTitle`、`titleKind`）确认 rename 只改前两项并保留未知字段；重命名、软删和永久删除均在写入/移动前复核 state 与全部 wire 的精确 revision。外部 append、state 更新或新增 subagent wire 会取消操作；删除在 index 更新后的二次复核失败时恢复原 index。Kimi 不提供跨进程 session lock，最终 rename/move 系统调用之间仍是 best-effort 的极小竞争窗口。
+- [x] 阶段 3 实现：基于本机 Kimi Code `0.38.0` 的真实 state 字段（`title`、`isCustomTitle`、`titleKind`）实现 rename 原子更新为自定义标题组合（`title`、`isCustomTitle: true`、`titleKind: "custom"`），并保留其他未知字段；重命名、软删和永久删除均在写入/移动前复核 state 与全部 wire 的精确 revision。外部 append、state 更新或新增 subagent wire 会取消操作；删除在 index 更新后的二次复核失败时恢复原 index。同会话内嵌终端运行时拒绝 viewer rename，避免 Kimi TUI 内存标题和 viewer 明显不一致。Kimi CLI 的重命名反向同步尚未通过实机验收，详见“待修复 Bug”。Kimi 不提供跨进程 session lock，最终 rename/move 系统调用之间仍是 best-effort 的极小竞争窗口。
 - [x] 阶段 4：扫描 main/subagent 顶层 `usage.record`、缓存 token 映射、`step.end` 去重、严格定价缺失标识、工具/shell/MCP carrier，以及 session/统计链路汇总。
-- [x] 阶段 5 核心：`Agent`/capability/icon/标签注册、Kimi 默认可见及旧设置迁移、终端启动参数持久化、统计 scope、导出标签与 worktree session 清理；`guiChat=false` 保持不接入聊天协议。
+- [x] 阶段 5 核心：`Agent`/capability/icon/标签注册、Kimi 默认可见及旧设置迁移、终端启动参数持久化（设置快捷填充为 Kimi 官方 `--yolo`）、统计 scope、导出标签与 worktree session 清理；`guiChat=false` 保持不接入聊天协议。
 - [x] 阶段 6：CLI 环境卡注册 Kimi 官方安装命令、登录 shell 的 `kimi --version`、多安装诊断和仅安装后运行的只读 `kimi doctor`；doctor 成功不回传输出，失败摘要会截断并清理敏感值。Kimi 不进入自动升级路径，且升级 API 明确拒绝后台 `kimi upgrade`。内嵌/外部终端继续以结构化 `kimi --session <id>` / `kimi` 在 login + interactive shell 中运行；Rust worktree gate 已包含 Kimi。
 - [x] 阶段 7：Kimi 用户级 `config.toml` 的五项 `[[hooks]]` 安全合并、状态映射、fail-open relay、session ID/cwd 到 main wire 的有限重试解析，以及 Settings hooks inventory、桌面宠物通用状态链路。只移除引用 viewer 当前或旧 relay script 的 hook，顶层类型不兼容或 TOML 无法解析时拒绝写入。
 - [x] 阶段 8：Kimi 纳入 tray enabled-agent 过滤和零活动 summary；README 英文、中文、日文补齐数据根、恢复、统计、目录型删除、hooks、worktree、隐私和 GUI Chat 限制说明。
-- [x] 集成回归修正：应用规范 agent ID 统一为 `kimicode`，保留历史 `kimi` 的 settings、tabs、导出记录和 hook signal 迁移/兼容；CLI 二进制与 `kimi doctor` 仍使用 `kimi`。替换为官方 `public/kimicode.png` 图标；列表和详情视觉上只显示 session ID 最后一段，复制仍返回完整 ID，创建时间不再展示。Kimi `Edit`/`Write`/`MultiEdit` 等文件变更统一使用 Codex 风格路径、变更类型、增删行和 diff 渲染；所有 Kimi tool result 不再渲染为独立详情内容。Kimi 历史读取也接入通用附件后处理，含前置说明文字的现存 `clipboard-*.png` 本地路径会提升为截图，并保留原始 `[#image n]` 标签。
+- [x] 集成回归修正：应用规范 agent ID 统一为 `kimicode`，保留历史 `kimi` 的 settings、tabs、导出记录和 hook signal 迁移/兼容；CLI 二进制与 `kimi doctor` 仍使用 `kimi`。替换为官方 `public/kimicode.png` 图标；列表和详情视觉上只显示 session ID 最后一段，复制仍返回完整 ID，创建时间不再展示。Kimi `Edit`/`Write`/`MultiEdit` 等文件变更统一使用 Codex 风格路径、变更类型、增删行和 diff 渲染；所有 Kimi tool result 不再渲染为独立详情内容。Kimi 历史读取也接入通用附件后处理：POSIX、Windows、UNC 和 extended-length `clipboard-*.png` 本地路径会提升为截图；Windows Kimi 新格式的交错 `image_url.imageUrl.url=data:image/...` 也按原始图文顺序渲染。原始 `[#image n]` / `[Image #n]` 标签保持不变，未记录标签的内联图片仅显示贴图标识，不虚构正文。
 - [x] 统计与价格回归修正：统计 scope 增加规范名称 `kimicode`；模型价格查找支持任意层普通 provider 前缀（如 `deepseek/...`、`gateway/deepseek/...`），并继续使用已合并的原生 provider、OpenCode 和 models.dev 数据。`custom/`、`ollama/`、`local/`（包括多级网关前缀）不会误继承官方同名模型价格；只有严格查价仍未命中时才标记为缺少价格。
+
+## 待修复 Bug
+
+- [ ] **Viewer 改名无法反向同步到 Kimi CLI。** 实机复现：在 viewer 将 `session_57e7460b-4876-4a76-a417-6b7bf386a138` 改为“熟悉这个会话5”后，`state.json` 已为 `title: "熟悉这个会话5"`、`isCustomTitle: true`、`titleKind: "custom"`，但退出并重启 Kimi 后执行 `/sessions` 仍显示旧标题“熟悉这个会话3”。反方向从 Kimi 执行 `/rename` 后，viewer 能正确发现新标题。待重新抓取 Kimi `/rename` 的完整磁盘副作用、定位 CLI `/sessions` 的实际标题来源，并以同一会话的双向实机回归作为关闭条件；在修复前，不能将 viewer rename 宣称为与 Kimi CLI 同步。
+- [ ] **Kimi hooks 未正确更新内嵌终端标签的三点运行状态。** 截图中 Kimi 终端 tab 标题右侧的紫色三点，即 `TerminalStrip` 的 `term-tab-status-working`，在 Kimi 运行、等待权限、完成、失败和中断后未能由 hooks 可靠推进到对应状态或清除。`config.toml` hook 合并、relay 和状态映射代码已存在；待采集 Kimi 实际 hook 环境变量、stdin/stdout payload 与执行日志，逐项验证 relay 接收、session ID/cwd 到 wire 的解析、signal 写入以及终端 tab 的前端订阅。五状态端到端回归通过前，阶段 7 只能视为实现存在，不能视为功能验收通过。
 
 ## 目标与范围
 
@@ -174,7 +179,7 @@ KIMI_CODE_HOME
 
 涉及：`src-tauri/src/agents/mod.rs`、`src-tauri/src/agents/kimi.rs`、`src-tauri/src/trash.rs`、必要的 `src-tauri/src/lib.rs` 调用点。
 
-1. 已完成：本机 Kimi Code `0.38.0` 的真实 session state 确认标题字段为 `title`、`isCustomTitle` 与保留型 `titleKind`；rename 原子更新前两项并保留 `titleKind`、`custom` 等未知字段。由于 Kimi 未提供跨版本兼容承诺，后续 CLI 大版本升级仍需复验实际 `/title` 写入格式。
+1. 已完成：本机 Kimi Code `0.38.0` 的真实 session state 确认自定义标题字段组合为 `title`、`isCustomTitle: true`、`titleKind: "custom"`；rename 原子更新该组合，并保留 `custom` 等其他未知字段。由于 Kimi 未提供跨版本兼容承诺，后续 CLI 大版本升级仍需复验实际 `/title` 写入格式。
 2. `rename_session` 保留 `state.json` 的未知字段，仅原子更新官方确认的 title/custom-title 字段；沿用 `validate_rename_name`，写入失败不能留下截断 JSON。
 3. 扩展 `SessionSource` 的回收站扩展契约，使 directory source 能在移动前提供额外 metadata，并在软删、恢复、hard delete 后完成自有索引维护。该扩展应保持现有文件型 agent 无感。
 4. 软删 Kimi session 时：

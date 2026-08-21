@@ -1197,14 +1197,14 @@ async function refreshTurnHooks() {
                   class="set-launch-args-input"
                   :value="launchArgs[a]"
                   @input="setLaunchArgs(a, ($event.target as HTMLInputElement).value)"
-                  :placeholder="{ claude: '--dangerously-skip-permissions', codex: '--yolo', grok: '--yolo', kimicode: '', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a]"
+                  :placeholder="{ claude: '--dangerously-skip-permissions', codex: '--yolo', grok: '--yolo', kimicode: '--yolo', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a]"
                   spellcheck="false"
                 />
                 <button
                   v-if="!launchArgs[a]"
                   class="set-launch-args-fill"
                   v-tooltip="t('settings.launchArgsFill')"
-                  @click="setLaunchArgs(a, { claude: '--dangerously-skip-permissions', codex: '--yolo', grok: '--yolo', kimicode: '', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a])"
+                  @click="setLaunchArgs(a, { claude: '--dangerously-skip-permissions', codex: '--yolo', grok: '--yolo', kimicode: '--yolo', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a])"
                 >↵</button>
               </div>
             </div>

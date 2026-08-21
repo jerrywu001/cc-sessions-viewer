@@ -1156,6 +1156,17 @@ const renameModal = ref<RenameState>({
   defaultTitle: '',
 })
 const renaming = ref(false)
+
+function hasActiveKimiTerminal(sessionPath: string) {
+  return tuiTabs.value.some(
+    tab =>
+      tab.agent === 'kimicode'
+      && !tab.isShell
+      && isTabProcessAlive(tab)
+      && sessionPathsEqual(tab.sessionPath, sessionPath),
+  )
+}
+
 function openRename(s: SessionMeta) {
   renameModal.value = {
     show: true,
@@ -1248,6 +1259,13 @@ async function confirmRename() {
     notify(t('toast.renamed'))
     return
   }
+  // Kimi only updates its in-memory session title through its own `/rename`
+  // RPC. An external state.json write is durable, but an embedded Kimi TUI
+  // keeps its old title until restart.
+  if (m.agent === 'kimicode' && hasActiveKimiTerminal(m.path)) {
+    notify(t('toast.kimiRenameActiveTerminal'), true)
+    return
+  }
   renaming.value = true
   try {
     await api.renameSession(m.agent, m.path, name)
@@ -1273,7 +1291,7 @@ async function confirmRename() {
     setViewTitle(m.agent, m.id || m.path, name)
     syncTabTitleBySessionPath(m.agent, m.path, name)
     m.show = false
-    notify(t('toast.renamed'))
+    notify(m.agent === 'kimicode' ? t('toast.kimiRenamed') : t('toast.renamed'))
     saveTabState()
   } catch (e) {
     notify(t('toast.renameFail', { e: String(e) }), true)
