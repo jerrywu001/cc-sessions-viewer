@@ -1787,8 +1787,8 @@ mod tests {
             index,
             format!(
                 "{}\n{}\n",
-                serde_json::json!({"sessionDir": valid}).to_string(),
-                serde_json::json!({"sessionDir": "/tmp/not-kimi-session"}).to_string(),
+                serde_json::json!({"sessionDir": valid}),
+                serde_json::json!({"sessionDir": "/tmp/not-kimi-session"}),
             ),
         )
         .unwrap();

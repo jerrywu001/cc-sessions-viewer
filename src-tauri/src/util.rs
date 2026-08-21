@@ -1190,6 +1190,7 @@ pub fn edge_reference_flags(text: &str, refs: &[(usize, usize)]) -> Vec<bool> {
     remove
 }
 
+#[cfg(test)]
 fn lift_paths_from_text(text: &str) -> (Vec<Block>, String) {
     lift_paths_from_text_inner(text, false)
 }
@@ -1598,7 +1599,10 @@ Only after the original task is complete, process this follow-up in the order re
         );
         assert_eq!(parse_line_as_path("@\"/abs/path\"").unwrap(), "/abs/path");
         assert_eq!(parse_line_as_path("not_a_path"), None);
-        assert_eq!(parse_line_as_path("https://vjs.zencdn.net/v/oceans.mp4"), None);
+        assert_eq!(
+            parse_line_as_path("https://vjs.zencdn.net/v/oceans.mp4"),
+            None
+        );
     }
 
     #[test]
