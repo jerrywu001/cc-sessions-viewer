@@ -30,7 +30,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown))
 <template>
   <Teleport to="body">
     <Transition name="fade">
-      <div v-if="show" class="overlay overlay-confirm" @click.self="emit('cancel')">
+      <div v-if="show" class="app-overlay app-overlay-confirm" @click.self="emit('cancel')">
         <div class="modal am-modal" role="dialog" aria-modal="true">
           <h3>{{ t('chat.autoMode.title') }}</h3>
           <p class="am-body">{{ t('chat.autoMode.body') }}</p>

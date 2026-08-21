@@ -195,6 +195,7 @@ export default {
 
   'chat.back': 'Back',
   'chat.stats': '{u} prompts · {a} replies · created {time}',
+  'chat.statsNoTime': '{u} prompts · {a} replies',
   'chat.role.me': 'Me',
   'chat.role.tool': 'Tool',
   'chat.file.open': 'Open file',
@@ -700,6 +701,8 @@ export default {
   'settings.showToolCalls': 'Show tool calls',
   'settings.showToolCallsDesc':
     'Show process tools such as Bash, Read, and Grep. File changes and prompts that need your input are always shown.',
+  'settings.exportHtmlShowMessageTime': 'Show times in HTML exports',
+  'settings.exportHtmlShowMessageTimeDesc': 'Include creation and message times in exported HTML files. Enabled by default.',
   'settings.showChatRail': 'Show prompt navigation',
   'settings.showChatRailDesc': 'Show the interactive prompt rail beside the conversation.',
   'settings.chatRailCount': 'Navigation markers',

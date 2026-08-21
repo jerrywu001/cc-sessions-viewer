@@ -19,7 +19,7 @@ const emit = defineEmits<{
 
 <template>
   <Transition name="fade">
-    <div v-if="show" class="overlay overlay-confirm" @click.self="emit('cancel')">
+    <div v-if="show" class="app-overlay app-overlay-confirm" @click.self="emit('cancel')">
       <div class="modal">
         <h3>{{ title }}</h3>
         <p>{{ message }}</p>

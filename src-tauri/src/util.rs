@@ -1332,6 +1332,11 @@ fn parse_line_as_path(line: &str) -> Option<String> {
     if s.is_empty() {
         return None;
     }
+    // A prompt can legitimately contain a URL ending in a familiar file extension
+    // (for example a Markdown media URL). It is prose, never a local attachment.
+    if s.contains("://") {
+        return None;
+    }
 
     let is_abs = s.starts_with('/')
         || s.starts_with('\\')
@@ -1533,6 +1538,15 @@ Only after the original task is complete, process this follow-up in the order re
         );
         assert_eq!(parse_line_as_path("@\"/abs/path\"").unwrap(), "/abs/path");
         assert_eq!(parse_line_as_path("not_a_path"), None);
+        assert_eq!(parse_line_as_path("https://vjs.zencdn.net/v/oceans.mp4"), None);
+    }
+
+    #[test]
+    fn test_lift_keeps_url_in_prompt_text() {
+        let text = "使用md语法渲染https://vjs.zencdn.net/v/oceans.mp4";
+        let (blocks, remaining) = lift_paths_from_text(text);
+        assert!(blocks.is_empty());
+        assert_eq!(remaining, text);
     }
 
     #[test]

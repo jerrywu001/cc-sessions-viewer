@@ -9,6 +9,7 @@ import type { Msg, Block, SessionMeta, Agent, DiffHunk } from './types'
 import { writeFile } from './api'
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog'
 import { t } from './i18n'
+import { exportHtmlShowMessageTime } from './settings'
 import { formatTime, isCaveatOnlyMsg, parseSystemEvent, renderText, cleanMetaText, metaKindIsPre, parseMetaFields, parseTeammateMessage, stripImagePlaceholders } from './format'
 import {
   highlightJsonInPlace,
@@ -636,6 +637,19 @@ img.msg-image {
   border-radius: 10px; object-fit: contain;
 }
 img.msg-image:hover { border-color: var(--border-strong); }
+img.md-image, video.md-video {
+  display: block;
+  width: auto; height: auto;
+  max-width: min(100%, 560px); max-height: 520px;
+  margin: 8px 0;
+  object-fit: contain;
+}
+img.md-image { cursor: zoom-in; }
+video.md-video {
+  width: min(100%, 560px);
+  aspect-ratio: 16 / 9;
+  background: #000;
+}
 /* Lightbox：fixed 覆盖层，不开就 display:none；img 居中且按视口尺寸限缩。 */
 .csv-lightbox {
   position: fixed; inset: 0;
@@ -1196,6 +1210,10 @@ function toolResultLabel(b: Block): string {
   return `📤 ${escapeHtml(t('tool.result'))}`
 }
 
+function exportedMessageTime(timestamp?: string): string {
+  return exportHtmlShowMessageTime.value && timestamp ? escapeHtml(formatTime(timestamp)) : ''
+}
+
 function blockToHtml(
   b: Block,
   ctx: { resultByToolId: Map<string, Block>; inlinedIds: Set<string>; renderCodexPluginMentions?: boolean },
@@ -1264,13 +1282,14 @@ function msgToHtml(
   // System event row — centered, no avatar, no bubble.
   const sysText = systemEventText(m)
   if (sysText) {
-    const ts = m.timestamp ? ` · ${escapeHtml(formatTime(m.timestamp))}` : ''
+    const timestamp = exportedMessageTime(m.timestamp)
+    const ts = timestamp ? ` · ${timestamp}` : ''
     return `<div class="msg system" data-msg-key="${escapeHtml(key)}"><div class="system-event">${escapeHtml(sysText)}${ts}</div></div>`
   }
   // System-injected user records: labeled tag chip + formatted body, not a "Me"
   // bubble. Notification-style pseudo-XML is rendered as a key/value list.
   if (m.metaKind) {
-    const ts = m.timestamp ? escapeHtml(formatTime(m.timestamp)) : ''
+    const ts = exportedMessageTime(m.timestamp)
     const label = escapeHtml(metaKindLabelText(m.metaKind))
     const pre = metaKindIsPre(m.metaKind)
     const body = m.blocks
@@ -1307,7 +1326,7 @@ function msgToHtml(
   const tag = [
     roleLabel(displayRole, agent),
     m.model ? escapeHtml(m.model) : '',
-    m.timestamp ? escapeHtml(formatTime(m.timestamp)) : '',
+    exportedMessageTime(m.timestamp),
   ]
     .filter(Boolean)
     .join(' · ')
@@ -1414,7 +1433,7 @@ export async function messagesToHtml(
   const title = escapeHtml(session.title)
   const { u, a } = computeStats(messages)
   const statsLine = escapeHtml(
-    t('chat.stats', {
+    t(exportHtmlShowMessageTime.value ? 'chat.stats' : 'chat.statsNoTime', {
       u,
       a,
       time: session.created ? formatTime(session.created) : '—',

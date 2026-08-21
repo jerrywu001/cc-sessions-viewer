@@ -151,6 +151,39 @@ A\boldsymbol c=0.
     expect(renderText('see `https://x.com/` here')).not.toContain('<code><a')
   })
 
+  it('renders Markdown images before links and preserves their alt text', () => {
+    const source = '```markdown\n![picsum placeholder](https://picsum.photos/200/300)\n```\n\n![随机图片](https://picsum.photos/200/300)'
+    const html = renderText(source)
+    expect(html).toContain('<img class="md-image" src="https://picsum.photos/200/300" alt="随机图片"')
+    expect(html).toContain('loading="lazy" decoding="async">')
+    expect(html).toContain('<pre class="code-block" data-lang="markdown"><code>![picsum placeholder](https://picsum.photos/200/300)</code></pre>')
+    expect(html.match(/class="md-image"/g)).toHaveLength(1)
+  })
+
+  it('keeps Markdown images with unsupported source schemes as literal text', () => {
+    const html = renderText('![unsafe](javascript:alert(1))')
+    expect(html).not.toContain('<img')
+    expect(html).toContain('![unsafe](javascript:alert(1))')
+  })
+
+  it('renders Markdown video URLs as an inline player', () => {
+    const html = renderText('![演示视频](https://cdn.example.com/demo.webm?version=1)')
+    expect(html).toContain('<video class="md-video" src="https://cdn.example.com/demo.webm?version=1"')
+    expect(html).toContain('aria-label="演示视频" controls preload="metadata" playsinline></video>')
+    expect(html).not.toContain('<img')
+  })
+
+  it('renders a raw HTML video block through the same safe player', () => {
+    const html = renderText(`<video width="640" height="360" controls>
+  <source src="https://vjs.zencdn.net/v/oceans.mp4" type="video/mp4">
+  Your browser does not support the video tag.
+</video>`)
+    expect(html).toContain('<video class="md-video" src="https://vjs.zencdn.net/v/oceans.mp4"')
+    expect(html).toContain('controls preload="metadata" playsinline></video>')
+    expect(html).not.toContain('&lt;video')
+    expect(html).not.toContain('Your browser does not support')
+  })
+
   // Regression: a backtick-wrapped URL used to let the URL regex swallow the
   // closing backtick, splitting the <a> tag with a <code> and leaving an unclosed
   // <code>/<strong> that leaked into every following sibling (shrinking all later

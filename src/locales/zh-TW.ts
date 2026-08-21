@@ -194,6 +194,7 @@ export default {
 
   'chat.back': '返回',
   'chat.stats': '{u} 輪提問 · {a} 則回覆 · {time} 建立',
+  'chat.statsNoTime': '{u} 輪提問 · {a} 則回覆',
   'chat.role.me': '我',
   'chat.role.tool': '工具',
   'chat.file.open': '開啟檔案',
@@ -694,6 +695,8 @@ export default {
   'settings.showToolCalls': '顯示工具呼叫',
   'settings.showToolCallsDesc':
     '顯示 Bash、Read、Grep 等過程性工具呼叫；檔案變更和需要你確認的互動一律顯示。',
+  'settings.exportHtmlShowMessageTime': 'HTML 匯出顯示時間',
+  'settings.exportHtmlShowMessageTimeDesc': '在匯出的 HTML 中附帶建立和訊息時間，預設開啟。',
   'settings.showChatRail': '顯示提問導覽',
   'settings.showChatRailDesc': '在對話左側顯示可互動的提問導覽。',
   'settings.chatRailCount': '導覽瞄點數量',

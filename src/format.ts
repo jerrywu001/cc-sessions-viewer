@@ -18,7 +18,11 @@ function escapeHtmlAttr(s: string): string {
 // Backtick is excluded so a bare URL never swallows the closing backtick of an
 // inline-code span (`https://x`) — that used to desync all later code/strong tags.
 const URL_RE = /https?:\/\/[^\s<>&)}\]`]+/g
+const MD_MEDIA_RE = /!\[([^\]\n]*)\]\((<[^>\n]+>|[^)\n]+)\)/g
 const MD_LINK_RE = /\[([^\]\n]+)\]\((<[^>\n]+>|[^)\n]+)\)/g
+const HTML_VIDEO_OPEN_RE = /^\s*<video\b([^>]*)>/i
+const HTML_VIDEO_CLOSE_RE = /<\/video\s*>/i
+const HTML_SOURCE_RE = /<source\b([^>]*)>/i
 
 // 「文件引用」inline code：形如 lib/a/b.dart:371、./src/x.ts、/abs/y.rs:3:7、C:\p\z.cs。
 // 必须含至少一个路径分隔符（否则 obj.method / package.json 之类会被误判），末段是
@@ -66,11 +70,73 @@ function renderMarkdownLink(label: string, rawTarget: string): string {
   return `<a href="${escapeHtmlAttr(target)}">${text}</a>`
 }
 
+function isMarkdownMediaSource(target: string): boolean {
+  return isExternalUrl(target) || /^data:(?:image|video)\/[a-z0-9.+-]+(?:;[^,]*)?,/i.test(target)
+}
+
+function isMarkdownVideoSource(target: string): boolean {
+  return /^data:video\/[a-z0-9.+-]+(?:;[^,]*)?,/i.test(target)
+    || /\.(?:mp4|webm|ogg|ogv)(?:[?#]|$)/i.test(target)
+}
+
+function renderMarkdownVideo(alt: string, target: string): string {
+  const escapedTarget = escapeHtmlAttr(target)
+  const escapedAlt = escapeHtmlAttr(alt)
+  return `<video class="md-video" src="${escapedTarget}" aria-label="${escapedAlt}" controls preload="metadata" playsinline></video>`
+}
+
+function renderMarkdownMedia(alt: string, rawTarget: string): string | null {
+  const target = rawTarget.trim().replace(/^<|>$/g, '')
+  if (!isMarkdownMediaSource(target)) return null
+  const escapedTarget = escapeHtmlAttr(target)
+  const escapedAlt = escapeHtmlAttr(alt)
+  if (isMarkdownVideoSource(target)) {
+    return renderMarkdownVideo(alt, target)
+  }
+  return `<img class="md-image" src="${escapedTarget}" alt="${escapedAlt}" loading="lazy" decoding="async">`
+}
+
+function htmlAttribute(attrs: string, name: string): string | null {
+  const re = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\\x60]+))`, 'i')
+  const match = re.exec(attrs)
+  return match?.[1] ?? match?.[2] ?? match?.[3] ?? null
+}
+
+function renderRawHtmlVideo(raw: string): string | null {
+  const open = HTML_VIDEO_OPEN_RE.exec(raw)
+  if (!open) return null
+  const source = htmlAttribute(open[1], 'src')
+    ?? htmlAttribute(HTML_SOURCE_RE.exec(raw)?.[1] ?? '', 'src')
+  if (!source || !(isExternalUrl(source) || /^data:video\/[a-z0-9.+-]+(?:;[^,]*)?,/i.test(source))) {
+    return null
+  }
+  return renderMarkdownVideo(htmlAttribute(open[1], 'title') ?? 'Video', source)
+}
+
+function rawHtmlVideoBlock(lines: string[], start: number): { raw: string; next: number } | null {
+  if (!HTML_VIDEO_OPEN_RE.test(lines[start])) return null
+  const block: string[] = []
+  for (let i = start; i < lines.length; i++) {
+    block.push(lines[i])
+    if (HTML_VIDEO_CLOSE_RE.test(lines[i])) return { raw: block.join('\n'), next: i + 1 }
+  }
+  return null
+}
+
 function inline(text: string): string {
+  const media: string[] = []
   const links: string[] = []
-  let s = text.replace(MD_LINK_RE, (_m, label, target) => {
+  const SENT = String.fromCharCode(1)
+  let s = text.replace(MD_MEDIA_RE, (match, alt, target) => {
+    const rendered = renderMarkdownMedia(alt, target)
+    // Keep unsupported media sources literal rather than emitting a browser URL
+    // with an unsafe or unusable scheme.
+    const idx = media.push(rendered ?? escapeHtml(match)) - 1
+    return `${SENT}MEDIA${idx}${SENT}`
+  })
+  s = s.replace(MD_LINK_RE, (_m, label, target) => {
     const idx = links.push(renderMarkdownLink(label, target)) - 1
-    return `\u0001LINK${idx}\u0001`
+    return `${SENT}LINK${idx}${SENT}`
   })
   // Pull inline-code spans out to placeholders BEFORE the URL / emphasis passes.
   // Their contents must stay literal — a URL or `**` inside backticks must not be
@@ -78,7 +144,6 @@ function inline(text: string): string {
   // span and swallow its closing backtick, which would split the emitted tags and
   // misnest `<code>`/`<strong>` into every following sibling. The \x01 sentinel
   // (same convention as the link placeholder above) keeps placeholders collision-safe.
-  const SENT = String.fromCharCode(1)
   const codes: string[] = []
   const files: Array<{ token: string; path: string }> = []
   s = s.replace(/`([^`\n]+)`/g, (_m, code) => {
@@ -157,8 +222,13 @@ function inline(text: string): string {
       return `<span class="inline-file-mention" data-file-ref="${escapeHtmlAttr(file.path)}" title="${escapeHtmlAttr(file.path)}">${escapeHtml(file.token)}</span>`
     })
   }
+  if (media.length) {
+    const mediaRe = new RegExp(`${SENT}MEDIA(\\d+)${SENT}`, 'g')
+    s = s.replace(mediaRe, (_m, n) => media[Number(n)] ?? '')
+  }
   if (links.length) {
-    s = s.replace(/\u0001LINK(\d+)\u0001/g, (_m, n) => links[Number(n)] ?? '')
+    const linkRe = new RegExp(`${SENT}LINK(\\d+)${SENT}`, 'g')
+    s = s.replace(linkRe, (_m, n) => links[Number(n)] ?? '')
   }
   return s
 }
@@ -683,7 +753,7 @@ export function stripImagePlaceholders(raw: string): string {
 const renderTextCache = new Map<string, string>()
 const RENDER_CACHE_MAX = 3000
 
-/** 渲染 Markdown 子集：围栏代码块 + 行内强调 + GFM table。 */
+/** 渲染 Markdown 子集：围栏代码块、图片、行内强调和 GFM table。 */
 export function renderText(raw: string): string {
   const cached = renderTextCache.get(raw)
   if (cached !== undefined) {
@@ -822,6 +892,18 @@ function renderTextImpl(raw: string, cacheNested = true): string {
       }
       i = closed ? j + 1 : j // 未闭合则扫到文件尾（j === lines.length）
       continue
+    }
+    // 原始 HTML 视频是常见的 Markdown 扩展。只读取 video/source 的安全 src，忽略
+    // 其余 HTML 和 fallback 内容；不开放任意 HTML 注入。
+    const rawVideo = rawHtmlVideoBlock(lines, i)
+    if (rawVideo) {
+      const video = renderRawHtmlVideo(rawVideo.raw)
+      if (video) {
+        flushText()
+        html += `<div class="text-run">${video}</div>`
+        i = rawVideo.next
+        continue
+      }
     }
     textBuf.push(lines[i])
     i++

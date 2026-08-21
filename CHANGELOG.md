@@ -6,6 +6,18 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ---
 
+## [v0.3.21]
+
+### Features
+
+- **Configurable HTML export timestamps** — HTML exports include per-message timestamps by default; Settings can now disable them for future exports without changing timestamps shown in the conversation view.
+- **Markdown media rendering** — standard `![alt](https://...)` images, `![alt](https://.../video.mp4)` videos, and safe raw `<video><source></video>` blocks now render inline in conversation details and HTML exports, with image lightbox viewing, native video controls, and an extracted first-frame poster when the video host permits it.
+
+### Bug Fixes
+
+- **Grok Build math rendering** — namespaced the application's modal-overlay styles so they no longer collide with KaTeX's internal `.overlay` elements, preventing vector notation from covering the conversation.
+- **URL prompts preserved** — session-detail parsing no longer mistakes URLs ending in file extensions, including media links, for local file attachments.
+
 ## [v0.3.20]
 
 ### Features

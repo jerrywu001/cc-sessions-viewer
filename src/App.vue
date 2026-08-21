@@ -4447,7 +4447,7 @@ provide<PaneActions>(PaneActionsKey, {
     <Transition name="fade">
       <div
         v-if="isWindows && windowClosePrompt.show"
-        class="overlay overlay-confirm"
+        class="app-overlay app-overlay-confirm"
         @click.self="windowClosePrompt.show = false"
       >
         <div class="modal window-close-modal" role="dialog" aria-modal="true">

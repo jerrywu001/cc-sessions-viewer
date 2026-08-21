@@ -926,6 +926,109 @@ function openLightbox(imgs: string[], index = 0) {
   lightboxVisible.value = true
 }
 
+const markdownVideoPosterCache = new Map<string, Promise<string | null>>()
+const MARKDOWN_VIDEO_POSTER_CACHE_MAX = 64
+
+function captureMarkdownVideoPoster(source: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const probe = document.createElement('video')
+    probe.crossOrigin = 'anonymous'
+    probe.muted = true
+    probe.playsInline = true
+    probe.preload = 'auto'
+
+    const finish = (poster: string | null) => {
+      probe.removeAttribute('src')
+      probe.load()
+      resolve(poster)
+    }
+    const capture = () => {
+      if (!Number.isFinite(probe.duration) || probe.duration <= 0 || !probe.videoWidth || !probe.videoHeight) {
+        finish(null)
+        return
+      }
+      const target = Math.min(1, Math.max(0.1, probe.duration * 0.1), Math.max(0, probe.duration - 0.01))
+      const extractFrame = () => {
+        try {
+          const scale = Math.min(1, 640 / probe.videoWidth)
+          const canvas = document.createElement('canvas')
+          canvas.width = Math.round(probe.videoWidth * scale)
+          canvas.height = Math.round(probe.videoHeight * scale)
+          const context = canvas.getContext('2d')
+          if (!context) {
+            finish(null)
+            return
+          }
+          context.drawImage(probe, 0, 0, canvas.width, canvas.height)
+          finish(canvas.toDataURL('image/jpeg', 0.82))
+        } catch {
+          finish(null)
+        }
+      }
+      if (target > 0) {
+        probe.addEventListener('seeked', extractFrame, { once: true })
+        probe.currentTime = target
+      } else {
+        extractFrame()
+      }
+    }
+
+    probe.addEventListener('loadedmetadata', capture, { once: true })
+    probe.addEventListener('error', () => finish(null), { once: true })
+    probe.src = source
+    probe.load()
+  })
+}
+
+function markdownVideoPoster(source: string): Promise<string | null> {
+  const cached = markdownVideoPosterCache.get(source)
+  if (cached) return cached
+  const poster = captureMarkdownVideoPoster(source)
+  markdownVideoPosterCache.set(source, poster)
+  if (markdownVideoPosterCache.size > MARKDOWN_VIDEO_POSTER_CACHE_MAX) {
+    const oldest = markdownVideoPosterCache.keys().next().value
+    if (oldest) markdownVideoPosterCache.delete(oldest)
+  }
+  return poster
+}
+
+function decorateMarkdownVideoPosters(el: HTMLElement) {
+  for (const video of el.querySelectorAll<HTMLVideoElement>('video.md-video')) {
+    if (video.poster) continue
+    const source = video.currentSrc || video.src
+    if (!source) continue
+    void markdownVideoPoster(source).then((poster) => {
+      if (poster && video.isConnected && !video.poster) video.poster = poster
+    })
+  }
+}
+
+const richHtmlImageClickHandlers = new WeakMap<HTMLElement, (event: MouseEvent) => void>()
+
+function bindRichHtmlImageLightbox(el: HTMLElement) {
+  if (richHtmlImageClickHandlers.has(el)) return
+  const handler = (event: MouseEvent) => {
+    const target = event.target
+    if (!(target instanceof Element)) return
+    const image = target.closest<HTMLImageElement>('img.md-image')
+    if (!image || !el.contains(image)) return
+    const images = Array.from(el.querySelectorAll<HTMLImageElement>('img.md-image'))
+    const urls = images.map((item) => item.currentSrc || item.src).filter(Boolean)
+    const index = images.indexOf(image)
+    if (!urls.length || index < 0) return
+    openLightbox(urls, index)
+  }
+  el.addEventListener('click', handler)
+  richHtmlImageClickHandlers.set(el, handler)
+}
+
+function unbindRichHtmlImageLightbox(el: HTMLElement) {
+  const handler = richHtmlImageClickHandlers.get(el)
+  if (!handler) return
+  el.removeEventListener('click', handler)
+  richHtmlImageClickHandlers.delete(el)
+}
+
 const scrollEl = ref<HTMLElement>()
 const vlistEl = ref<HTMLElement>()
 
@@ -938,6 +1041,10 @@ const vlistEl = ref<HTMLElement>()
 // scrollMargin：列表并非贴着滚动容器顶端（.chat-scroll 有 28px padding-top）,把这段偏移告诉
 // 虚拟器,scrollToIndex 才对得准。挂载后量一次。
 const listScrollMargin = ref(0)
+// 小会话的全部行留在普通文档流中。此时虚拟化的「估算高度 → 实测高度」只有成本，图片、视频和
+// Mermaid 完成异步布局时还会改写累计偏移，造成从底部开始阅读时跳位。长会话才需要它来控制 DOM 数量。
+const VIRTUALIZATION_THRESHOLD = 80
+const shouldVirtualize = computed(() => props.messages.length > VIRTUALIZATION_THRESHOLD)
 function measureListMargin() {
   const s = scrollEl.value
   const v = vlistEl.value
@@ -948,6 +1055,7 @@ function measureListMargin() {
 const rowVirtualizer = useVirtualizer(
   computed(() => ({
     count: props.messages.length,
+    enabled: shouldVirtualize.value,
     getScrollElement: () => scrollEl.value ?? null,
     // 粗估行高（未测量的行用它撑起滚动条几何）；测到真高后自动替换。取接近真实均值,减少大跳
     // 滚动时估算与实际的落差 —— 落差大 → 已测区间修正累积高度 → 滚动位置跳动 + 视口留缝。
@@ -965,11 +1073,14 @@ const rowVirtualizer = useVirtualizer(
     measureElement: (el: Element) => (el as HTMLElement).offsetHeight,
   })),
 )
-const virtualRows = computed(() => rowVirtualizer.value.getVirtualItems())
+const renderedRows = computed(() => {
+  if (shouldVirtualize.value) return rowVirtualizer.value.getVirtualItems()
+  return props.messages.map((_message, index) => ({ index, start: 0 }))
+})
 const totalSize = computed(() => rowVirtualizer.value.getTotalSize())
 // 每个可见行绑到它,TanStack 用 data-index 认领并挂 ResizeObserver 动态测高。
 function measureRow(el: unknown) {
-  if (el instanceof Element) rowVirtualizer.value.measureElement(el)
+  if (shouldVirtualize.value && el instanceof Element) rowVirtualizer.value.measureElement(el)
 }
 
 // 自定义 rAF 平滑滚动：原生 behavior:'smooth' 在长会话里会随距离把动画拉长，
@@ -1063,6 +1174,11 @@ function scrollToBottom() {
   if (props.liveSession) {
     // 直播：列表底部还挂着「流式行 / 运行状态行」等非虚拟项,按 scrollHeight 贴底才包含它们。
     pinToBottomFor(300)
+    return
+  }
+  if (!shouldVirtualize.value) {
+    const el = scrollEl.value
+    if (el) el.scrollTop = el.scrollHeight
     return
   }
   // 只读：末行高度多为估算,直接 scrollHeight 会落不到真底 —— 交给虚拟器逐帧测量对齐到末行。
@@ -1324,6 +1440,7 @@ const innerEl = ref<HTMLElement>()
 // 绑定到该 HTML 容器的 Vue 生命周期：消息行重新挂载或 tab 替换内容时，当前节点直接
 // 完成渲染；滚动事件不再参与富内容处理。
 function decorateRichHtml(el: HTMLElement) {
+  decorateMarkdownVideoPosters(el)
   void renderAllMermaid(el)
   renderAllMath(el)
   void highlightAllCodeBlocks(el)
@@ -1332,12 +1449,16 @@ function decorateRichHtml(el: HTMLElement) {
 const vRichHtml = {
   mounted(el: HTMLElement, binding: DirectiveBinding<string>) {
     el.innerHTML = binding.value
+    bindRichHtmlImageLightbox(el)
     decorateRichHtml(el)
   },
   updated(el: HTMLElement, binding: DirectiveBinding<string>) {
     if (binding.value === binding.oldValue) return
     el.innerHTML = binding.value
     decorateRichHtml(el)
+  },
+  unmounted(el: HTMLElement) {
+    unbindRichHtmlImageLightbox(el)
   },
 }
 
@@ -2165,15 +2286,19 @@ function onDocClick(e: MouseEvent) {
       <div
         ref="vlistEl"
         class="chat-vlist"
-        :style="{ height: totalSize + 'px', position: 'relative', width: '100%' }"
+        :style="shouldVirtualize
+          ? { height: totalSize + 'px', position: 'relative', width: '100%' }
+          : { position: 'relative', width: '100%' }"
       >
       <div
-        v-for="vr in virtualRows"
+        v-for="vr in renderedRows"
         :key="vr.index"
-        :ref="measureRow"
+        :ref="shouldVirtualize ? measureRow : undefined"
         :data-index="vr.index"
         class="msg-vrow"
-        :style="{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vr.start - listScrollMargin}px)` }"
+        :style="shouldVirtualize
+          ? { position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vr.start - listScrollMargin}px)` }
+          : { width: '100%' }"
       >
       <template v-for="m in [messages[vr.index]]" :key="vr.index">
       <div

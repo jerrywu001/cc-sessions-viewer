@@ -20,10 +20,12 @@ import {
   messagesToHtml,
   messagesToMarkdown,
 } from '../src/export'
-import { setLang } from '../src/settings'
+import { setExportHtmlShowMessageTime, setLang } from '../src/settings'
+import { formatTime } from '../src/format'
 
 beforeEach(() => {
   setLang('en')
+  setExportHtmlShowMessageTime(true)
   saveMock.mockReset()
   writeFileMock.mockReset()
 })
@@ -218,6 +220,20 @@ describe('messagesToHtml', () => {
     expect(html.startsWith('<!doctype html>')).toBe(true)
     expect(html).toContain('<title>My Session</title>')
     expect(html).toContain('</html>')
+  })
+
+  it('shows message times in HTML exports by default and can omit them', async () => {
+    const timestamp = '2026-08-20T09:15:00.000Z'
+    const messages = [msg('assistant', [text('timed reply')], { timestamp })]
+    const meta = session({ created: timestamp })
+
+    expect(await messagesToHtml(meta, messages, 'claude')).toContain(formatTime(timestamp))
+
+    setExportHtmlShowMessageTime(false)
+    const html = await messagesToHtml(meta, messages, 'claude')
+    expect(html).not.toContain(formatTime(timestamp))
+    expect(html).toContain('0 prompts · 1 replies')
+    expect(html).not.toContain('created')
   })
 
   it('escapes HTML-significant characters in the title', async () => {

@@ -24,6 +24,7 @@ const ENABLED_AGENTS_KEY = 'enabledAgents:v1'
 const QUICK_OPEN_KEY = 'quickOpenTarget:v1'
 const USE_RECLAUDE_KEY = 'useReclaude:v1'
 const SHOW_TOOL_CALLS_KEY = 'showToolCalls:v1'
+const EXPORT_HTML_SHOW_MESSAGE_TIME_KEY = 'exportHtmlShowMessageTime:v1'
 const CHAT_SPACING_KEY = 'chatSpacing:v1'
 const SHOW_CHAT_RAIL_KEY = 'showChatRail:v1'
 const CHAT_RAIL_COUNT_KEY = 'chatRailCount:v1'
@@ -87,6 +88,13 @@ export const showToolCalls = ref(localStorage.getItem(SHOW_TOOL_CALLS_KEY) === '
 export function setShowToolCalls(v: boolean) {
   showToolCalls.value = v
   localStorage.setItem(SHOW_TOOL_CALLS_KEY, v ? '1' : '0')
+}
+
+/** HTML 会话导出默认附带每条消息的时间；关闭后只影响导出文件，不影响详情页。 */
+export const exportHtmlShowMessageTime = ref(localStorage.getItem(EXPORT_HTML_SHOW_MESSAGE_TIME_KEY) !== '0')
+export function setExportHtmlShowMessageTime(v: boolean) {
+  exportHtmlShowMessageTime.value = v
+  localStorage.setItem(EXPORT_HTML_SHOW_MESSAGE_TIME_KEY, v ? '1' : '0')
 }
 
 export const showChatRail = ref(localStorage.getItem(SHOW_CHAT_RAIL_KEY) !== '0')

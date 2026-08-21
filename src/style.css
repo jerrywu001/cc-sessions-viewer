@@ -3148,6 +3148,33 @@ mark.locate-hl {
   user-select: none;
   white-space: nowrap;
 }
+/* Markdown `![alt](url)` 媒体跟随正文宽度；图片点击可在现有灯箱中查看原图。 */
+.md-image,
+.md-video {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(100%, 560px);
+  max-height: 520px;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  object-fit: contain;
+}
+.md-image {
+  cursor: zoom-in;
+}
+.md-video {
+  /* 视频元数据和提取的 poster 都会异步到达；先固定比例，虚拟列表量高不会跳位。 */
+  width: min(100%, 560px);
+  aspect-ratio: 16 / 9;
+  background: #000;
+}
+.msg-row.user .md-image,
+.msg-row.user .md-video {
+  margin-left: auto;
+}
 /* 文件附件 chip：圆角描边胶囊，文件图标 + 文件名，点击外部打开。浮在气泡上方。 */
 .msg-files {
   display: flex;
@@ -5081,7 +5108,7 @@ body.is-tab-reordering * {
 }
 
 /* ---------- Overlay / modal ---------- */
-.overlay {
+.app-overlay {
   position: fixed;
   inset: 0;
   background: rgba(10, 10, 10, 0.42);
@@ -5094,7 +5121,7 @@ body.is-tab-reordering * {
 }
 /* 确认框是其它弹窗（设置 / 重命名 / 右键菜单触发的删除）派生出来的二级动作，
    必须叠在它们之上，不然用户看不到也点不到。 */
-.overlay-confirm {
+.app-overlay-confirm {
   z-index: 90;
 }
 .modal {

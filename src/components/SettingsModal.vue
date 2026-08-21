@@ -38,6 +38,8 @@ import {
   setUseReclaude,
   showToolCalls,
   setShowToolCalls,
+  exportHtmlShowMessageTime,
+  setExportHtmlShowMessageTime,
   showChatRail,
   setShowChatRail,
   chatRailCount,
@@ -667,7 +669,7 @@ async function refreshTurnHooks() {
 </script>
 
 <template>
-  <div class="overlay">
+  <div class="app-overlay">
     <div class="modal settings-modal">
       <!-- 左侧导航：分组标题 + 图标项，激活项高亮（参考 Claude 客户端设置面板） -->
       <nav class="set-nav">
@@ -766,6 +768,15 @@ async function refreshTurnHooks() {
                 <p class="set-row-desc">{{ t('settings.showToolCallsDesc') }}</p>
               </div>
               <span class="set-toggle-track set-row-control" :class="{ on: showToolCalls }">
+                <span class="set-toggle-thumb" />
+              </span>
+            </label>
+            <label class="set-row set-row-clickable" @click.prevent="setExportHtmlShowMessageTime(!exportHtmlShowMessageTime)">
+              <div class="set-row-text">
+                <div class="set-row-title">{{ t('settings.exportHtmlShowMessageTime') }}</div>
+                <p class="set-row-desc">{{ t('settings.exportHtmlShowMessageTimeDesc') }}</p>
+              </div>
+              <span class="set-toggle-track set-row-control" :class="{ on: exportHtmlShowMessageTime }">
                 <span class="set-toggle-thumb" />
               </span>
             </label>

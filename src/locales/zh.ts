@@ -196,6 +196,7 @@ export default {
 
   'chat.back': '返回',
   'chat.stats': '{u} 轮提问 · {a} 条回复 · {time} 创建',
+  'chat.statsNoTime': '{u} 轮提问 · {a} 条回复',
   'chat.role.me': '我',
   'chat.role.tool': '工具',
   'chat.file.open': '打开文件',
@@ -694,6 +695,8 @@ export default {
   'settings.showToolCalls': '显示工具调用',
   'settings.showToolCallsDesc':
     '显示 Bash、Read、Grep 等过程性工具调用；文件改动和需要你确认的交互始终显示。',
+  'settings.exportHtmlShowMessageTime': 'HTML 导出显示时间',
+  'settings.exportHtmlShowMessageTimeDesc': '在导出的 HTML 中附带创建和消息时间，默认开启。',
   'settings.showChatRail': '显示提问导航',
   'settings.showChatRailDesc': '在对话左侧显示可交互的提问导航。',
   'settings.chatRailCount': '导航瞄点数量',

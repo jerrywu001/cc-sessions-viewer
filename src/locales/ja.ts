@@ -195,6 +195,7 @@ export default {
 
   'chat.back': '戻る',
   'chat.stats': '質問 {u} 件 · 返信 {a} 件 · 作成 {time}',
+  'chat.statsNoTime': '質問 {u} 件 · 返信 {a} 件',
   'chat.role.me': '自分',
   'chat.role.tool': 'ツール',
   'chat.file.open': 'ファイルを開く',
@@ -697,6 +698,8 @@ export default {
   'settings.showToolCalls': 'ツール呼び出しを表示',
   'settings.showToolCallsDesc':
     'Bash、Read、Grep などの処理用ツール呼び出しを表示します。ファイル変更と確認が必要な操作は常に表示されます。',
+  'settings.exportHtmlShowMessageTime': 'HTML エクスポートに時刻を表示',
+  'settings.exportHtmlShowMessageTimeDesc': 'エクスポートする HTML に作成時刻と各メッセージの時刻を含めます。既定で有効です。',
   'settings.showChatRail': 'プロンプトナビを表示',
   'settings.showChatRailDesc': '会話の左側に操作可能なプロンプトナビを表示します。',
   'settings.chatRailCount': 'ナビマーカー数',

@@ -256,7 +256,7 @@ describe('SettingsModal', () => {
 
   it('emits close only from the X button, not the overlay backdrop', async () => {
     const wrapper = factory({ initialTab: 'theme' })
-    await wrapper.find('.overlay').trigger('click')
+    await wrapper.find('.app-overlay').trigger('click')
     expect(wrapper.emitted('close')).toBeUndefined()
     await wrapper.find('.modal-close').trigger('click')
     expect(wrapper.emitted('close')).toHaveLength(1)

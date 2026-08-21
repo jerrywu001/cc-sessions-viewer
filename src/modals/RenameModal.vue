@@ -30,7 +30,7 @@ watch(
 
 <template>
   <Transition name="fade">
-    <div v-if="show" class="overlay" @click.self="emit('cancel')">
+    <div v-if="show" class="app-overlay" @click.self="emit('cancel')">
       <div class="modal rename-modal">
         <h3>{{ t('dialog.rename.title') }}</h3>
         <input
