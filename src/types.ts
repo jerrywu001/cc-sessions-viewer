@@ -443,6 +443,8 @@ export interface ChatQuestionItem {
 export interface ChatQuestionRequest {
   requestId: string
   questions: ChatQuestionItem[]
+  /** Kimi 的后台 AskUserQuestion：即时回执不是最终答案。 */
+  background?: boolean
   keepAfterTurn?: boolean
   localCodexPlanPrompt?: boolean
 }

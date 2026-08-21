@@ -164,3 +164,51 @@ describe('history transcript parsing', () => {
     ).toEqual({ Frameworks: 'Vue,React', 'Build tool': 'Vite' })
   })
 })
+
+describe('Kimi AskUserQuestion history parsing', () => {
+  it('normalizes Kimi snake_case multi-select questions', () => {
+    const request = parseQuestionRequest(
+      JSON.stringify({
+        background: true,
+        questions: [
+          {
+            question: 'Which modes?',
+            header: 'Mode',
+            multi_select: true,
+            options: [
+              { label: 'Safe', description: 'No writes' },
+              { label: 'Fast' },
+            ],
+          },
+        ],
+      }),
+      'kimi-call',
+    )
+
+    expect(request).toMatchObject({
+      requestId: 'kimi-call',
+      background: true,
+      questions: [{ question: 'Which modes?', multiSelect: true }],
+    })
+    expect(request?.questions[0].options).toHaveLength(2)
+  })
+
+  it('rejects malformed or ambiguous historical question payloads', () => {
+    expect(
+      parseQuestionRequest(JSON.stringify({ questions: [{ question: 'Only one', options: [{ label: 'A' }] }] })),
+    ).toBeNull()
+    expect(
+      parseQuestionRequest(
+        JSON.stringify({ questions: [{ question: 'Duplicate', options: [{ label: 'A' }, { label: 'A' }] }] }),
+      ),
+    ).toBeNull()
+  })
+
+  it('accepts Kimi JSON answers before Claude legacy answers', () => {
+    expect(parseQuestionAnswers('{"answers":{"Which modes?":"Safe, Fast"},"note":"done"}')).toEqual({
+      'Which modes?': 'Safe, Fast',
+    })
+    expect(parseQuestionAnswers('"Framework"="Vue,React"')).toEqual({ Framework: 'Vue,React' })
+    expect(parseQuestionAnswers('{"answers":{"Which modes?":true}}')).toEqual({})
+  })
+})

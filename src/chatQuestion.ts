@@ -11,6 +11,15 @@
 
 import type { ChatQuestionItem, ChatQuestionRequest } from './types'
 
+const MAX_QUESTION_INPUT_LENGTH = 64 * 1024
+const MAX_QUESTION_TEXT_LENGTH = 8 * 1024
+const MAX_OPTION_LABEL_LENGTH = 1024
+const MAX_OPTION_DESCRIPTION_LENGTH = 8 * 1024
+
+function shortString(value: unknown, maximum: number): string | null {
+  return typeof value === 'string' && value.trim() && value.length <= maximum ? value.trim() : null
+}
+
 /**
  * 从 Claude transcript 里的 AskUserQuestion tool_use input 提取一个安全的
  * 只读请求。历史记录中的 input 是 JSON 字符串，不能直接把它当成完整的
@@ -27,41 +36,75 @@ export function parseQuestionRequest(
   } catch {
     return null
   }
-  if (!raw || typeof raw !== 'object' || !Array.isArray((raw as { questions?: unknown }).questions)) {
+  if (
+    input.length > MAX_QUESTION_INPUT_LENGTH ||
+    !raw ||
+    typeof raw !== 'object' ||
+    Array.isArray(raw) ||
+    !Array.isArray((raw as { questions?: unknown }).questions)
+  ) {
     return null
   }
 
   const questions = (raw as { questions: unknown[] }).questions
+  if (questions.length < 1 || questions.length > 4) return null
+  const questionTexts = new Set<string>()
+  let invalid = false
+  const normalizedQuestions = questions
     .map((item): ChatQuestionItem | null => {
       if (!item || typeof item !== 'object') return null
       const q = item as Record<string, unknown>
-      if (typeof q.question !== 'string' || !q.question.trim() || !Array.isArray(q.options)) {
+      const question = shortString(q.question, MAX_QUESTION_TEXT_LENGTH)
+      if (!question || questionTexts.has(question) || !Array.isArray(q.options)) {
+        invalid = true
         return null
       }
+      questionTexts.add(question)
+      if (q.options.length < 2 || q.options.length > 4) {
+        invalid = true
+        return null
+      }
+      const labels = new Set<string>()
       const options = q.options
         .map((option): ChatQuestionItem['options'][number] | null => {
           if (!option || typeof option !== 'object') return null
           const o = option as Record<string, unknown>
-          if (typeof o.label !== 'string' || !o.label.trim()) return null
+          const label = shortString(o.label, MAX_OPTION_LABEL_LENGTH)
+          if (!label || labels.has(label)) {
+            invalid = true
+            return null
+          }
+          labels.add(label)
           return {
-            label: o.label,
-            ...(typeof o.description === 'string' ? { description: o.description } : {}),
-            ...(typeof o.preview === 'string' ? { preview: o.preview } : {}),
+            label,
+            ...(shortString(o.description, MAX_OPTION_DESCRIPTION_LENGTH)
+              ? { description: shortString(o.description, MAX_OPTION_DESCRIPTION_LENGTH)! }
+              : {}),
+            ...(shortString(o.preview, MAX_OPTION_DESCRIPTION_LENGTH)
+              ? { preview: shortString(o.preview, MAX_OPTION_DESCRIPTION_LENGTH)! }
+              : {}),
           }
         })
         .filter((option): option is ChatQuestionItem['options'][number] => option !== null)
-      if (!options.length) return null
+      if (invalid || options.length !== q.options.length) return null
       return {
-        question: q.question,
-        ...(typeof q.header === 'string' ? { header: q.header } : {}),
-        ...(q.multiSelect === true ? { multiSelect: true } : {}),
+        question,
+        ...(shortString(q.header, MAX_OPTION_LABEL_LENGTH)
+          ? { header: shortString(q.header, MAX_OPTION_LABEL_LENGTH)! }
+          : {}),
+        ...(q.multiSelect === true || q.multi_select === true ? { multiSelect: true } : {}),
         ...(q.allowOther === false ? { allowOther: false } : {}),
         options,
       }
     })
     .filter((question): question is ChatQuestionItem => question !== null)
 
-  return questions.length ? { requestId, questions } : null
+  if (invalid || normalizedQuestions.length !== questions.length) return null
+  return {
+    requestId,
+    questions: normalizedQuestions,
+    ...((raw as { background?: unknown }).background === true ? { background: true } : {}),
+  }
 }
 
 /**
@@ -70,6 +113,24 @@ export function parseQuestionRequest(
  * 仅用于历史卡片标记已选项，解析失败时返回空对象，不影响消息展示。
  */
 export function parseQuestionAnswers(text: string): Record<string, string> {
+  if (text.length <= MAX_QUESTION_INPUT_LENGTH) {
+    try {
+      const value: unknown = JSON.parse(text)
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const answers = (value as { answers?: unknown }).answers
+        if (answers && typeof answers === 'object' && !Array.isArray(answers)) {
+          const result: Record<string, string> = {}
+          for (const [question, answer] of Object.entries(answers)) {
+            if (typeof answer !== 'string') return {}
+            result[question] = answer
+          }
+          return result
+        }
+      }
+    } catch {
+      // Claude's legacy response is not JSON. Fall through to its quoted pairs.
+    }
+  }
   const answers: Record<string, string> = {}
   const pairRe = /"((?:\\.|[^"\\])*)"\s*=\s*"((?:\\.|[^"\\])*)"/g
   let match: RegExpExecArray | null

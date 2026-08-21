@@ -104,6 +104,7 @@ pub mod agy;
 pub mod claude;
 pub mod codex;
 pub mod grok;
+pub mod kimi;
 pub mod opencode;
 
 /// A session's on-disk storage boundary.
@@ -1009,6 +1010,7 @@ pub fn source(agent: &str) -> Result<Box<dyn SessionSource>, String> {
         "claude" => Ok(Box::new(claude::ClaudeSource)),
         "codex" => Ok(Box::new(codex::CodexSource)),
         "grok" => Ok(Box::new(grok::GrokSource)),
+        "kimi" => Ok(Box::new(kimi::KimiSource)),
         "opencode" => Ok(Box::new(opencode::OpencodeSource)),
         other => Err(format!("Unknown agent: {other}")),
     }

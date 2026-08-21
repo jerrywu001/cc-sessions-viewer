@@ -1,7 +1,15 @@
 # Kimi Code 接入开发计划
 
 日期：2026-08-21  
-状态：待实施
+状态：实施中
+
+## 实施进度
+
+- [x] 阶段 1 核心：`KimiSource`、会话发现、目录型 storage/path 校验、main wire watch target、mtime 锚点、最小用户 prompt 读取与 registry 分派。
+- [ ] 阶段 1 剩余：state/main wire 的原子一致 snapshot、读取前后 revision 重试与 watcher debounce，随 Live tail 一并完成。
+- [x] 阶段 2：主 wire 的 user/assistant text/thinking/tool call/tool result 解析，物理顺序、嵌套 result、并发/乱序工具的 `toolCallId` 关联、fallback、搜索边界与安全截断。
+- [x] 阶段 2.1：Kimi AskUserQuestion 的 `multi_select` 规范化、JSON answers/取消/后台等待只读卡片语义，以及共享卡片的 agent label 泛化。
+- [ ] 阶段 3–8：重命名/回收站、统计、完整前端 agent 接入、CLI、hooks、托盘与文档。
 
 ## 目标与范围
 

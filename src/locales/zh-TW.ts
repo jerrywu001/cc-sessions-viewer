@@ -280,6 +280,7 @@ export default {
   'chat.question.history.cancelled': '已取消',
   'chat.question.history.completed': '已完成',
   'chat.question.history.pending': '未記錄回答',
+  'chat.question.history.backgroundPending': '背景提問，等待回答',
   'chat.composer.attach': '加入附件',
   'chat.composer.addFiles': '加入檔案或圖片',
   'chat.composer.addFolder': '加入資料夾',

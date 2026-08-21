@@ -281,6 +281,7 @@ export default {
   'chat.question.history.cancelled': 'キャンセル済み',
   'chat.question.history.completed': '完了',
   'chat.question.history.pending': '回答の記録なし',
+  'chat.question.history.backgroundPending': 'バックグラウンドの質問、回答待ち',
   'chat.composer.attach': '添付を追加',
   'chat.composer.addFiles': 'ファイルや写真を追加',
   'chat.composer.addFolder': 'フォルダを追加',

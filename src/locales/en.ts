@@ -281,6 +281,7 @@ export default {
   'chat.question.history.cancelled': 'Cancelled',
   'chat.question.history.completed': 'Completed',
   'chat.question.history.pending': 'No response recorded',
+  'chat.question.history.backgroundPending': 'Background question awaiting answer',
   'chat.composer.attach': 'Add attachment',
   'chat.composer.addFiles': 'Add files or photos',
   'chat.composer.addFolder': 'Add folder',
