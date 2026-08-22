@@ -190,6 +190,7 @@ export default {
   'dialog.batchDelete.body': '将 {n} 个会话移到回收站，可随时恢复。',
   'dialog.batchDelete.ok': '移到回收站',
   'toast.batchDeleted': '已将 {n} 个会话移到回收站',
+  'toast.agentsTrimmed': '已按顺序保留前 4 个启用的 Agent，可在设置中调整。',
   'toast.batchExported': '已导出 {n} 个会话到 {dir}',
   'toast.batchExportFail': '导出失败：{e}',
   'toast.batchExportNone': '没有会话被导出',
@@ -698,7 +699,7 @@ export default {
   'settings.quickOpen.chat': 'Chat',
   'settings.section.agents': 'Agent',
   'settings.agentsVisibilityDesc':
-    '把不用的 agent 隐藏掉，让侧栏和主页更清爽。至少保留一个启用。',
+    '把不用的 agent 隐藏掉，让侧栏和主页更清爽。最多启用 4 个，至少保留一个启用。',
   'settings.section.chat': 'Chat',
   'settings.showToolCalls': '显示工具调用',
   'settings.showToolCallsDesc':

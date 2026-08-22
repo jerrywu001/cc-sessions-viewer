@@ -315,9 +315,26 @@ export function setLaunchArgs(agent: keyof LaunchArgs, args: string) {
 
 // ---------- Agent 显隐开关 ----------
 // 只用 cc 的用户可以把 codex 关掉，让侧栏/主页的 agent 切换更清爽。
-// 固定顺序 claude → codex → grok → agy → opencode；至少保留一个启用，否则整个 app 无内容可看。
+// 固定顺序决定旧配置超过上限时的保留优先级；至少保留一个启用，否则整个 app 无内容可看。
 export const ALL_AGENTS: Agent[] = ['claude', 'codex', 'grok', 'kimicode', 'agy', 'opencode']
+export const MAX_ENABLED_AGENTS = 4
 type EnabledAgents = Record<Agent, boolean>
+
+let enabledAgentsWereTrimmed = false
+
+function limitEnabledAgents(agents: EnabledAgents): EnabledAgents {
+  let enabledCount = 0
+  const limited = { ...agents }
+  for (const agent of ALL_AGENTS) {
+    if (!limited[agent]) continue
+    if (enabledCount < MAX_ENABLED_AGENTS) {
+      enabledCount += 1
+    } else {
+      limited[agent] = false
+    }
+  }
+  return limited
+}
 
 function readEnabledAgents(): EnabledAgents {
   const defaults: EnabledAgents = { claude: true, codex: true, grok: true, kimicode: true, agy: false, opencode: false }
@@ -334,7 +351,14 @@ function readEnabledAgents(): EnabledAgents {
         opencode: parsed.opencode ?? true,
       }
       // 防御：localStorage 里若全是 false（脏数据/手改）就回退到默认开启项。
-      if (ALL_AGENTS.some((a) => merged[a])) return merged
+      if (ALL_AGENTS.some((a) => merged[a])) {
+        const limited = limitEnabledAgents(merged)
+        if (ALL_AGENTS.some((a) => limited[a] !== merged[a])) {
+          enabledAgentsWereTrimmed = true
+          localStorage.setItem(ENABLED_AGENTS_KEY, JSON.stringify(limited))
+        }
+        return limited
+      }
     }
   } catch { /* ignore */ }
   return defaults
@@ -347,9 +371,18 @@ export const visibleAgents = computed<Agent[]>(() =>
   ALL_AGENTS.filter((a) => enabledAgents.value[a]),
 )
 
+/** 返回并清除旧配置因超出上限而被自动调整的提示标记。 */
+export function consumeEnabledAgentsTrimmedNotice(): boolean {
+  const wasTrimmed = enabledAgentsWereTrimmed
+  enabledAgentsWereTrimmed = false
+  return wasTrimmed
+}
+
 export function setAgentEnabled(a: Agent, enabled: boolean) {
   // 不允许关掉最后一个启用的 agent。
   if (!enabled && enabledAgents.value[a] && visibleAgents.value.length === 1) return
+  // 上限同样在状态层保障，避免通过非设置页调用绕过。
+  if (enabled && !enabledAgents.value[a] && visibleAgents.value.length >= MAX_ENABLED_AGENTS) return
   enabledAgents.value = { ...enabledAgents.value, [a]: enabled }
   localStorage.setItem(ENABLED_AGENTS_KEY, JSON.stringify(enabledAgents.value))
 }

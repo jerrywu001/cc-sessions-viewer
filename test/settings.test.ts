@@ -391,6 +391,16 @@ describe('agent visibility (enabledAgents / visibleAgents / setAgentEnabled)', (
     expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok', 'kimicode'])
   })
 
+  it('keeps only the first four enabled agents from an older oversized preference', async () => {
+    const mod = await freshAgents(
+      JSON.stringify({ claude: true, codex: true, grok: true, kimicode: true, agy: true, opencode: true }),
+    )
+    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok', 'kimicode'])
+    expect(JSON.parse(localStorage.getItem('enabledAgents:v1')!)).toMatchObject({ agy: false, opencode: false })
+    expect(mod.consumeEnabledAgentsTrimmedNotice()).toBe(true)
+    expect(mod.consumeEnabledAgentsTrimmedNotice()).toBe(false)
+  })
+
   it('setAgentEnabled disables an agent and persists', async () => {
     const mod = await freshAgents()
     mod.setAgentEnabled('grok', false)
@@ -412,6 +422,16 @@ describe('agent visibility (enabledAgents / visibleAgents / setAgentEnabled)', (
     )
     mod.setAgentEnabled('codex', true)
     expect(mod.visibleAgents.value).toEqual(['claude', 'codex'])
+  })
+
+  it('refuses to enable a fifth agent until one is disabled', async () => {
+    const mod = await freshAgents()
+    mod.setAgentEnabled('agy', true)
+    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok', 'kimicode'])
+
+    mod.setAgentEnabled('grok', false)
+    mod.setAgentEnabled('agy', true)
+    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'kimicode', 'agy'])
   })
 
   it('preserves legacy launch args and adds an empty Grok Build value', async () => {

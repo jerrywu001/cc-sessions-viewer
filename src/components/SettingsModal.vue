@@ -4,6 +4,7 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { t } from '../i18n'
 import { agentLabel } from '../agentMeta'
+import type { Agent } from '../types'
 import {
   codexShowArchivedSessions,
   codexShowInternalSessions,
@@ -32,6 +33,7 @@ import {
   visibleAgents,
   setAgentEnabled,
   ALL_AGENTS,
+  MAX_ENABLED_AGENTS,
   quickOpenTarget,
   setQuickOpenTarget,
   useReclaude,
@@ -143,6 +145,9 @@ const shift = isMac ? '⇧' : 'Shift'
 const opt = isMac ? '⌥' : 'Alt'
 const sep = isMac ? '' : '+'
 const k = (parts: string[]) => parts.join(sep)
+const agentToggleDisabled = (agent: Agent) =>
+  (enabledAgents.value[agent] && visibleAgents.value.length === 1)
+  || (!enabledAgents.value[agent] && visibleAgents.value.length >= MAX_ENABLED_AGENTS)
 // 分两组展示：全局（应用级，随处可用）/ 会话（作用于当前会话或其 tab）。
 const shortcutGroups = [
   {
@@ -747,7 +752,7 @@ async function refreshTurnHooks() {
               v-for="a in ALL_AGENTS"
               :key="a"
               class="set-row set-row-clickable"
-              :class="{ disabled: enabledAgents[a] && visibleAgents.length === 1 }"
+              :class="{ disabled: agentToggleDisabled(a) }"
               @click.prevent="setAgentEnabled(a, !enabledAgents[a])"
             >
               <div class="set-row-text">

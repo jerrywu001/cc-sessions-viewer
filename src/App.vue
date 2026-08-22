@@ -22,6 +22,7 @@ import {
   applyTerminalDefault,
   enabledAgents,
   visibleAgents,
+  consumeEnabledAgentsTrimmedNotice,
   quickOpenTarget,
   backgroundImagePath,
   backgroundIsVideo,
@@ -3637,6 +3638,7 @@ watch(
 )
 
 onMounted(() => {
+  if (consumeEnabledAgentsTrimmedNotice()) notify(t('toast.agentsTrimmed'))
   // 恢复上次退出时的侧栏导航状态
   const nav = loadSavedNav()
   if (nav) {

@@ -189,6 +189,7 @@ export default {
   'dialog.batchDelete.body': '{n} 件のセッションをゴミ箱へ移動します。あとで復元できます。',
   'dialog.batchDelete.ok': 'ゴミ箱へ移動',
   'toast.batchDeleted': '{n} 件のセッションをゴミ箱へ移動しました',
+  'toast.agentsTrimmed': '有効なエージェントは順番に先頭 4 件へ調整しました。設定から変更できます。',
   'toast.batchExported': '{n} 件のセッションを {dir} にエクスポートしました',
   'toast.batchExportFail': 'エクスポートに失敗しました：{e}',
   'toast.batchExportNone': 'エクスポートされたセッションはありません',
@@ -701,7 +702,7 @@ export default {
   'settings.quickOpen.chat': 'Chat',
   'settings.section.agents': 'エージェント',
   'settings.agentsVisibilityDesc':
-    '使わないエージェントを非表示にして、サイドバーとホーム画面をすっきりさせます。最低 1 つは有効にしてください。',
+    '使わないエージェントを非表示にして、サイドバーとホーム画面をすっきりさせます。最大 4 つまで有効にでき、最低 1 つは有効にしてください。',
   'settings.section.chat': 'チャット',
   'settings.showToolCalls': 'ツール呼び出しを表示',
   'settings.showToolCallsDesc':

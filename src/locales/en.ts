@@ -189,6 +189,7 @@ export default {
   'dialog.batchDelete.body': 'Move {n} sessions to Trash. You can restore them later.',
   'dialog.batchDelete.ok': 'Move to Trash',
   'toast.batchDeleted': 'Moved {n} sessions to Trash',
+  'toast.agentsTrimmed': 'Only the first 4 enabled agents were kept. You can adjust them in Settings.',
   'toast.batchExported': 'Exported {n} sessions to {dir}',
   'toast.batchExportFail': 'Export failed: {e}',
   'toast.batchExportNone': 'no sessions exported',
@@ -704,7 +705,7 @@ export default {
   'settings.quickOpen.chat': 'Chat',
   'settings.section.agents': 'Agents',
   'settings.agentsVisibilityDesc':
-    "Hide the agents you don't use to keep the sidebar and home screen tidy. At least one must stay enabled.",
+    "Hide the agents you don't use to keep the sidebar and home screen tidy. Enable up to 4; at least one must stay enabled.",
   'settings.section.chat': 'Chat',
   'settings.showToolCalls': 'Show tool calls',
   'settings.showToolCallsDesc':

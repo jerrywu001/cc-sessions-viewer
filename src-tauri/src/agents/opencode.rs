@@ -478,17 +478,24 @@ fn file_part_image_src(p: &Value) -> Option<String> {
     }
 }
 
-static IMAGE_REF_RE: once_cell::sync::Lazy<regex_lite::Regex> =
-    once_cell::sync::Lazy::new(|| regex_lite::Regex::new(r"\[Image \d+\]\s*").unwrap());
+static IMAGE_LABEL_RE: once_cell::sync::Lazy<regex_lite::Regex> =
+    once_cell::sync::Lazy::new(|| regex_lite::Regex::new(r"^\[Image \d+\]$").unwrap());
+
+fn file_part_inline_placeholder(p: &Value) -> Option<String> {
+    let label = p
+        .pointer("/source/text/value")
+        .and_then(Value::as_str)?
+        .trim();
+    IMAGE_LABEL_RE.is_match(label).then(|| label.to_string())
+}
 
 fn part_into_blocks(p: &Value, out: &mut Vec<Block>) {
     match p.get("type").and_then(Value::as_str).unwrap_or("") {
         "text" => {
             if let Some(t) = p.get("text").and_then(Value::as_str) {
-                // opencode 在文本里内联 `[Image N]` 占位符，但图片已从 file part 渲染
-                let cleaned = IMAGE_REF_RE.replace_all(t, "").trim().to_string();
-                if !cleaned.is_empty() {
-                    out.push(text_block("text", &cleaned));
+                // `[Image N]` 是图片与上下文的语义锚点，缩略图已经独立渲染也不能删掉。
+                if !t.trim().is_empty() {
+                    out.push(text_block("text", t));
                 }
             }
         }
@@ -577,6 +584,9 @@ fn part_into_blocks(p: &Value, out: &mut Vec<Block>) {
                 out.push(Block {
                     kind: "image".into(),
                     image_src: Some(src),
+                    // 截图 file part 会在 source.text.value 留下 `[Image N]` 标签。
+                    // 保留它以让前端显示贴图角标，并和正文中的原始标签对应。
+                    inline_placeholder: file_part_inline_placeholder(p),
                     ..Default::default()
                 });
             } else if let Some(name) = p.get("filename").and_then(Value::as_str) {
@@ -1639,7 +1649,13 @@ mod tests {
             "msg_6",
             "prt_11",
             1007,
-            &serde_json::json!({"type":"file","mime":"image/png","filename":"a.png","url":"data:image/png;base64,AAAA"}),
+            &serde_json::json!({
+                "type":"file",
+                "mime":"image/png",
+                "filename":"a.png",
+                "url":"data:image/png;base64,AAAA",
+                "source":{"text":{"value":"[Image 1]"}}
+            }),
         );
         insert_part(
             &conn,
@@ -1647,7 +1663,7 @@ mod tests {
             "msg_6",
             "prt_12",
             1008,
-            &serde_json::json!({"type":"text","text":"look at this"}),
+            &serde_json::json!({"type":"text","text":"look at [Image 1]"}),
         );
         let msgs = read(&conn, "ses_a").unwrap();
         let last = msgs.last().unwrap();
@@ -1657,7 +1673,12 @@ mod tests {
             .as_deref()
             .unwrap()
             .starts_with("data:image/png"));
+        assert_eq!(
+            last.blocks[0].inline_placeholder.as_deref(),
+            Some("[Image 1]")
+        );
         assert_eq!(last.blocks[1].kind, "text");
+        assert_eq!(last.blocks[1].text.as_deref(), Some("look at [Image 1]"));
     }
 
     #[test]
