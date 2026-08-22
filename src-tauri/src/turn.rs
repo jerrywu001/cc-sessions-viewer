@@ -864,9 +864,7 @@ fn pi_extension_matches(raw: &str, extension_path: &Path, signal_path: &Path) ->
         && raw.contains("agent_end")
         && raw.contains("agent_settled")
         && raw.contains(&format!("const SIGNAL_PATH = {signal};"))
-        && raw.contains(&format!(
-            "const MARKER = \"cc-sessions-viewer-turn-status\";"
-        ))
+        && raw.contains("const MARKER = \"cc-sessions-viewer-turn-status\";")
         && extension_path.extension().and_then(|value| value.to_str()) == Some("ts")
 }
 

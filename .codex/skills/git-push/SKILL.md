@@ -34,12 +34,18 @@ Type: brief summary of the change
 ```
 
 6. Do not add any AI-generated sign-off.
-7. In the main repository, run:
+7. Before staging or committing, run the CI checks locally:
+   - `rtk npx vue-tsc --noEmit`
+   - `rtk npm run test:run`
+   - `rtk cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`
+   - `rtk cargo test --manifest-path src-tauri/Cargo.toml`
+   Stop immediately if any check fails; do not commit or push a failing change.
+8. In the main repository, run:
    - `git add .`
    - `git restore --staged .env.development 2>/dev/null || true` (only skip committing `.env.development`; keep the local edits)
    - Commit with the multi-line message
    - `git push`
-8. After completion, report the commit hash, commit message, current branch, and push result.
+9. After completion, report the commit hash, commit message, current branch, and push result.
 
 ## Rules
 

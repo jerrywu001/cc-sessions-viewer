@@ -63,10 +63,12 @@ Type: brief summary of the change
 
 Run the following checks **in parallel**:
 
-1. **Frontend tests**: `!npm run test:run`
-2. **Rust clippy**: `!cd src-tauri && cargo clippy -- -D warnings`
+1. **Frontend type-check**: `!npx vue-tsc --noEmit`
+2. **Frontend tests**: `!npm run test:run`
+3. **Rust clippy**: `!cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`
+4. **Rust tests**: `!cargo test --manifest-path src-tauri/Cargo.toml`
 
-If **either** check fails, **stop immediately** and notify the user:
+If **any** check fails, **stop immediately** and notify the user:
 ```
 ❌ Quality gate failed. Cannot commit.
 

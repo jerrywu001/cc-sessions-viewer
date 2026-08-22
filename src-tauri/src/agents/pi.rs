@@ -148,7 +148,7 @@ fn resolve_pi_session_root(
     cwd: &Path,
 ) -> PathBuf {
     configured
-        .map(|path| expand_path(&path, &cwd))
+        .map(|path| expand_path(&path, cwd))
         .or(settings_session_dir)
         .unwrap_or_else(|| agent_dir.join("sessions"))
 }
@@ -222,7 +222,7 @@ fn parse_header_bytes(bytes: &[u8]) -> Option<PiHeader> {
     if line.len() as u64 > MAX_HEADER_BYTES {
         return None;
     }
-    let line = line.strip_suffix(&[b'\r']).unwrap_or(line);
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
     let value: Value = serde_json::from_slice(line).ok()?;
     parse_header_value(&value)
 }
@@ -353,7 +353,7 @@ fn parse_entries(bytes: &[u8]) -> Result<ParsedPi, String> {
     let mut seen = HashSet::new();
     let mut duplicate_ids = false;
     for (ordinal, raw) in bytes.split(|byte| *byte == b'\n').enumerate() {
-        let raw = raw.strip_suffix(&[b'\r']).unwrap_or(raw);
+        let raw = raw.strip_suffix(b"\r").unwrap_or(raw);
         if raw.is_empty() {
             continue;
         }
@@ -1138,7 +1138,7 @@ fn tree_summary(bytes: &[u8]) -> TreeSummary {
     let mut entries: Vec<(String, Option<String>, Value)> = Vec::new();
     let mut version = 3u64;
     for (ordinal, raw) in bytes.split(|byte| *byte == b'\n').enumerate() {
-        let raw = raw.strip_suffix(&[b'\r']).unwrap_or(raw);
+        let raw = raw.strip_suffix(b"\r").unwrap_or(raw);
         if raw.is_empty() {
             continue;
         }
@@ -1227,7 +1227,7 @@ fn tree_summary(bytes: &[u8]) -> TreeSummary {
                 })
                 .flatten()
         })
-        .last();
+        .next_back();
     let fallback_title = lineage.iter().find_map(|(_, _, entry)| {
         (entry.get("type").and_then(Value::as_str) == Some("message")
             && entry
@@ -1399,7 +1399,7 @@ impl SessionSource for PiSource {
         let mut entries = Vec::new();
         let mut header = Value::Null;
         for raw in bytes.split(|byte| *byte == b'\n') {
-            let raw = raw.strip_suffix(&[b'\r']).unwrap_or(raw);
+            let raw = raw.strip_suffix(b"\r").unwrap_or(raw);
             if raw.is_empty() { continue; }
             let Ok(value) = serde_json::from_slice::<Value>(raw) else { continue; };
             if value.get("type").and_then(Value::as_str) == Some("session") {
@@ -1497,7 +1497,7 @@ impl SessionSource for PiSource {
         if !is_descendant(&canonical_parent, &root) && canonical_parent != root {
             return Err("Pi restore target is outside the configured session root".into());
         }
-        if let Some(metadata) = fs::symlink_metadata(entry_path).ok() {
+        if let Ok(metadata) = fs::symlink_metadata(entry_path) {
             if metadata.file_type().is_symlink() || !metadata.is_file() {
                 return Err("Pi restore target is not a regular file".into());
             }
@@ -1782,8 +1782,8 @@ Use tmux-bridge for pane control.
             .iter()
             .filter(|message| message.role == "user")
             .flat_map(|message| message.blocks.iter())
-            .filter_map(|block| (block.kind == "text").then(|| block.text.as_deref()))
-            .flatten()
+            .filter(|block| block.kind == "text")
+            .filter_map(|block| block.text.as_deref())
             .collect();
         assert_eq!(invocations, vec!["/git-push", "/git-push"]);
         assert!(messages.iter().all(|message| {
