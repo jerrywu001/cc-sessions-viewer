@@ -1112,6 +1112,13 @@ fn finalize_clipboard_image_tags(msg: &mut Msg) {
         }
     }
     if tags.is_empty() {
+        for block in &mut msg.blocks {
+            if block.kind == "text" {
+                if let Some(text) = block.text.as_mut() {
+                    *text = text.replace(CLIPBOARD_IMAGE_TAG, "");
+                }
+            }
+        }
         return;
     }
     let mut next = 0usize;
@@ -1120,8 +1127,9 @@ fn finalize_clipboard_image_tags(msg: &mut Msg) {
             continue;
         }
         if let Some(text) = block.text.as_mut() {
-            while text.contains(CLIPBOARD_IMAGE_TAG) && next < tags.len() {
-                *text = text.replacen(CLIPBOARD_IMAGE_TAG, &tags[next], 1);
+            while text.contains(CLIPBOARD_IMAGE_TAG) {
+                let replacement = tags.get(next).map(String::as_str).unwrap_or_default();
+                *text = text.replacen(CLIPBOARD_IMAGE_TAG, replacement, 1);
                 next += 1;
             }
         }
@@ -1257,6 +1265,23 @@ fn lift_paths_from_text_inner(text: &str, preserve_clipboard_tags: bool) -> (Vec
     // 3. 提取行内绝对路径 / 家目录路径（支持中文粘连，如 "前缀/var/path.png"）
     // 排除 URL 中的路径段（`://` 后面不是文件路径）。Windows 的盘符、UNC
     // 共享路径和 `\\?\` 扩展路径也在这里处理；路径组件允许空格和 Unicode 用户名。
+    // clipboard 图片的文件名有稳定前缀。单独保留其非贪婪匹配，避免两张图之间的正文
+    // 被通用路径正则吞进一个伪路径（`clipboard-a.png text /tmp/clipboard-b.png`）。
+    let re_clipboard_image = regex_lite::Regex::new(
+        r#"(?xi)
+        (?:
+            ~[/\\]
+            | /[^/\\\r\n]
+            | [a-zA-Z]:[/\\]
+            | \\\\ \? [/\\] [a-zA-Z]: [/\\]
+            | \\\\ \? [/\\] UNC [/\\] [^/\\\r\n]
+            | \\\\ [^/\\\r\n]
+        )
+        (?: [^/\\\r\n]+ [/\\] )*?
+        clipboard- [^/\\\r\n]*? \. (?:png|jpe?g|gif|webp|bmp|tiff|ico)
+        "#,
+    )
+    .expect("valid regex");
     let re_abs = regex_lite::Regex::new(
         r#"(?x)
         (?: ^ | \s | [^\x00-\x7F] | [^\w.@/:=-] )
@@ -1292,6 +1317,22 @@ fn lift_paths_from_text_inner(text: &str, preserve_clipboard_tags: bool) -> (Vec
             continue;
         }
         if is_rust_diagnostic_location(&cleaned_text, capture_start) {
+            continue;
+        }
+
+        let clipboard_paths = re_clipboard_image.find_iter(&path).collect::<Vec<_>>();
+        if clipboard_paths.len() > 1 {
+            for clipboard_path in clipboard_paths {
+                let start = capture_start + clipboard_path.start();
+                let end = capture_start + clipboard_path.end();
+                let clipboard_path = clipboard_path.as_str();
+                temp.push_str(&cleaned_text[last..start]);
+                if preserve_clipboard_tags && is_clipboard_image_path(clipboard_path) {
+                    temp.push_str(CLIPBOARD_IMAGE_TAG);
+                }
+                lift_path_block(clipboard_path, &mut lifted);
+                last = end;
+            }
             continue;
         }
 
@@ -1743,6 +1784,20 @@ Only after the original task is complete, process this follow-up in the order re
     }
 
     #[test]
+    fn test_post_process_never_leaks_unbound_clipboard_markers() {
+        let text = format!("before {CLIPBOARD_IMAGE_TAG} after");
+        let mut msg = Msg {
+            role: "user".to_string(),
+            blocks: vec![text_block("text", &text)],
+            ..Default::default()
+        };
+
+        finalize_clipboard_image_tags(&mut msg);
+
+        assert_eq!(msg.blocks[0].text.as_deref(), Some("before  after"));
+    }
+
+    #[test]
     fn test_leading_at_file_reference_stays_in_the_original_text_position() {
         let text = "@scripts/release/appstore-release.sh 分析执行过程和调用命令";
         let (blocks, remaining) = lift_paths_from_text(text);
@@ -1785,6 +1840,20 @@ Only after the original task is complete, process this follow-up in the order re
         assert_eq!(blocks[0].kind, "file");
         assert_eq!(blocks[0].file_path.as_deref(), Some(path));
         assert_eq!(remaining, "请看这个截图  并说明问题");
+    }
+
+    #[test]
+    fn test_lift_multiple_windows_clipboard_paths_without_merging_them() {
+        let first = r#"C:\Users\Jane Doe\AppData\Local\Temp\clipboard-first.png"#;
+        let second = r#"\\?\C:\Users\Jane Doe\AppData\Local\Temp\clipboard-second.png"#;
+        let text = format!("请看 {first} hihhi {second}，一共几张图？");
+
+        let (blocks, remaining) = lift_paths_from_text(&text);
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].file_path.as_deref(), Some(first));
+        assert_eq!(blocks[1].file_path.as_deref(), Some(second));
+        assert_eq!(remaining, "请看  hihhi ，一共几张图？");
     }
 
     #[test]

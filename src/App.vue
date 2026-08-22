@@ -152,6 +152,7 @@ import {
   findViewTab,
   removeViewTab,
   setActiveViewTab,
+  syncSessionViewTitles,
   visibleViewTabs,
   persistViewTabs,
   loadSavedViewTabs,
@@ -1741,6 +1742,11 @@ function syncTuiTabsFromCurrentSessions() {
   if (!activeDir.value) return
   reconcileNewTabs(activeDir.value, sessions.value, agent.value)
   syncTabTitlesFromSessions(agent.value, activeDir.value, sessions.value)
+  const renamed = syncSessionViewTitles(agent.value, activeDir.value, sessions.value)
+  for (const session of renamed) {
+    setViewTitle(agent.value, session.id || session.path, session.title)
+  }
+  if (renamed.length) saveTabState()
 }
 
 function hasCurrentProjectTuiTabs(): boolean {
@@ -3971,6 +3977,7 @@ type TerminalTurnEvent = {
   state: 'started' | 'completed' | 'blocked' | 'failed'
   source: 'hook'
   promptId?: string
+  sessionId?: string
 }
 
 type DesktopPetSessionTarget = Pick<DesktopTask, 'agent' | 'path'>
@@ -4019,12 +4026,12 @@ async function installLiveTailListeners() {
 
 async function installTerminalTurnListeners() {
   const turnUnlisten = await listen<TerminalTurnEvent>('terminal-turn://state', (e) => {
-    const { agent: eventAgent, path, state, source, promptId } = e.payload
-    if (!path) return
-    if (state === 'started') markTabTurnStarted(eventAgent, path, source, promptId)
-    else if (state === 'completed') markTabTurnCompleted(eventAgent, path, source, promptId)
-    else if (state === 'blocked') markTabTurnBlocked(eventAgent, path, source, promptId)
-    else if (state === 'failed') markTabTurnFailed(eventAgent, path, source, promptId)
+    const { agent: eventAgent, path, state, source, promptId, sessionId } = e.payload
+    if (!path && !sessionId) return
+    if (state === 'started') markTabTurnStarted(eventAgent, path, source, promptId, sessionId)
+    else if (state === 'completed') markTabTurnCompleted(eventAgent, path, source, promptId, sessionId)
+    else if (state === 'blocked') markTabTurnBlocked(eventAgent, path, source, promptId, sessionId)
+    else if (state === 'failed') markTabTurnFailed(eventAgent, path, source, promptId, sessionId)
   })
   const desktopPetUnlisten = await listen<DesktopPetSessionTarget>(
     'desktop-pet://open-session',

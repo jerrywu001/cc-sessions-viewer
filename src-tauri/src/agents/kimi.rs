@@ -8,7 +8,11 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
 use std::path::{Component, Path, PathBuf};
+use std::process::Stdio;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, SystemTime};
 
 use chrono::{TimeZone, Utc};
@@ -1355,82 +1359,138 @@ fn restore_index_session(
     write_index_lines(root, &retained)
 }
 
-fn write_state_atomically(
-    path: &Path,
-    state: &Value,
-    expected_revision: &FileRevision,
-) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| "Kimi Code state.json has no parent directory".to_string())?;
-    let temporary = parent.join(format!(
-        ".{STATE_FILE}.viewer-{}-{}.tmp",
-        std::process::id(),
-        now_millis()
-    ));
-    let mut bytes = serde_json::to_vec_pretty(state)
-        .map_err(|error| format!("Failed to serialize Kimi Code state.json: {error}"))?;
-    bytes.push(b'\n');
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .map_err(|error| format!("Failed to create Kimi Code state.json temp file: {error}"))?;
-    if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
-        let _ = fs::remove_file(&temporary);
-        return Err(format!("Failed to write Kimi Code state.json: {error}"));
+fn local_kimi_program(root: &Path) -> PathBuf {
+    let bundled = root
+        .join("bin")
+        .join(if cfg!(windows) { "kimi.exe" } else { "kimi" });
+    if bundled.is_file() {
+        bundled
+    } else {
+        PathBuf::from("kimi")
     }
-    drop(file);
-    if file_revision(path)? != *expected_revision {
-        let _ = fs::remove_file(&temporary);
-        return Err("Kimi Code state.json changed while preparing rename; try again".to_string());
+}
+
+fn parse_kimi_web_server_line(line: &str) -> Option<(String, String)> {
+    let line = line.trim();
+    let url = line
+        .strip_prefix("Kimi server: ")
+        .or_else(|| line.strip_prefix("Local:"))?
+        .trim();
+    let (endpoint, token) = url.split_once("#token=")?;
+    if !endpoint.starts_with("http://127.0.0.1:")
+        || token.is_empty()
+        || !token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return None;
     }
-    if let Err(first_error) = fs::rename(&temporary, path) {
-        let backup = parent.join(format!(
-            ".{STATE_FILE}.viewer-{}-{}.bak",
-            std::process::id(),
-            now_millis()
+    Some((endpoint.to_string(), token.to_string()))
+}
+
+fn stop_kimi_web_server(child: &mut std::process::Child, endpoint: &str, token: &str) {
+    let _ = ureq::post(&format!("{endpoint}api/v1/shutdown"))
+        .set("Authorization", &format!("Bearer {token}"))
+        .timeout(Duration::from_secs(2))
+        .call();
+    for _ in 0..20 {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Kimi's `/sessions` picker is backed by its private query-store, not just
+/// `state.json`. Use Kimi's own local API so title changes update both stores.
+fn rename_with_kimi_api(root: &Path, session_id: &str, title: &str) -> Result<(), String> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|error| format!("Failed to reserve a local Kimi Code port: {error}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| format!("Failed to inspect local Kimi Code port: {error}"))?
+        .port();
+    drop(listener);
+    let port = port.to_string();
+
+    let mut child = crate::util::silent_command(local_kimi_program(root))
+        .args([
+            "web",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            &port,
+            "--no-open",
+            "--log-level",
+            "silent",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("Failed to start Kimi Code local API: {error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to read Kimi Code local API startup output".to_string())?;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Some(Ok(line)) = lines.next() {
+            if let Some(server) = parse_kimi_web_server_line(&line) {
+                let _ = sender.send(Ok(server));
+                return;
+            }
+        }
+        let _ = sender.send(Err(
+            "Kimi Code local API exited before it was ready".to_string()
         ));
-        if !path.exists() || fs::rename(path, &backup).is_err() {
-            let _ = fs::remove_file(&temporary);
+    });
+
+    let (endpoint, token) = match receiver.recv_timeout(Duration::from_secs(8)) {
+        Ok(Ok(server)) => server,
+        Ok(Err(error)) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Timed out starting Kimi Code local API".to_string());
+        }
+    };
+    let result = (|| {
+        let response = ureq::post(&format!("{endpoint}api/v1/sessions/{}/profile", session_id))
+            .set("Authorization", &format!("Bearer {token}"))
+            .set("Content-Type", "application/json")
+            .timeout(Duration::from_secs(10))
+            .send_json(serde_json::json!({ "title": title }))
+            .map_err(|error| format!("Kimi Code rename API request failed: {error}"))?;
+        let payload: Value = response
+            .into_json()
+            .map_err(|error| format!("Failed to read Kimi Code rename API response: {error}"))?;
+        if payload.get("code").and_then(Value::as_i64) != Some(0) {
             return Err(format!(
-                "Failed to replace Kimi Code state.json: {first_error}"
+                "Kimi Code rename API rejected the title: {}",
+                payload
+                    .get("msg")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown error")
             ));
         }
-        if let Err(error) = fs::rename(&temporary, path) {
-            let _ = fs::rename(&backup, path);
-            let _ = fs::remove_file(&temporary);
-            return Err(format!("Failed to install Kimi Code state.json: {error}"));
-        }
-        let _ = fs::remove_file(backup);
-    }
-    if let Ok(directory) = fs::File::open(parent) {
-        let _ = directory.sync_all();
-    }
-    Ok(())
+        Ok(())
+    })();
+    stop_kimi_web_server(&mut child, &endpoint, &token);
+    result
 }
 
 fn rename_session_at(root: &Path, path: &Path, name: &str) -> Result<(), String> {
     let title = validate_rename_name(name)?;
     let unit = validate_existing_storage(root, path)?;
-    let revision = session_revision_stamp(root, &unit.entry_path())?;
-    let state_path = unit.root_path.join(STATE_FILE);
-    let (mut state, _) = read_stable_session_wires(root, &unit.entry_path())?;
-    let state_revision = file_revision(&state_path)?;
-    let object = state
-        .as_object_mut()
-        .ok_or_else(|| "Kimi Code state.json must be a JSON object".to_string())?;
-    object.insert("title".to_string(), Value::String(title.to_string()));
-    object.insert("isCustomTitle".to_string(), Value::Bool(true));
-    // Kimi CLI normalizes a manually titled session to this exact three-field
-    // combination. Leaving an old `replaceable` kind makes the viewer title
-    // appear correct while Kimi's resume picker can still replace/show it as
-    // an automatic title.
-    object.insert("titleKind".to_string(), Value::String("custom".to_string()));
-    if session_revision_stamp(root, &unit.entry_path())? != revision {
-        return Err("Kimi Code session changed while preparing rename; try again".to_string());
-    }
-    write_state_atomically(&state_path, &state, &state_revision)
+    let session_id = state_session_id(&unit.root_path)?;
+    rename_with_kimi_api(root, &session_id, title)
 }
 
 fn hard_delete_session_at(root: &Path, path: &Path) -> Result<(), String> {
@@ -2160,39 +2220,26 @@ mod tests {
     }
 
     #[test]
-    fn renames_state_without_discarding_unknown_fields() {
-        let root = scratch("rename");
-        let wire = create_session(
-            &root,
-            "wd_project",
-            "session_valid",
-            serde_json::json!({
-                "id": "id",
-                "cwd": "/tmp/project",
-                "title": "old title",
-                "isCustomTitle": false,
-                "titleKind": "replaceable",
-                "custom": {"preserved": true},
-            }),
-            &["prompt"],
-        );
-        rename_session_at(&root, &wire, "new title").unwrap();
-        let renamed =
-            read_state(wire.parent().unwrap().parent().unwrap().parent().unwrap()).unwrap();
+    fn parses_kimi_web_server_startup_url() {
         assert_eq!(
-            renamed.get("title"),
-            Some(&Value::String("new title".to_string()))
-        );
-        assert_eq!(renamed.get("isCustomTitle"), Some(&Value::Bool(true)));
-        assert_eq!(
-            renamed.get("titleKind"),
-            Some(&Value::String("custom".to_string()))
+            parse_kimi_web_server_line("Kimi server: http://127.0.0.1:58628/#token=abc_123-token"),
+            Some((
+                "http://127.0.0.1:58628/".to_string(),
+                "abc_123-token".to_string()
+            ))
         );
         assert_eq!(
-            renamed.pointer("/custom/preserved"),
-            Some(&Value::Bool(true))
+            parse_kimi_web_server_line("Local:    http://127.0.0.1:58628/#token=abc"),
+            Some(("http://127.0.0.1:58628/".to_string(), "abc".to_string()))
         );
-        let _ = fs::remove_dir_all(root);
+        assert_eq!(
+            parse_kimi_web_server_line("Kimi server: http://0.0.0.0:58628/#token=abc"),
+            None
+        );
+        assert_eq!(
+            parse_kimi_web_server_line("Kimi server: http://127.0.0.1:58628/#token=not/a-token"),
+            None
+        );
     }
 
     #[test]
@@ -2664,6 +2711,41 @@ mod tests {
         assert_eq!(
             messages[0].blocks[1].text.as_deref(),
             Some("Please inspect [Image #1] and summarize it")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn renders_multiple_clipboard_images_with_their_original_text_positions() {
+        let root = scratch("multiple-clipboard-images");
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("clipboard-2026-08-21-142645-622992C5.png");
+        let second = root.join("clipboard-2026-08-21-142658-D076A255.png");
+        fs::write(&first, []).unwrap();
+        fs::write(&second, []).unwrap();
+        let prompt = format!(
+            "下午好，{} hihhi {}, 不需要分析内容，告诉我贴了几张图即可",
+            first.display(),
+            second.display(),
+        );
+        let wire = create_session(
+            &root,
+            "wd_project",
+            "session_valid",
+            state("id", "/tmp/project", "title"),
+            &[&prompt],
+        );
+
+        let messages = KimiSource.read_session(wire.to_str().unwrap()).unwrap();
+        let blocks = &messages[0].blocks;
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].kind, "image");
+        assert_eq!(blocks[1].kind, "image");
+        assert_eq!(blocks[0].inline_placeholder.as_deref(), Some("[Image #1]"));
+        assert_eq!(blocks[1].inline_placeholder.as_deref(), Some("[Image #2]"));
+        assert_eq!(
+            blocks[2].text.as_deref(),
+            Some("下午好，[Image #1] hihhi [Image #2], 不需要分析内容，告诉我贴了几张图即可")
         );
         let _ = fs::remove_dir_all(root);
     }

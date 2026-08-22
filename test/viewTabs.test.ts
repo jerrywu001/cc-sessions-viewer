@@ -6,9 +6,30 @@ import {
   viewTabs,
   viewTabStatusKind,
   migrateViewTabsProjectKey,
+  syncSessionViewTitles,
   visibleViewTabs,
 } from '../src/viewTabs'
 import { chatSessions, findChatBySourceSession, type ChatSession } from '../src/chatSessions'
+import type { SessionMeta } from '../src/types'
+
+function sessionMeta(over: Partial<SessionMeta> = {}): SessionMeta {
+  return {
+    id: 'session-1',
+    fileName: 'session.jsonl',
+    path: '/repo/session.jsonl',
+    title: 'Session',
+    modified: 0,
+    size: 0,
+    messageCount: 0,
+    codexAppListRank: null,
+    codexAppListScanned: 0,
+    codexAppFirstPageSize: 0,
+    codexAppFirstPagePosition: 0,
+    codexInternal: false,
+    codexArchived: false,
+    ...over,
+  }
+}
 
 function chatSession(over: Partial<ChatSession> = {}): ChatSession {
   return {
@@ -85,6 +106,61 @@ describe('migrateViewTabsProjectKey', () => {
     const a = createViewTab({ type: 'session', agent: 'claude', projectKey: 'k' })
     migrateViewTabsProjectKey('k', 'k')
     expect(a.projectKey).toBe('k')
+  })
+})
+
+describe('syncSessionViewTitles', () => {
+  beforeEach(() => {
+    viewTabs.value = []
+  })
+
+  it('updates matching read tabs, including Windows paths', () => {
+    const kimi = createViewTab({
+      type: 'session',
+      agent: 'kimicode',
+      projectKey: 'proj',
+      title: 'Old Kimi title',
+      session: sessionMeta({ id: 'kimi-1', path: 'C:\\repo\\session.jsonl', title: 'Old Kimi title' }),
+    })
+    const claude = createViewTab({
+      type: 'session',
+      agent: 'claude',
+      projectKey: 'proj',
+      title: 'Old Claude title',
+      session: sessionMeta({ id: 'claude-1', path: '/repo/claude.jsonl', title: 'Old Claude title' }),
+    })
+
+    const changed = syncSessionViewTitles('kimicode', 'proj', [
+      sessionMeta({
+        id: 'kimi-1',
+        path: '\\\\?\\C:\\repo\\session.jsonl',
+        title: ' Renamed in terminal ',
+      }),
+    ])
+
+    expect(changed).toEqual([
+      { id: 'kimi-1', path: '\\\\?\\C:\\repo\\session.jsonl', title: 'Renamed in terminal' },
+    ])
+    expect(kimi.title).toBe('Renamed in terminal')
+    expect(kimi.session?.title).toBe('Renamed in terminal')
+    expect(claude.title).toBe('Old Claude title')
+  })
+
+  it('falls back to a stable session id when a source changes its path representation', () => {
+    const tab = createViewTab({
+      type: 'session',
+      agent: 'grok',
+      projectKey: 'proj',
+      title: 'Old title',
+      session: sessionMeta({ id: 'grok-1', path: '/old/representation', title: 'Old title' }),
+    })
+
+    syncSessionViewTitles('grok', 'proj', [
+      sessionMeta({ id: 'grok-1', path: '/new/representation', title: 'Renamed' }),
+    ])
+
+    expect(tab.title).toBe('Renamed')
+    expect(tab.session?.title).toBe('Renamed')
   })
 })
 

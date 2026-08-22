@@ -529,7 +529,7 @@ export default {
 
   'toast.moved': '已移到回收站',
   'toast.renamed': '已重命名',
-  'toast.kimiRenamed': 'Viewer 中已重命名；Kimi CLI 的标题同步问题仍待修复。',
+  'toast.kimiRenamed': '已重命名',
   'toast.kimiRenameActiveTerminal': '该 Kimi 会话正在内嵌终端中运行。请先关闭终端，或在终端内执行 /rename。',
   'toast.tabsCleared': '所有标签已清除',
   'toast.renameFail': '重命名失败：{e}',

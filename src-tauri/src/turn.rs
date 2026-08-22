@@ -18,9 +18,19 @@ pub struct TerminalTurnPayload {
     pub state: String,
     #[serde(default = "default_turn_signal_source")]
     pub source: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "promptId",
+        alias = "prompt_id",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub prompt_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "sessionId",
+        alias = "session_id",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
@@ -341,7 +351,7 @@ pub fn emit_turn_signal(app: &AppHandle, mut payload: TerminalTurnPayload) -> Re
                 .insert(key.clone());
             if should_spawn {
                 let app = app.clone();
-                let retry_payload = payload;
+                let retry_payload = payload.clone();
                 std::thread::spawn(move || {
                     for _ in 0..30 {
                         std::thread::sleep(Duration::from_millis(100));
@@ -371,10 +381,17 @@ pub fn emit_turn_signal(app: &AppHandle, mut payload: TerminalTurnPayload) -> Re
                     }
                 });
             }
-            return Ok(());
+            // Kimi hooks always carry a stable session id. The terminal UI can
+            // use it immediately even while the first wire file is still being
+            // created; the retry above later supplies the path for pet tasks.
+            if payload.agent != "kimicode" {
+                return Ok(());
+            }
         }
     }
-    if payload.path.trim().is_empty() {
+    if payload.path.trim().is_empty()
+        && (payload.agent != "kimicode" || payload.session_id.is_none())
+    {
         return Err("Missing session path".to_string());
     }
     if !matches!(
@@ -386,9 +403,10 @@ pub fn emit_turn_signal(app: &AppHandle, mut payload: TerminalTurnPayload) -> Re
     if payload.source != "hook" {
         return Err("Unknown session state source".to_string());
     }
-    let mut tasks = desktop_tasks().lock().map_err(|error| error.to_string())?;
-    upsert_desktop_task(&mut tasks, &payload, current_timestamp_ms());
-    drop(tasks);
+    if !payload.path.trim().is_empty() {
+        let mut tasks = desktop_tasks().lock().map_err(|error| error.to_string())?;
+        upsert_desktop_task(&mut tasks, &payload, current_timestamp_ms());
+    }
     app.emit("terminal-turn://state", payload)
         .map_err(|e| e.to_string())
 }
@@ -1472,6 +1490,29 @@ mod tests {
             session_id: None,
             cwd: None,
         }
+    }
+
+    #[test]
+    fn turn_signal_payload_accepts_hook_camel_case_session_fields() {
+        let payload: TerminalTurnPayload = serde_json::from_value(json!({
+            "agent": "kimicode",
+            "path": "",
+            "state": "completed",
+            "source": "hook",
+            "promptId": "turn-1",
+            "sessionId": "session-1",
+            "cwd": "/tmp/project",
+        }))
+        .unwrap();
+        assert_eq!(payload.prompt_id.as_deref(), Some("turn-1"));
+        assert_eq!(payload.session_id.as_deref(), Some("session-1"));
+        assert_eq!(
+            serde_json::to_value(payload)
+                .unwrap()
+                .get("sessionId")
+                .and_then(Value::as_str),
+            Some("session-1")
+        );
     }
 
     #[test]

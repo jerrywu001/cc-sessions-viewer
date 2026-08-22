@@ -1452,12 +1452,13 @@ export function codexResumeConfigHint(recentOutput: string): string | null {
   return null
 }
 
-function tabsBySession(agent: Agent, sessionPath: string) {
-  if (!sessionPath) return []
+function tabsBySession(agent: Agent, sessionPath: string, sessionId?: string) {
+  if (!sessionPath && !sessionId) return []
   return tabs.value.filter(
     (tab) =>
       tab.agent === agent &&
-      sessionPathsEqual(tab.sessionPath, sessionPath) &&
+      ((sessionPath && sessionPathsEqual(tab.sessionPath, sessionPath)) ||
+        (!!sessionId && tab.sessionId === sessionId)) &&
       isTabProcessAlive(tab),
   )
 }
@@ -1475,8 +1476,9 @@ export function markTabTurnStarted(
   sessionPath: string,
   source: TerminalTurnSignalSource,
   signalId?: string,
+  sessionId?: string,
 ) {
-  const targets = tabsBySession(agent, sessionPath)
+  const targets = tabsBySession(agent, sessionPath, sessionId)
   if (!targets.length) rememberPendingTurnState(agent, sessionPath, 'started', source, signalId)
   for (const tab of targets) {
     applyTurnSignal(tab, 'started', source, activeUiId.value === tab.uiId, signalId)
@@ -1488,8 +1490,9 @@ export function markTabTurnCompleted(
   sessionPath: string,
   source: TerminalTurnSignalSource,
   signalId?: string,
+  sessionId?: string,
 ) {
-  const targets = tabsBySession(agent, sessionPath)
+  const targets = tabsBySession(agent, sessionPath, sessionId)
   if (!targets.length) rememberPendingTurnState(agent, sessionPath, 'completed', source, signalId)
   for (const tab of targets) {
     applyTurnSignal(tab, 'completed', source, activeUiId.value === tab.uiId, signalId)
@@ -1501,8 +1504,9 @@ export function markTabTurnBlocked(
   sessionPath: string,
   source: TerminalTurnSignalSource,
   signalId?: string,
+  sessionId?: string,
 ) {
-  const targets = tabsBySession(agent, sessionPath)
+  const targets = tabsBySession(agent, sessionPath, sessionId)
   if (!targets.length) rememberPendingTurnState(agent, sessionPath, 'blocked', source, signalId)
   for (const tab of targets) {
     applyTurnSignal(tab, 'blocked', source, activeUiId.value === tab.uiId, signalId)
@@ -1514,8 +1518,9 @@ export function markTabTurnFailed(
   sessionPath: string,
   source: TerminalTurnSignalSource,
   signalId?: string,
+  sessionId?: string,
 ) {
-  const targets = tabsBySession(agent, sessionPath)
+  const targets = tabsBySession(agent, sessionPath, sessionId)
   if (!targets.length) rememberPendingTurnState(agent, sessionPath, 'failed', source, signalId)
   for (const tab of targets) {
     applyTurnSignal(tab, 'failed', source, activeUiId.value === tab.uiId, signalId)

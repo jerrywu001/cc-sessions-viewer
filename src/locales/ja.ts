@@ -533,7 +533,7 @@ export default {
 
   'toast.moved': 'ゴミ箱へ移動しました',
   'toast.renamed': '名前を変更しました',
-  'toast.kimiRenamed': 'Viewer 内で名前を変更しました。Kimi CLI とのタイトル同期は引き続き調査中です。',
+  'toast.kimiRenamed': '名前を変更しました',
   'toast.kimiRenameActiveTerminal': 'この Kimi セッションは内蔵ターミナルで実行中です。先に閉じるか、ターミナルで /rename を実行してください。',
   'toast.tabsCleared': 'すべてのタブを削除しました',
   'toast.renameFail': '名前の変更に失敗: {e}',

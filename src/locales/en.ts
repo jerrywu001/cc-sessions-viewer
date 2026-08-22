@@ -535,7 +535,7 @@ export default {
 
   'toast.moved': 'Moved to Trash',
   'toast.renamed': 'Renamed',
-  'toast.kimiRenamed': 'Renamed in the viewer; Kimi CLI title synchronization is still under investigation.',
+  'toast.kimiRenamed': 'Renamed',
   'toast.kimiRenameActiveTerminal': 'This Kimi session is running in the embedded terminal. Close it first, or run /rename in the terminal.',
   'toast.tabsCleared': 'All tabs cleared',
   'toast.renameFail': 'Rename failed: {e}',

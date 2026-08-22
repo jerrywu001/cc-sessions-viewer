@@ -9,7 +9,7 @@
 import { ref, computed } from 'vue'
 import type { Agent, SessionMeta, Msg } from './types'
 import { closeChat, type ChatSession } from './chatSessions'
-import type { TabStatusKind } from './tabStatus'
+import { sessionPathsEqual, type TabStatusKind } from './tabStatus'
 import { activeViewTabId, panes, focusPane, ensureLayout } from './panes'
 
 function normalizeStoredAgent(agent: unknown): Agent | null {
@@ -209,6 +209,33 @@ export function visibleViewTabs(agent: Agent, projectKey: string | null): ViewTa
   return viewTabs.value.filter(
     t => t.agent === agent && t.projectKey === (projectKey ?? ''),
   )
+}
+
+/** Keep already-open transcript views aligned with a refreshed session list.
+ * This is shared by every agent because terminal-side rename updates disk first,
+ * then the normal list scanner remains the title authority. */
+export function syncSessionViewTitles(
+  agent: Agent,
+  projectKey: string,
+  sessions: SessionMeta[],
+): Array<Pick<SessionMeta, 'id' | 'path' | 'title'>> {
+  const changed: Array<Pick<SessionMeta, 'id' | 'path' | 'title'>> = []
+  for (const tab of viewTabs.value) {
+    if (tab.type !== 'session' || tab.agent !== agent || tab.projectKey !== projectKey || !tab.session) {
+      continue
+    }
+    const refreshed = sessions.find(
+      session =>
+        sessionPathsEqual(session.path, tab.session!.path) ||
+        (!!session.id && session.id === tab.session!.id),
+    )
+    const title = refreshed?.title.trim()
+    if (!refreshed || !title || tab.session.title === title) continue
+    tab.session = { ...tab.session, title }
+    tab.title = title
+    changed.push({ id: refreshed.id, path: refreshed.path, title })
+  }
+  return changed
 }
 
 export function closeViewTabsByProject(projectKey: string) {
