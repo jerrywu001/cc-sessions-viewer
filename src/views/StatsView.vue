@@ -469,7 +469,7 @@ function emptyHint(arr: { length: number } | undefined): boolean {
 }
 
 function asAgent(name: string): Agent {
-  const known: Agent[] = ['claude', 'codex', 'grok', 'kimicode', 'agy', 'opencode']
+  const known: Agent[] = ['claude', 'codex', 'grok', 'kimicode', 'pi', 'agy', 'opencode']
   return known.includes(name as Agent) ? name as Agent : 'claude'
 }
 </script>
@@ -634,7 +634,7 @@ function asAgent(name: string): Agent {
           }}
         </span>
         <div
-          v-if="stats?.unpricedCallCount || stats?.estimatedCallCount"
+          v-if="stats?.unpricedCallCount || stats?.estimatedCallCount || stats?.recordedCallCount"
           class="stats-hero-warnings"
         >
           <span v-if="stats?.unpricedCallCount" class="stats-hero-warning">
@@ -642,6 +642,9 @@ function asAgent(name: string): Agent {
           </span>
           <span v-if="stats?.estimatedCallCount" class="stats-hero-warning estimated">
             {{ t('stats.pricing.estimated', { n: stats?.estimatedCallCount ?? 0 }) }}
+          </span>
+          <span v-if="stats?.recordedCallCount" class="stats-hero-warning recorded">
+            {{ t('stats.pricing.recorded', { n: stats?.recordedCallCount ?? 0 }) }}
           </span>
         </div>
       </div>

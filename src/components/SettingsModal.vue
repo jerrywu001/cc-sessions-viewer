@@ -252,6 +252,11 @@ const turnHookAgents = computed(() => {
       label: 'Kimi Code',
       events: ['TurnStarted', 'Stop', 'StopFailure', 'PermissionRequest', 'Interrupt'],
     },
+    {
+      id: 'pi' as const,
+      label: 'Pi',
+      events: ['before_agent_start', 'agent_start', 'agent_end', 'agent_settled'],
+    },
   ]
   return definitions.map((definition) => {
     const status = turnHookStatus.value?.[definition.id]
@@ -1202,14 +1207,14 @@ async function refreshTurnHooks() {
                   class="set-launch-args-input"
                   :value="launchArgs[a]"
                   @input="setLaunchArgs(a, ($event.target as HTMLInputElement).value)"
-                  :placeholder="{ claude: '--dangerously-skip-permissions', codex: '--yolo', grok: '--yolo', kimicode: '--yolo', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a]"
+                  :placeholder="{ claude: '--dangerously-skip-permissions', codex: '--yolo', grok: '--yolo', kimicode: '--yolo', pi: '', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a]"
                   spellcheck="false"
                 />
                 <button
                   v-if="!launchArgs[a]"
                   class="set-launch-args-fill"
                   v-tooltip="t('settings.launchArgsFill')"
-                  @click="setLaunchArgs(a, { claude: '--dangerously-skip-permissions', codex: '--yolo', grok: '--yolo', kimicode: '--yolo', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a])"
+                  @click="setLaunchArgs(a, { claude: '--dangerously-skip-permissions', codex: '--yolo', grok: '--yolo', kimicode: '--yolo', pi: '', agy: '--dangerously-skip-permissions', opencode: '--auto' }[a])"
                 >↵</button>
               </div>
             </div>

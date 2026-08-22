@@ -61,6 +61,8 @@ pub struct TurnHookInstallResult {
     pub agy_hooks_path: String,
     pub grok_config_path: String,
     pub kimi_config_path: String,
+    pub pi_extension_path: String,
+    pub pi_settings_path: String,
 }
 
 #[derive(Serialize)]
@@ -98,6 +100,7 @@ pub struct TurnHookStatus {
     pub agy: TurnHookAgentStatus,
     pub grok: TurnHookAgentStatus,
     pub kimicode: TurnHookAgentStatus,
+    pub pi: TurnHookAgentStatus,
 }
 
 const CLAUDE_TURN_HOOKS: [(&str, &str, Option<&str>); 5] = [
@@ -152,6 +155,7 @@ static DESKTOP_TASKS: OnceLock<Mutex<HashMap<String, DesktopTask>>> = OnceLock::
 static PENDING_PATH_SIGNALS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static GROK_CONFIG_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static KIMI_CONFIG_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static PI_CONFIG_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 fn signal_state() -> &'static Mutex<Option<SignalState>> {
     SIGNAL_STATE.get_or_init(|| Mutex::new(None))
@@ -171,6 +175,10 @@ fn grok_config_lock() -> &'static Mutex<()> {
 
 fn kimi_config_lock() -> &'static Mutex<()> {
     KIMI_CONFIG_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn pi_config_lock() -> &'static Mutex<()> {
+    PI_CONFIG_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn normalized_session_path(path: &str) -> String {
@@ -315,7 +323,7 @@ pub fn emit_turn_signal(app: &AppHandle, mut payload: TerminalTurnPayload) -> Re
     }
     if !matches!(
         payload.agent.as_str(),
-        "claude" | "codex" | "agy" | "grok" | "kimicode"
+        "claude" | "codex" | "agy" | "grok" | "kimicode" | "pi"
     ) {
         return Err("Unknown agent".to_string());
     }
@@ -590,6 +598,7 @@ pub fn install_turn_hooks() -> Result<TurnHookInstallResult, String> {
     let grok_config_path = crate::agents::grok::config_path();
     install_grok_turn_hooks(&grok_config_path, &script_path, &signal_path)?;
     install_kimi_turn_hooks(&kimi_config_path, &script_path, &signal_path)?;
+    let (pi_extension_path, pi_settings_path) = install_pi_turn_extension(&signal_path)?;
 
     Ok(TurnHookInstallResult {
         claude_settings_path: settings_path.to_string_lossy().to_string(),
@@ -597,6 +606,8 @@ pub fn install_turn_hooks() -> Result<TurnHookInstallResult, String> {
         agy_hooks_path: agy_hooks_path.to_string_lossy().to_string(),
         grok_config_path: grok_config_path.to_string_lossy().to_string(),
         kimi_config_path: kimi_config_path.to_string_lossy().to_string(),
+        pi_extension_path: pi_extension_path.to_string_lossy().to_string(),
+        pi_settings_path: pi_settings_path.to_string_lossy().to_string(),
     })
 }
 
@@ -692,17 +703,21 @@ pub fn turn_hook_status() -> Result<TurnHookStatus, String> {
     let kimi_hooks = collect_kimi_hooks(&kimi_config, &script_path, &legacy_script_path);
     let kimicode = hook_agent_status(kimi_path, kimi_events, kimi_hooks);
 
+    let pi = pi_turn_hook_status(&signal_path)?;
+
     Ok(TurnHookStatus {
         enabled: claude.installed
             && codex.installed
             && agy.installed
             && grok.installed
-            && kimicode.installed,
+            && kimicode.installed
+            && pi.installed,
         claude,
         codex,
         agy,
         grok,
         kimicode,
+        pi,
     })
 }
 
@@ -717,6 +732,246 @@ fn turn_hook_config_paths() -> Result<(PathBuf, PathBuf, PathBuf), String> {
         codex_dir.join("hooks.json"),
         home.join(".gemini").join("config").join("hooks.json"),
     ))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PiFileRevision {
+    exists: bool,
+    size: u64,
+    modified: Option<SystemTime>,
+}
+
+fn pi_file_revision(path: &Path) -> Result<PiFileRevision, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PiFileRevision {
+                exists: false,
+                size: 0,
+                modified: None,
+            });
+        }
+        Err(error) => return Err(format!("Failed to inspect {}: {error}", path.display())),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "Pi config path is not a regular file: {}",
+            path.display()
+        ));
+    }
+    Ok(PiFileRevision {
+        exists: true,
+        size: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+fn atomic_write_pi_file(
+    path: &Path,
+    bytes: &[u8],
+    expected: &PiFileRevision,
+    label: &str,
+) -> Result<(), String> {
+    if pi_file_revision(path)? != *expected {
+        return Err(format!(
+            "{label} changed while installing Pi status extension"
+        ));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{label} has no parent directory"))?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("Failed to create Pi config directory: {error}"))?;
+    let temp = parent.join(format!(
+        ".{}.tmp-{}-{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("pi"),
+        std::process::id(),
+        current_timestamp_ms()
+    ));
+    let result = (|| {
+        let mut file = File::create(&temp)
+            .map_err(|error| format!("Failed to create Pi config temporary file: {error}"))?;
+        file.write_all(bytes)
+            .map_err(|error| format!("Failed to write Pi config temporary file: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("Failed to flush Pi config temporary file: {error}"))?;
+        fs::rename(&temp, path)
+            .map_err(|error| format!("Failed to atomically replace {label}: {error}"))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
+fn pi_extension_source(signal_path: &Path) -> String {
+    let signal = serde_json::to_string(&signal_path.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        r#"// cc-sessions-viewer-turn-status
+import type {{ ExtensionAPI }} from "@earendil-works/pi-coding-agent";
+import fs from "node:fs";
+import path from "node:path";
+
+const SIGNAL_PATH = {signal};
+const MARKER = "cc-sessions-viewer-turn-status";
+let failedSinceSettle = false;
+
+function emit(state: "started" | "completed" | "failed", ctx: any) {{
+  try {{
+    const sessionFile = ctx?.sessionManager?.getSessionFile?.();
+    if (!sessionFile) return;
+    const absoluteSessionFile = path.resolve(sessionFile);
+    const payload = {{
+      agent: "pi",
+      path: absoluteSessionFile,
+      sessionId: ctx?.sessionManager?.getSessionId?.(),
+      cwd: ctx?.cwd,
+      state,
+      source: "hook",
+    }};
+    fs.mkdirSync(path.dirname(SIGNAL_PATH), {{ recursive: true }});
+    fs.appendFileSync(SIGNAL_PATH, JSON.stringify(payload) + "\n", "utf8");
+  }} catch {{
+    // Status reporting must never block Pi.
+  }}
+}}
+
+export default function(pi: ExtensionAPI) {{
+  pi.on("before_agent_start", (_event, ctx) => {{ failedSinceSettle = false; emit("started", ctx); }});
+  pi.on("agent_start", (_event, ctx) => emit("started", ctx));
+  pi.on("agent_end", (event: any, ctx) => {{
+    const messages = Array.isArray(event?.messages) ? event.messages : [];
+    const assistant = [...messages].reverse().find((message: any) => message?.role === "assistant");
+    const reason = assistant?.stopReason ?? event?.stopReason ?? "";
+    if (reason === "error") {{ failedSinceSettle = true; emit("failed", ctx); }}
+    else if (reason === "aborted") emit("completed", ctx);
+  }});
+  pi.on("agent_settled", (_event, ctx) => {{ if (!failedSinceSettle) emit("completed", ctx); failedSinceSettle = false; }});
+}}
+"#
+    )
+}
+
+fn pi_extension_matches(raw: &str, extension_path: &Path, signal_path: &Path) -> bool {
+    let signal =
+        serde_json::to_string(&signal_path.to_string_lossy().to_string()).unwrap_or_default();
+    raw.contains("cc-sessions-viewer-turn-status")
+        && raw.contains("before_agent_start")
+        && raw.contains("agent_start")
+        && raw.contains("agent_end")
+        && raw.contains("agent_settled")
+        && raw.contains(&format!("const SIGNAL_PATH = {signal};"))
+        && raw.contains(&format!(
+            "const MARKER = \"cc-sessions-viewer-turn-status\";"
+        ))
+        && extension_path.extension().and_then(|value| value.to_str()) == Some("ts")
+}
+
+fn pi_settings_extensions(settings: &Value) -> Result<Vec<Value>, String> {
+    settings
+        .get("extensions")
+        .map(|value| {
+            value
+                .as_array()
+                .cloned()
+                .ok_or_else(|| "Pi settings.json extensions must be an array".to_string())
+        })
+        .transpose()
+        .map(|value| value.unwrap_or_default())
+}
+
+fn pi_settings_has_extension(settings: &Value, extension_path: &Path) -> Result<bool, String> {
+    let expected = extension_path.to_string_lossy();
+    Ok(pi_settings_extensions(settings)?
+        .iter()
+        .any(|value| value.as_str() == Some(expected.as_ref())))
+}
+
+fn merge_pi_extension_settings(settings: &mut Value, extension_path: &Path) -> Result<(), String> {
+    let extensions = settings
+        .as_object_mut()
+        .ok_or_else(|| "Pi settings.json top level must be an object".to_string())?
+        .entry("extensions")
+        .or_insert_with(|| json!([]));
+    let list = extensions
+        .as_array_mut()
+        .ok_or_else(|| "Pi settings.json extensions must be an array".to_string())?;
+    let expected = extension_path.to_string_lossy().to_string();
+    list.retain(|value| value.as_str() != Some(expected.as_str()));
+    list.push(Value::String(expected));
+    Ok(())
+}
+
+fn install_pi_turn_extension(signal_path: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let _guard = pi_config_lock().lock().map_err(|error| error.to_string())?;
+    let extension_path = crate::agents::pi::pi_status_extension_path();
+    let settings_path = crate::agents::pi::pi_settings_path();
+    let settings_before = pi_file_revision(&settings_path)?;
+    let mut settings = read_json_object(&settings_path, "Pi settings.json")?;
+    let extension_before = pi_file_revision(&extension_path)?;
+    let extension_source = pi_extension_source(signal_path);
+    atomic_write_pi_file(
+        &extension_path,
+        extension_source.as_bytes(),
+        &extension_before,
+        "Pi status extension",
+    )?;
+
+    merge_pi_extension_settings(&mut settings, &extension_path)?;
+    let bytes = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?
+    );
+    atomic_write_pi_file(
+        &settings_path,
+        bytes.as_bytes(),
+        &settings_before,
+        "Pi settings.json",
+    )?;
+    Ok((extension_path, settings_path))
+}
+
+fn pi_turn_hook_status(signal_path: &Path) -> Result<TurnHookAgentStatus, String> {
+    let extension_path = crate::agents::pi::pi_status_extension_path();
+    let settings_path = crate::agents::pi::pi_settings_path();
+    let extension_raw = fs::read_to_string(&extension_path).unwrap_or_default();
+    let settings = read_json_object(&settings_path, "Pi settings.json")?;
+    let installed = pi_extension_matches(&extension_raw, &extension_path, signal_path)
+        && pi_settings_has_extension(&settings, &extension_path)?
+        && fs::metadata(signal_path).is_ok_and(|metadata| metadata.is_file());
+    let events = [
+        "before_agent_start",
+        "agent_start",
+        "agent_end",
+        "agent_settled",
+    ]
+    .into_iter()
+    .map(|name| TurnHookEventStatus {
+        name: name.to_string(),
+        installed,
+    })
+    .collect();
+    let hooks = if extension_raw.is_empty() {
+        Vec::new()
+    } else {
+        vec![TurnHookEntry {
+            event: "extension".to_string(),
+            category: None,
+            matcher: None,
+            hook_type: "extension".to_string(),
+            detail: extension_path.to_string_lossy().to_string(),
+            managed: pi_extension_matches(&extension_raw, &extension_path, signal_path),
+        }]
+    };
+    Ok(TurnHookAgentStatus {
+        installed,
+        config_path: settings_path.to_string_lossy().to_string(),
+        events,
+        hooks,
+    })
 }
 
 fn hook_agent_status(
@@ -2019,5 +2274,51 @@ timeout = 2
             complete_jsonl_prefix_len("{\"a\":\"中\"}\n"),
             "{\"a\":\"中\"}\n".len()
         );
+    }
+
+    #[test]
+    fn pi_extension_source_has_safe_lifecycle_relay() {
+        let signal = Path::new("/tmp/cc-sessions-viewer/turn-signals.jsonl");
+        let source = pi_extension_source(signal);
+        assert!(source.contains("cc-sessions-viewer-turn-status"));
+        assert!(source.contains("before_agent_start"));
+        assert!(source.contains("agent_start"));
+        assert!(source.contains("agent_end"));
+        assert!(source.contains("agent_settled"));
+        assert!(source.contains("event?.messages"));
+        assert!(source.contains("reason === \"error\""));
+        assert!(source.contains("reason === \"aborted\""));
+        assert!(source.contains("Status reporting must never block Pi"));
+        assert!(pi_extension_matches(
+            &source,
+            Path::new("/tmp/cc-sessions-viewer/extension.ts"),
+            signal,
+        ));
+    }
+
+    #[test]
+    fn pi_settings_merge_is_idempotent_and_preserves_user_entries() {
+        let extension =
+            Path::new("/home/tester/.pi/agent/extensions/cc-sessions-viewer-turn-status.ts");
+        let mut settings = json!({
+            "packages": ["npm:example"],
+            "extensions": ["/home/tester/custom.ts", extension, extension, 7],
+            "theme": "dark"
+        });
+        merge_pi_extension_settings(&mut settings, extension).unwrap();
+        merge_pi_extension_settings(&mut settings, extension).unwrap();
+        assert_eq!(settings["packages"][0], "npm:example");
+        assert_eq!(settings["theme"], "dark");
+        assert_eq!(settings["extensions"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            settings["extensions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|value| value.as_str() == Some(extension.to_str().unwrap()))
+                .count(),
+            1
+        );
+        assert!(merge_pi_extension_settings(&mut json!({"extensions": {}}), extension).is_err());
     }
 }

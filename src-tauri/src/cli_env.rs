@@ -111,6 +111,26 @@ const CLI_SPECS: &[CliSpec] = &[
         background_upgrade: false,
         health_check_command: Some("kimi doctor"),
     },
+    CliSpec {
+        name: "pi",
+        binary: "pi",
+        npm_package: "@earendil-works/pi-coding-agent",
+        brew_upgrade: None,
+        builtin_update: Some("pi update self"),
+        manifest_url: None,
+        version_check_command: None,
+        // Pi's documented curl installer still installs the npm package, but it
+        // also bootstraps Node/npm when needed and selects a writable prefix.
+        // Keep this entry aligned with the official install path; upgrades use
+        // the resolved binary's actual package manager instead.
+        install_unix: Some("curl -fsSL https://pi.dev/install.sh | sh"),
+        install_windows: Some("npm install -g --ignore-scripts @earendil-works/pi-coding-agent"),
+        background_upgrade: true,
+        // `pi --help` only proves the binary starts; it does not validate
+        // provider credentials or project trust, so do not show it as a
+        // misleading "configuration available" health badge.
+        health_check_command: None,
+    },
 ];
 
 fn find_spec(cli_name: &str) -> Result<&'static CliSpec, String> {
@@ -1023,6 +1043,19 @@ mod tests {
         );
         assert!(!kimi.background_upgrade);
         assert_eq!(kimi.health_check_command, Some("kimi doctor"));
+    }
+
+    #[test]
+    fn pi_cli_supports_background_upgrade_and_uses_native_update_fallback() {
+        let pi = find_spec("pi").unwrap();
+        assert_eq!(pi.npm_package, "@earendil-works/pi-coding-agent");
+        assert_eq!(
+            pi.install_unix,
+            Some("curl -fsSL https://pi.dev/install.sh | sh")
+        );
+        assert_eq!(pi.builtin_update, Some("pi update self"));
+        assert!(pi.background_upgrade);
+        assert_eq!(pi.health_check_command, None);
     }
 
     #[test]

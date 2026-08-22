@@ -251,6 +251,7 @@ const visibleSessions = computed(() => {
 const usageMap = ref<Map<string, UsageSummary>>(new Map())
 const usageInFlight = new Set<string>() // 防重复请求
 let usageIO: IntersectionObserver | null = null
+const usageCardsPending = new Set<HTMLElement>()
 
 function fetchUsage(path: string) {
   if (usageMap.value.has(path) || usageInFlight.has(path)) return
@@ -294,10 +295,16 @@ function fetchSubtitle(path: string) {
 
 // Vue ref callback：每张卡片 mounted 时把 element 注册到 observer；unmount 时取消。
 function observeUsageCard(path: string, el: Element | null) {
-  if (!usageIO || !el) return
+  if (!el) return
   // 同一个 path 可能反复 mount / unmount（v-for key 重组），简单 observe 两次也无害。
-  ;(el as HTMLElement).dataset.usagePath = path
-  usageIO.observe(el)
+  const card = el as HTMLElement
+  card.dataset.usagePath = path
+  if (usageIO) {
+    usageIO.observe(card)
+  } else {
+    // Vue ref 回调先于 onMounted 执行；暂存这些节点，observer 建好后补注册。
+    usageCardsPending.add(card)
+  }
 }
 
 onMounted(() => {
@@ -314,11 +321,16 @@ onMounted(() => {
     },
     { rootMargin: '120px 0px' }, // 提前一屏开始预取
   )
+  for (const card of usageCardsPending) {
+    usageIO.observe(card)
+  }
+  usageCardsPending.clear()
 })
 
 onUnmounted(() => {
   usageIO?.disconnect()
   usageIO = null
+  usageCardsPending.clear()
 })
 
 // 切项目 → 清缓存 + 在飞请求标记（前一项目的结果回来也不会写到新表里，因为表是新的）

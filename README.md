@@ -129,16 +129,6 @@ On Linux the `.AppImage` is portable — `chmod +x` and run. The `.deb` installs
 sudo apt install ./cc-sessions-viewer_<ver>_amd64.deb
 ```
 
-## Kimi Code
-
-Kimi Code sessions are discovered from `$KIMI_CODE_HOME` (default: `~/.kimi-code`). The viewer reads each session's `state.json` and `agents/main/wire.jsonl`, and includes `agents/*/wire.jsonl` when calculating usage. Resume opens `kimi --session <id>`; new sessions run `kimi` in the selected project directory.
-
-Kimi sessions are directory-backed. Rename updates Kimi session metadata; trash, restore, and permanent deletion operate on the complete session directory and keep `session_index.jsonl` in sync. Kimi worktree sessions are grouped by their real `cwd`.
-
-Settings can install five user-level Kimi status hooks in `$KIMI_CODE_HOME/config.toml`. Only hooks managed by Sessions Viewer are changed, and invalid or incompatible TOML is left untouched. Kimi GUI Chat is not supported in this release.
-
-For privacy, the viewer does not read `credentials/`, global logs, MCP configuration, or skills. Its Markdown/HTML exports use the viewed session only. `kimi export` is not invoked by the app; its diagnostic ZIP can include global logs, so inspect it before sharing.
-
 ## Development
 
 ```bash

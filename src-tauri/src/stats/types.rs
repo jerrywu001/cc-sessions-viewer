@@ -10,6 +10,18 @@
 
 use crate::types::UsageSummary;
 
+/// Provenance of a call's dollar value. A recorded Pi bill must not be
+/// presented as a catalog estimate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CostSource {
+    Recorded,
+    Catalog,
+    Estimated,
+    Unpriced,
+    #[default]
+    Unknown,
+}
+
 /// 一次 assistant API 调用。把 JSONL 里一条 assistant 消息抽成结构化记录。
 #[derive(Clone, Debug)]
 pub struct CallRecord {
@@ -35,6 +47,7 @@ pub struct CallRecord {
     pub pricing_missing: bool,
     /// 成本来自 Grok 官方旗舰价格兜底，并非第三方 endpoint 的实际账单。
     pub pricing_estimated: bool,
+    pub cost_source: CostSource,
     /// 这次调用里 assistant 用了哪些工具（Bash / Edit / mcp__foo__bar / ...）。
     pub tools: Vec<String>,
     /// Bash 工具的命令首词（执行了哪些 shell 命令）。
@@ -57,6 +70,7 @@ impl Default for CallRecord {
             cost_usd: 0.0,
             pricing_missing: false,
             pricing_estimated: false,
+            cost_source: CostSource::Unknown,
             tools: Vec::new(),
             bash_commands: Vec::new(),
             mcp_servers: Vec::new(),

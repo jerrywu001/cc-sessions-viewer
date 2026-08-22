@@ -129,16 +129,6 @@ Linux 版 `.AppImage` はポータブル形式 —— `chmod +x` で実行可能
 sudo apt install ./cc-sessions-viewer_<ver>_amd64.deb
 ```
 
-## Kimi Code
-
-Kimi Code のセッションは `$KIMI_CODE_HOME`（既定値: `~/.kimi-code`）から検出されます。ビューアは各セッションの `state.json` と `agents/main/wire.jsonl` を読み、利用量の集計には `agents/*/wire.jsonl` のサブエージェントも含めます。再開では `kimi --session <id>`、新規セッションでは選択したプロジェクトディレクトリで `kimi` を実行します。
-
-Kimi のセッションはディレクトリ単位で保存されます。リネームは Kimi のセッション metadata を更新し、ゴミ箱、復元、完全削除はセッションディレクトリ全体を対象にして `session_index.jsonl` も同期します。worktree のセッションは実際の `cwd` でグループ化されます。
-
-設定から `$KIMI_CODE_HOME/config.toml` に 5 つのユーザーレベル Kimi 状態 hook をインストールできます。Sessions Viewer が管理する hook のみを変更し、無効または互換性のない TOML には書き込みません。このリリースでは Kimi GUI Chat はサポートされません。
-
-プライバシーのため、ビューアは `credentials/`、グローバルログ、MCP 設定、Skills を読みません。Markdown/HTML エクスポートは表示中のセッションだけを使用します。アプリは `kimi export` を実行しません。診断 ZIP にはグローバルログが含まれる可能性があるため、共有前に確認してください。
-
 ## 開発
 
 ```bash

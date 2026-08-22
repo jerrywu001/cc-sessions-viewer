@@ -129,16 +129,6 @@ Linux 上 `.AppImage` 是便携格式 —— `chmod +x` 后直接运行。`.deb`
 sudo apt install ./cc-sessions-viewer_<ver>_amd64.deb
 ```
 
-## Kimi Code
-
-Kimi Code 会话从 `$KIMI_CODE_HOME` 发现，默认目录为 `~/.kimi-code`。应用读取每个会话的 `state.json` 与 `agents/main/wire.jsonl`，统计时会纳入 `agents/*/wire.jsonl` 的子 agent 用量。恢复会话执行 `kimi --session <id>`；新会话会在当前项目目录执行 `kimi`。
-
-Kimi 会话以目录为存储单元。重命名更新 Kimi 会话 metadata；删除、恢复和永久删除都以完整会话目录为单位，并同步 `session_index.jsonl`。worktree 会话按真实 `cwd` 归类。
-
-设置页可在 `$KIMI_CODE_HOME/config.toml` 安装五个用户级 Kimi 状态 hooks。应用只修改自己管理的 hooks；TOML 无法解析或顶层类型不兼容时不会写入。本版本不支持 Kimi GUI Chat。
-
-隐私方面，应用不会读取 `credentials/`、全局日志、MCP 配置或 Skills。Markdown/HTML 导出只使用当前查看的会话；应用不会调用 `kimi export`，其诊断 ZIP 可能包含全局日志，分享前请自行检查。
-
 ## 开发
 
 ```bash

@@ -26,6 +26,7 @@ import type {
   GitFileStatus,
   GitDiffFile,
   GitRepositoryState,
+  PiTreeNode,
 } from './types'
 
 export interface BackgroundMedia {
@@ -109,8 +110,13 @@ export const listSessions = (
     includeCodexArchived: options.includeCodexArchived ?? false,
   })
 
-export const readSession = (agent: Agent, path: string) =>
-  invoke<Msg[]>('read_session', { agent, path })
+export const readSession = (agent: Agent, path: string, leafId?: string) =>
+  invoke<Msg[]>('read_session', { agent, path, leafId })
+
+export const sessionTree = (agent: Agent, path: string) =>
+  invoke<PiTreeNode[]>('session_tree', { agent, path })
+export const sessionExportJson = (agent: Agent, path: string, leafId?: string | null) =>
+  invoke<string>('session_export_json', { agent, path, leafId })
 
 /** 单个会话的 token 用量。
  *  后端按 (path, mtime) 缓存，重复调用不会重复扫描文件。 */
@@ -284,6 +290,8 @@ export type TurnHookInstallResult = {
   agyHooksPath: string
   grokConfigPath: string
   kimiConfigPath: string
+  piExtensionPath: string
+  piSettingsPath: string
 }
 
 export type TurnHookEventStatus = {
@@ -314,6 +322,7 @@ export type TurnHookStatus = {
   agy: TurnHookAgentStatus
   grok: TurnHookAgentStatus
   kimicode: TurnHookAgentStatus
+  pi: TurnHookAgentStatus
 }
 
 export const installTurnHooks = () => invoke<TurnHookInstallResult>('install_turn_hooks')

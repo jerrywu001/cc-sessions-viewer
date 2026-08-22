@@ -60,6 +60,7 @@ export interface PaneActions {
   exportSession: (kind: ExportKind) => void
   restore: (item: TrashItem) => void
   openSessionStats: () => void
+  switchPiLeaf: (leafId: string) => void
   reveal: (path: string) => void
   // —— SessionsView（项目主页 / 会话列表）——
   chatFromList: (s: SessionMeta) => void

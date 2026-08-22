@@ -7,14 +7,14 @@
 // 每个 tab 按 (agent, projectKey) 归属，切项目时隐藏但不杀；和终端 tab 行为一致。
 
 import { ref, computed } from 'vue'
-import type { Agent, SessionMeta, Msg } from './types'
+import type { Agent, SessionMeta, Msg, PiTreeNode } from './types'
 import { closeChat, type ChatSession } from './chatSessions'
 import { sessionPathsEqual, type TabStatusKind } from './tabStatus'
 import { activeViewTabId, panes, focusPane, ensureLayout } from './panes'
 
 function normalizeStoredAgent(agent: unknown): Agent | null {
   if (agent === 'kimi') return 'kimicode'
-  return agent === 'claude' || agent === 'codex' || agent === 'agy' || agent === 'opencode' || agent === 'grok' || agent === 'kimicode'
+  return agent === 'claude' || agent === 'codex' || agent === 'agy' || agent === 'opencode' || agent === 'grok' || agent === 'kimicode' || agent === 'pi'
     ? agent
     : null
 }
@@ -34,6 +34,9 @@ export interface ViewTab {
   session: SessionMeta | null
   msgs: Msg[]
   loadingMsgs: boolean
+  /** Pi read-only branch state; omitted for other agents. */
+  piTree: PiTreeNode[] | null
+  piLeafId: string | null
   // chat tab
   chatSession: ChatSession | null
   /** 最近一次已查看的 GUI chat turn；用于只在后台完成后显示一次 done 状态。 */
@@ -96,6 +99,8 @@ export function createViewTab(partial: Partial<ViewTab> & Pick<ViewTab, 'type' |
     session: null,
     msgs: [],
     loadingMsgs: false,
+    piTree: null,
+    piLeafId: null,
     chatSession: null,
     lastViewedChatTurnStartedAt: 0,
     lastViewedChatErrorKey: null,
@@ -264,6 +269,7 @@ export interface SavedViewTab {
   createdAt: number
   session: SessionMeta | null
   sessionId: string | null
+  piLeafId?: string | null
   trashAgent: Agent | null
   importedAgent: Agent | null
   gitCwd?: string | null
@@ -292,6 +298,7 @@ export function persistViewTabs() {
       createdAt: t.createdAt,
       session: t.session ?? t.sourceSession,
       sessionId: t.chatSession?.sessionId ?? t.session?.id ?? null,
+      piLeafId: t.piLeafId,
       trashAgent: t.trashAgent,
       importedAgent: t.importedAgent,
       gitCwd: t.gitCwd,

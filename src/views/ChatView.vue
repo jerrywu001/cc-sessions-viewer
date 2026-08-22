@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch, defineAsyncComponent } from 'vue'
 import type { DirectiveBinding } from 'vue'
 import { useVirtualizer } from '@tanstack/vue-virtual'
-import type { Agent, Msg, SessionMeta, Block, ChatQuestionRequest } from '../types'
+import type { Agent, Msg, SessionMeta, Block, ChatQuestionRequest, PiTreeNode } from '../types'
 import { agentLabel } from '../agentMeta'
 import { renderText, renderTextUncached, displaySessionId, formatTime, formatElapsedSeconds, historicalMessageExecutionMs, isCaveatOnlyMsg, isAskUserQuestionInstructionOnlyMsg, parseSystemEvent, cleanMetaText, metaKindIsPre, parseMetaFields, parseTeammateMessage, parseFileRef } from '../format'
 import type { MetaField } from '../format'
@@ -20,7 +20,7 @@ import { parseContextUsage, type ContextUsage } from '../contextUsage'
 // 图片灯箱只在点开预览时用 —— 懒加载，不进首屏（vue-easy-lightbox 不算大但能省一点）。
 const VueEasyLightbox = defineAsyncComponent(() => import('vue-easy-lightbox'))
 import { highlightDiff, looksLikeDiff } from '../diffHighlight'
-import { renderCodexApplyPatchHtml, renderCodexFileChangeHtml } from '../codexApplyPatch'
+import { renderCodexApplyPatchHtml, renderCodexFileChangeHtml, renderPiFileChangeHtml } from '../codexApplyPatch'
 import { codexPluginLinkForUri, renderCodexPluginLinkHtml, renderCodexPluginMentionHtmlText } from '../codexPluginMentions'
 import { isFileChangeResult, isFileMutatingToolName, shouldAttachToolResult, shouldPreferToolResult } from '../toolResultRouting'
 import {
@@ -106,6 +106,9 @@ const props = defineProps<{
   liveSession?: ChatSession | null
   /** live 模式下是否有「来源只读会话」可回看 —— 有才显示头部「切到 read」按钮。 */
   hasReadView?: boolean
+  /** Pi's parent-linked transcript tree, supplied for read-only sessions. */
+  piTree?: PiTreeNode[] | null
+  piLeafId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -132,6 +135,7 @@ const emit = defineEmits<{
   /** 打开会话统计页 —— 原本住在 ChatTopbar 里，现挪进 chat-head 减少
    *  topbar + chat-head 两排 icon-only 按钮重叠的扫描负担。 */
   openSessionStats: []
+  piLeafChange: [leafId: string]
   archive: []
   /** 头部星标：把当前会话收藏 / 取消收藏到「Views」历史。 */
 }>()
@@ -375,6 +379,14 @@ function isStructuredFileChangeToolUse(b: Block): boolean {
   return b.kind === 'tool_use' && !!b.filePath && !!b.fileChangeType
 }
 
+// Pi's native edit/write tools carry their file contents in the JSON arguments
+// rather than the structured diff fields used by Codex. Render those arguments
+// as an always-visible code block so the change is inspectable without opening
+// a generic tool details disclosure.
+function isPiFileMutationToolUse(b: Block): boolean {
+  return props.agent === 'pi' && b.kind === 'tool_use' && !b.isError && isFileMutatingToolName(b.toolName)
+}
+
 function renderNumberedCodeHtml(html: string): string {
   const lines = html.split('\n')
   return lines
@@ -387,6 +399,10 @@ function renderNumberedCodeHtml(html: string): string {
 
 function toolUseCodeHtml(b: Block): string {
   const input = b.toolInput ?? ''
+  if (isPiFileMutationToolUse(b)) {
+    const rendered = renderPiFileChangeHtml(input, props.cwd)
+    if (rendered) return rendered
+  }
   if (isCodexInlineCodeToolUse(b)) {
     const rendered = renderCodexApplyPatchHtml(input, props.cwd)
     if (rendered) return rendered
@@ -407,7 +423,9 @@ function isCodexApplyPatchStructured(b: Block): boolean {
 }
 
 function toolUseCodeClass(b: Block): string[] {
-  if (isCodexApplyPatchStructured(b)) return ['codex-apply-patch']
+  if (isCodexApplyPatchStructured(b) || isPiFileMutationToolUse(b) && !!renderPiFileChangeHtml(b.toolInput ?? '', props.cwd)) {
+    return ['codex-apply-patch']
+  }
   return ['code-block', looksLikeDiff(b.toolInput ?? '') ? 'lang-diff' : 'lang-json']
 }
 
@@ -514,6 +532,11 @@ function shouldShowAttachedResult(b: Block): boolean {
   const result = attachedResultFor(b)
   if (!result) return false
   if (props.agent === 'kimicode') return false
+  // Pi's successful edit/write result only repeats the file change. The
+  // structured diff card above is the single source of truth; retain failures.
+  if (props.agent === 'pi' && isFileMutatingToolName(toolUseById.value.get(b.toolId ?? '')?.toolName)) {
+    return result.isError
+  }
   return result.isError || !isCodexApplyPatchStructured(b)
 }
 
@@ -537,7 +560,13 @@ function isAlwaysVisibleToolResult(b: Block): boolean {
 function shouldShowToolUse(b: Block): boolean {
   if (b.kind !== 'tool_use') return false
   if (isAskUserQuestion(b)) return true
-  if (props.agent === 'kimicode' && isFileMutatingToolName(b.toolName)) return true
+  // Failure diagnostics are actionable and must remain visible even when the
+  // session's ordinary tool-call display is disabled.
+  if (b.isError) return true
+  // File mutations are part of the user's requested code change, not merely
+  // process noise. Keep their arguments visible for every agent (Pi uses the
+  // lowercase `edit` / `write` names), even when ordinary tool calls are hidden.
+  if (isFileMutatingToolName(b.toolName)) return true
   if (readToolCallsVisible.value) return true
   return isCodexInlineCodeToolUse(b)
 }
@@ -548,7 +577,7 @@ function shouldShowToolResult(b: Block): boolean {
   if (b.kind !== 'tool_result') return false
   if (props.agent === 'kimicode') return false
   if (shouldHideToolResult(b) || isInlinedResult(b) || isAttachedResult(b)) return false
-  return readToolCallsVisible.value || isAlwaysVisibleToolResult(b)
+  return b.isError || readToolCallsVisible.value || isAlwaysVisibleToolResult(b)
 }
 
 function askUserQuestionResult(b: Block): Block | undefined {
@@ -2031,6 +2060,13 @@ const filteredPromptEntries = computed(() => {
   if (!q) return promptEntries.value
   return promptEntries.value.filter((e) => e.text.toLowerCase().includes(q))
 })
+const piLeafOptions = computed(() =>
+  (props.piTree ?? []).filter((node) => node.terminal),
+)
+function piBranchLabel(node: PiTreeNode): string {
+  const kind = node.kind || 'entry'
+  return `#${node.ordinal + 1} ${kind}`
+}
 function toggleLocateMenu(e: Event) {
   e.stopPropagation()
   locateMenuOpen.value = !locateMenuOpen.value
@@ -2121,6 +2157,18 @@ function onDocClick(e: MouseEvent) {
           :cwd="cwd || session.cwd"
           :disabled="!!liveSession && liveSession.turnState !== 'idle'"
         />
+        <label v-if="agent === 'pi' && piLeafOptions.length > 1" class="pi-branch-picker">
+          <span class="pi-branch-picker-label">{{ t('chat.pi.branch') }}</span>
+          <select
+            :value="piLeafId || ''"
+            :aria-label="t('chat.pi.branch')"
+            @change="$emit('piLeafChange', ($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="node in piLeafOptions" :key="node.id" :value="node.id">
+              {{ piBranchLabel(node) }}
+            </option>
+          </select>
+        </label>
       </div>
     </div>
     <!-- 会话统计 + 折叠 Tool calls：原本住在 ChatTopbar.ct-actions 里，
@@ -2505,6 +2553,14 @@ function onDocClick(e: MouseEvent) {
                 />
               </div>
 
+              <div
+                v-else-if="isPiFileMutationToolUse(b) && shouldShowToolUse(b)"
+                class="inline-tool-code inline-tool-code-flat"
+                :data-search-scope="toolUseScope(b)"
+              >
+                <div :class="toolUseCodeClass(b)" v-html="toolUseCodeHtml(b)" />
+              </div>
+
               <details
                 v-else-if="b.kind === 'tool_use' && shouldShowToolUse(b)"
                 class="block-card"
@@ -2515,7 +2571,7 @@ function onDocClick(e: MouseEvent) {
               >
                 <summary class="block-summary">
                   <span class="chev"><IconChevronRight /></span>
-                  <span class="label">{{ toolLabel(b) }}</span>
+                  <span class="label" :class="{ error: b.isError }">{{ toolLabel(b) }}</span>
                 </summary>
                 <div class="block-body">
                   <pre class="lang-json" v-html="prettifyAndHighlightJson(b.toolInput ?? '')" />

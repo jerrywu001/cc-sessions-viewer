@@ -154,7 +154,7 @@ export default {
   'welcome.removeRecent': 'Remove from recent',
   'welcome.clearRecent': 'Clear',
   'welcome.announcement':
-    'Gemini CLI is no longer supported — switched to Antigravity CLI, without token stats　·　Fixed image paste not working in the embedded Codex terminal',
+    'Gemini CLI is no longer supported — switched to Antigravity CLI, without token stats　·　More agent toggles are available in Settings; choose up to 4 entries',
 
   'trash.title': 'Trash',
   'trash.subtitle':
@@ -221,6 +221,9 @@ export default {
   'chat.action.resume': 'Resume in terminal',
   'chat.action.resumeHere': 'Open in window',
   'chat.action.resumeUnavailable': 'Cannot resume — missing working directory',
+  'chat.pi.resumeTitle': 'Pi will resume its default position',
+  'chat.pi.resumeMessage': 'This view is on a non-default branch. Pi will resume from the file\'s last entry.',
+  'chat.pi.branch': 'Pi branch',
   'chat.action.switchToChat': 'Switch to chat mode',
   'chat.action.switchToRead': 'Switch to read mode',
   'chat.composer.placeholder': 'Type / for commands · {key} to upload files',
@@ -768,7 +771,7 @@ export default {
   'settings.section.turnStatus': 'Session status tracking',
   'settings.turnStatus.categoryTitle': 'Session status tracking',
   'settings.turnStatus.desc':
-    'Use the official Claude Code, Codex, AGY, Grok, and Kimi Code lifecycle hooks to keep tab status up to date.',
+    'Use supported CLI lifecycle hooks and the Pi global extension to keep tab status up to date.',
   'settings.turnStatus.brief': 'Tab turn indicators',
   'settings.turnStatus.install': 'Enable session status tracking',
   'settings.turnStatus.installing': 'Enabling…',
@@ -776,9 +779,9 @@ export default {
   'settings.turnStatus.enabled': 'Enabled',
   'settings.turnStatus.notEnabled': 'Not enabled',
   'settings.turnStatus.actionTitle': 'Enable session status tracking',
-  'settings.turnStatus.actionDesc': 'Adds status hooks to all four CLI configs without changing your other hooks.',
+  'settings.turnStatus.actionDesc': 'Adds managed status integrations to supported CLI configs and the Pi global extension without changing your other hooks.',
   'settings.turnStatus.readyTitle': 'Status tracking is ready',
-  'settings.turnStatus.readyDesc': 'All four status hook sets are fully installed. No action is needed.',
+  'settings.turnStatus.readyDesc': 'All supported status integrations are fully installed. No action is needed.',
   'settings.turnStatus.installed': 'Status tracking hooks are enabled. Run /hooks in Codex to review and trust the new hook.',
   'settings.turnStatus.detectFail': 'Status check failed: {e}',
   'settings.turnStatus.installFail': 'Failed to enable: {e}',
@@ -837,6 +840,7 @@ export default {
   'stats.pricing.missing': '{n} calls have no model price; shown cost includes priced calls only',
   'stats.pricing.modelsMissing': '{n} models have no price; tokens and calls are still counted',
   'stats.pricing.estimated': '{n} calls use an official Grok Build price estimate; the third-party bill may differ',
+  'stats.pricing.recorded': '{n} calls use cost recorded by the agent',
   'stats.pricing.modelsEstimated': '{n} models use estimated pricing from official Grok Build rates',
   'stats.sessionTitle': 'Session statistics',
   'stats.scope.label': 'Scope',

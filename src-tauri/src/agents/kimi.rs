@@ -1055,6 +1055,8 @@ fn session_meta(record: &KimiSessionRecord) -> SessionMeta {
         modified: record.modified,
         size: directory_size(&record.session_dir),
         message_count,
+        pi_branch_count: None,
+        pi_entry_count: None,
         codex_app_list_rank: None,
         codex_app_list_scanned: 0,
         codex_app_first_page_size: 0,

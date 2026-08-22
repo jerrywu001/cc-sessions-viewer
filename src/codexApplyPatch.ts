@@ -1,4 +1,4 @@
-import type { DiffHunk } from './types'
+import type { DiffHunk, DiffLine } from './types'
 
 type PatchOp = 'update' | 'add' | 'delete'
 type PatchLineKind = 'ctx' | 'add' | 'del' | 'hunk'
@@ -189,6 +189,83 @@ export function renderCodexFileChangeHtml(
     addCount,
     delCount,
   }], cwd)
+}
+
+/** Render Pi's native `edit` / `write` arguments using the same file-diff card
+ * as Codex. Pi persists replacement text rather than a unified patch. */
+export function renderPiFileChangeHtml(input: string, cwd?: string): string | null {
+  let value: Record<string, unknown>
+  try {
+    const parsed: unknown = JSON.parse(input)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    value = parsed as Record<string, unknown>
+  } catch {
+    return null
+  }
+
+  const path = typeof value.path === 'string' ? value.path : ''
+  if (!path) return null
+  const edits = Array.isArray(value.edits) ? value.edits : []
+  const hunks: DiffHunk[] = []
+
+  if (edits.length > 0) {
+    for (const raw of edits) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+      const edit = raw as Record<string, unknown>
+      if (typeof edit.oldText !== 'string' || typeof edit.newText !== 'string') continue
+      hunks.push(piTextDiffHunk(edit.oldText, edit.newText))
+    }
+  } else if (typeof value.content === 'string') {
+    hunks.push(piTextDiffHunk('', value.content))
+  }
+
+  if (!hunks.length) return null
+  return renderCodexFileChangeHtml(hunks, path, edits.length ? 'update' : 'add', cwd)
+}
+
+function piTextDiffHunk(oldText: string, newText: string): DiffHunk {
+  const oldLines = splitDiffLines(oldText)
+  const newLines = splitDiffLines(newText)
+  const useLcs = oldLines.length * newLines.length <= 1_000_000
+  const lcs = useLcs
+    ? Array.from({ length: oldLines.length + 1 }, () => new Uint32Array(newLines.length + 1))
+    : []
+  if (useLcs) {
+    for (let oi = oldLines.length - 1; oi >= 0; oi--) {
+      for (let ni = newLines.length - 1; ni >= 0; ni--) {
+        lcs[oi][ni] = oldLines[oi] === newLines[ni]
+          ? lcs[oi + 1][ni + 1] + 1
+          : Math.max(lcs[oi + 1][ni], lcs[oi][ni + 1])
+      }
+    }
+  }
+
+  const lines: DiffLine[] = []
+  let oi = 0
+  let ni = 0
+  let oldNo = 1
+  let newNo = 1
+  while (oi < oldLines.length || ni < newLines.length) {
+    if (oi < oldLines.length && ni < newLines.length && oldLines[oi] === newLines[ni]) {
+      lines.push({ kind: 'ctx', text: oldLines[oi], oldNo, newNo })
+      oi++; ni++; oldNo++; newNo++
+    } else if (oi < oldLines.length && (!useLcs || ni === newLines.length || lcs[oi + 1][ni] >= lcs[oi][ni + 1])) {
+      lines.push({ kind: 'del', text: oldLines[oi], oldNo, newNo: null })
+      oi++; oldNo++
+    } else if (ni < newLines.length) {
+      lines.push({ kind: 'add', text: newLines[ni], oldNo: null, newNo })
+      ni++; newNo++
+    }
+  }
+  return { oldStart: oldLines.length ? 1 : 0, newStart: newLines.length ? 1 : 0, lines }
+}
+
+function splitDiffLines(text: string): string[] {
+  if (!text) return []
+  const lines = text.split('\n')
+  // A trailing newline terminates the final line; it is not an extra blank line.
+  if (lines[lines.length - 1] === '') lines.pop()
+  return lines
 }
 
 function patchOpFromChangeType(changeType?: string): PatchOp | null {

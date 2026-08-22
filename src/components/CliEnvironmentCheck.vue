@@ -27,6 +27,7 @@ const cliLabels: Record<string, string> = {
   opencode: 'opencode',
   grok: 'Grok Build CLI',
   kimi: 'Kimi Code',
+  pi: 'Pi',
 }
 
 const cliUrls: Record<string, string> = {
@@ -36,6 +37,7 @@ const cliUrls: Record<string, string> = {
   opencode: 'https://opencode.ai/docs/',
   grok: 'https://docs.x.ai/docs/grok-cli',
   kimi: 'https://www.kimi.com/code/en',
+  pi: 'https://github.com/badlogic/pi-mono',
 }
 
 const pmLabels: Record<string, string> = {

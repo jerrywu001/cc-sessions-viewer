@@ -21,7 +21,7 @@ struct Boundaries {
     month_ms: u64,
 }
 
-const TRAY_AGENT_NAMES: [&str; 5] = ["claude", "codex", "grok", "kimicode", "opencode"];
+const TRAY_AGENT_NAMES: [&str; 6] = ["claude", "codex", "grok", "kimicode", "opencode", "pi"];
 static ENABLED_TRAY_AGENTS: OnceLock<RwLock<HashSet<String>>> = OnceLock::new();
 
 fn enabled_tray_agents() -> &'static RwLock<HashSet<String>> {

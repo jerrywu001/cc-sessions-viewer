@@ -416,7 +416,7 @@ export interface SavedView {
 
 function normalizeStoredAgent(agent: unknown): Agent | null {
   if (agent === 'kimi') return 'kimicode'
-  return agent === 'claude' || agent === 'codex' || agent === 'agy' || agent === 'opencode' || agent === 'grok' || agent === 'kimicode'
+  return agent === 'claude' || agent === 'codex' || agent === 'agy' || agent === 'opencode' || agent === 'grok' || agent === 'kimicode' || agent === 'pi'
     ? agent
     : null
 }

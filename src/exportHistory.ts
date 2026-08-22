@@ -18,6 +18,7 @@ const VALID_AGENTS: ReadonlySet<Agent> = new Set([
   'opencode',
   'grok',
   'kimicode',
+  'pi',
 ])
 
 export interface ExportRecord {

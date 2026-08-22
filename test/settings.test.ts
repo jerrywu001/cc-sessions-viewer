@@ -360,35 +360,35 @@ describe('agent visibility (enabledAgents / visibleAgents / setAgentEnabled)', (
     return import('../src/settings')
   }
 
-  it('defaults to Claude, Codex, Grok Build, and Kimi Code when nothing is stored', async () => {
+  it('defaults to Claude, Codex, Grok Build, and Pi when nothing is stored', async () => {
     const mod = await freshAgents()
-    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok', 'kimicode'])
+    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok', 'pi'])
   })
 
   it('restores a persisted subset, preserving the canonical order', async () => {
     const mod = await freshAgents(
       JSON.stringify({ claude: true, codex: false, grok: false, agy: true, opencode: false }),
     )
-    expect(mod.visibleAgents.value).toEqual(['claude', 'kimicode', 'agy'])
+    expect(mod.visibleAgents.value).toEqual(['claude', 'pi', 'agy'])
   })
 
   it('treats agents missing from stored data as enabled (new agent rollout)', async () => {
     // 旧版本存的 JSON 没有 Grok Build / opencode 键 —— 升级后它们应默认可见，
     // 其它 agent 的用户选择保持不变。
     const mod = await freshAgents(JSON.stringify({ claude: true, codex: false, agy: false }))
-    expect(mod.visibleAgents.value).toEqual(['claude', 'grok', 'kimicode', 'opencode'])
+    expect(mod.visibleAgents.value).toEqual(['claude', 'grok', 'pi'])
   })
 
   it('falls back to the default agents when stored data has every agent off', async () => {
     const mod = await freshAgents(
       JSON.stringify({ claude: false, codex: false, grok: false, kimi: false, agy: false, opencode: false }),
     )
-    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok', 'kimicode'])
+    expect(mod.visibleAgents.value).toEqual(['pi'])
   })
 
   it('falls back to all-enabled on corrupt JSON', async () => {
     const mod = await freshAgents('{not json')
-    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok', 'kimicode'])
+    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok', 'pi'])
   })
 
   it('keeps only the first four enabled agents from an older oversized preference', async () => {
@@ -404,7 +404,7 @@ describe('agent visibility (enabledAgents / visibleAgents / setAgentEnabled)', (
   it('setAgentEnabled disables an agent and persists', async () => {
     const mod = await freshAgents()
     mod.setAgentEnabled('grok', false)
-    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'kimicode'])
+    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'pi'])
     expect(JSON.parse(localStorage.getItem('enabledAgents:v1')!).grok).toBe(false)
   })
 
@@ -413,7 +413,7 @@ describe('agent visibility (enabledAgents / visibleAgents / setAgentEnabled)', (
       JSON.stringify({ claude: true, codex: false, grok: false, kimi: false, agy: false, opencode: false }),
     )
     mod.setAgentEnabled('claude', false)
-    expect(mod.visibleAgents.value).toEqual(['claude'])
+    expect(mod.visibleAgents.value).toEqual(['pi'])
   })
 
   it('re-enables a previously hidden agent', async () => {
@@ -421,17 +421,17 @@ describe('agent visibility (enabledAgents / visibleAgents / setAgentEnabled)', (
       JSON.stringify({ claude: true, codex: false, grok: false, kimi: false, agy: false, opencode: false }),
     )
     mod.setAgentEnabled('codex', true)
-    expect(mod.visibleAgents.value).toEqual(['claude', 'codex'])
+    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'pi'])
   })
 
   it('refuses to enable a fifth agent until one is disabled', async () => {
     const mod = await freshAgents()
     mod.setAgentEnabled('agy', true)
-    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok', 'kimicode'])
+    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'grok', 'pi'])
 
     mod.setAgentEnabled('grok', false)
     mod.setAgentEnabled('agy', true)
-    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'kimicode', 'agy'])
+    expect(mod.visibleAgents.value).toEqual(['claude', 'codex', 'pi', 'agy'])
   })
 
   it('preserves legacy launch args and adds an empty Grok Build value', async () => {

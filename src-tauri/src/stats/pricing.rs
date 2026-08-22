@@ -778,7 +778,7 @@ pub(crate) fn parse_models_dev_json(body: &str) -> Option<HashMap<String, ModelC
         "xai",
         "alibaba-cn",
     ];
-    // opencode 文档列出的非 claude/gpt/gemini 模型（合并 go + zen 两份文档去重）。
+    // opencode 文档列出的专属模型和别名（合并 go + zen 两份文档去重）。
     // 来源：https://opencode.ai/docs/zh-cn/go/#模型
     //       https://opencode.ai/docs/zh-cn/zen/#定价
     const OPENCODE_MODELS: &[&str] = &[
@@ -786,28 +786,51 @@ pub(crate) fn parse_models_dev_json(body: &str) -> Option<HashMap<String, ModelC
         "deepseek-v4-flash",
         "deepseek-v4-flash-free",
         "deepseek-v4-pro",
+        "gemini-3.1-pro",
         "glm-5",
         "glm-5.1",
         "glm-5.2",
         "glm-5.3",
+        "glm-5-free",
+        "gpt-5.2-codex",
         "grok-build-0.1",
+        "hy3-free",
+        "hy3-preview-free",
         "kimi-k2.5",
+        "kimi-k2.5-free",
         "kimi-k2.6",
         "kimi-k2.7-code",
         "kimi-k3",
+        "laguna-s-2.1-free",
+        "ling-2.6-flash-free",
+        "ling-3.0-flash-free",
+        "ling-3.0-tiny-free",
+        "longcat-2.0-free",
         "mimo-v2.5",
         "mimo-v2.5-free",
         "mimo-v2.5-pro",
+        "mimo-v2-omni-free",
+        "mimo-v2-pro-free",
         "minimax-m2.5",
+        "minimax-m2.5-free",
         "minimax-m2.7",
         "minimax-m3",
+        "minimax-m3-free",
+        "muse-spark-1.2",
+        "muse-spark-1.2-contributor-free",
+        "nemotron-3.5-lightning-free",
+        "nemotron-3-super-free",
         "nemotron-3-ultra-free",
         "north-mini-code-free",
         "qwen3.5-plus",
         "qwen3.6-plus",
+        "qwen3.6-plus-free",
         "qwen3.7-max",
         "qwen3.7-plus",
         "qwen3.8-max",
+        "ring-2.6-1t-free",
+        "trinity-large-preview-free",
+        "x-preview-f-free",
     ];
 
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
@@ -1599,6 +1622,46 @@ mod tests {
         assert!((glm.output - 4.4e-6).abs() < 1e-15);
         assert!((glm.cache_read - 0.26e-6).abs() < 1e-15);
         assert_eq!(glm.context, 1_000_000);
+    }
+
+    #[test]
+    fn parse_models_dev_json_includes_latest_opencode_models() {
+        let body = r#"{
+            "opencode": { "models": {
+                "x-preview-f-free": {
+                    "cost": { "input": 0, "output": 0 },
+                    "limit": { "context": 1000000 }
+                },
+                "muse-spark-1.2": {
+                    "cost": { "input": 1.25, "output": 4.25 },
+                    "limit": { "context": 1048576 }
+                },
+                "gpt-5.2-codex": {
+                    "cost": { "input": 1.75, "output": 14 },
+                    "limit": { "context": 400000 }
+                },
+                "gemini-3.1-pro": {
+                    "cost": { "input": 2, "output": 12 },
+                    "limit": { "context": 1048576 }
+                }
+            }}
+        }"#;
+
+        let table = parse_models_dev_json(body).expect("parsed");
+        let ox = table.get("x-preview-f-free").expect("latest free model");
+        assert_eq!(ox.input, 0.0);
+        assert_eq!(ox.output, 0.0);
+        assert_eq!(ox.context, 1_000_000);
+
+        let muse = table.get("muse-spark-1.2").expect("latest paid model");
+        assert!((muse.input - 1.25e-6).abs() < 1e-15);
+        assert!((muse.output - 4.25e-6).abs() < 1e-15);
+
+        let codex = table.get("gpt-5.2-codex").expect("latest codex model");
+        assert!((codex.input - 1.75e-6).abs() < 1e-15);
+        assert!((codex.output - 14e-6).abs() < 1e-15);
+
+        assert!(table.contains_key("gemini-3.1-pro"));
     }
 
     #[test]

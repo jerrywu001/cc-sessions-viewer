@@ -217,6 +217,8 @@ const liveChatMeta = computed<SessionMeta>(() => {
             :trashed="!!openTrashItem"
             :live="liveTailing"
             :cwd="chatCwd"
+            :pi-tree="paneViewTab.piTree"
+            :pi-leaf-id="paneViewTab.piLeafId"
             @back="actions.closeActiveViewTab"
             @refresh="actions.openChat(openSession)"
             @delete="actions.deleteSession(openSession)"
@@ -230,6 +232,7 @@ const liveChatMeta = computed<SessionMeta>(() => {
             @export-json="actions.exportSession('json')"
             @restore="openTrashItem && actions.restore(openTrashItem)"
             @open-session-stats="actions.openSessionStats"
+            @pi-leaf-change="actions.switchPiLeaf"
           />
         </template>
 

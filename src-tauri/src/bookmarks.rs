@@ -113,6 +113,8 @@ pub fn list_sessions_in_dir(dir: &str, offset: usize, limit: usize) -> Result<Se
                 modified: mt,
                 size,
                 message_count: 0,
+                pi_branch_count: None,
+                pi_entry_count: None,
                 codex_app_list_rank: None,
                 codex_app_list_scanned: 0,
                 codex_app_first_page_size: 0,

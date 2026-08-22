@@ -1,0 +1,8 @@
+{"type":"session","version":3,"id":"fixture-invalid","timestamp":"2026-08-22T00:00:00.000Z","cwd":"/tmp/pi-fixture"}
+{"type":"message","id":"duplicate","timestamp":"2026-08-22T00:00:04.000Z","message":{"role":"user","content":"first"}}
+{"type":"message","id":"duplicate","timestamp":"not-a-timestamp","message":{"role":"assistant","content":"duplicate id"}}
+{"type":"message","id":"orphan","parentId":"missing","timestamp":"2026-08-22T00:00:01.000Z","message":{"role":"assistant","content":"dangling parent"}}
+{"type":"message","id":"self","parentId":"self","timestamp":"2026-08-22T00:00:02.000Z","message":{"role":"assistant","content":"self parent"}}
+{"type":"message","id":"cycle-a","parentId":"cycle-b","timestamp":"2026-08-22T00:00:03.000Z","message":{"role":"assistant","content":"cycle"}}
+{"type":"message","id":"cycle-b","parentId":"cycle-a","timestamp":"2026-08-22T00:00:05.000Z","message":{"role":"toolResult","content":"physical last non assistant"}}
+{bad-json-tail

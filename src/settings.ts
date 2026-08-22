@@ -288,7 +288,7 @@ export function setQuickOpenTarget(v: QuickOpenTarget) {
   localStorage.setItem(QUICK_OPEN_KEY, v)
 }
 
-export type LaunchArgs = { claude: string; codex: string; agy: string; opencode: string; grok: string; kimicode: string }
+export type LaunchArgs = { claude: string; codex: string; agy: string; opencode: string; grok: string; kimicode: string; pi: string }
 function readLaunchArgs(): LaunchArgs {
   try {
     const v = localStorage.getItem(LAUNCH_ARGS_KEY)
@@ -301,10 +301,11 @@ function readLaunchArgs(): LaunchArgs {
         opencode: parsed.opencode ?? '',
         grok: parsed.grok ?? '',
         kimicode: parsed.kimicode ?? (parsed as { kimi?: string }).kimi ?? '',
+        pi: parsed.pi ?? '',
       }
     }
   } catch { /* ignore */ }
-  return { claude: '', codex: '', agy: '', opencode: '', grok: '', kimicode: '' }
+  return { claude: '', codex: '', agy: '', opencode: '', grok: '', kimicode: '', pi: '' }
 }
 export const launchArgs = ref<LaunchArgs>(readLaunchArgs())
 
@@ -316,7 +317,7 @@ export function setLaunchArgs(agent: keyof LaunchArgs, args: string) {
 // ---------- Agent 显隐开关 ----------
 // 只用 cc 的用户可以把 codex 关掉，让侧栏/主页的 agent 切换更清爽。
 // 固定顺序决定旧配置超过上限时的保留优先级；至少保留一个启用，否则整个 app 无内容可看。
-export const ALL_AGENTS: Agent[] = ['claude', 'codex', 'grok', 'kimicode', 'agy', 'opencode']
+export const ALL_AGENTS: Agent[] = ['claude', 'codex', 'grok', 'kimicode', 'pi', 'agy', 'opencode']
 export const MAX_ENABLED_AGENTS = 4
 type EnabledAgents = Record<Agent, boolean>
 
@@ -337,7 +338,7 @@ function limitEnabledAgents(agents: EnabledAgents): EnabledAgents {
 }
 
 function readEnabledAgents(): EnabledAgents {
-  const defaults: EnabledAgents = { claude: true, codex: true, grok: true, kimicode: true, agy: false, opencode: false }
+  const defaults: EnabledAgents = { claude: true, codex: true, grok: true, kimicode: false, pi: true, agy: false, opencode: false }
   try {
     const v = localStorage.getItem(ENABLED_AGENTS_KEY)
     if (v) {
@@ -346,9 +347,10 @@ function readEnabledAgents(): EnabledAgents {
         claude: parsed.claude ?? true,
         codex: parsed.codex ?? true,
         grok: parsed.grok ?? true,
-        kimicode: parsed.kimicode ?? (parsed as { kimi?: boolean }).kimi ?? true,
-        agy: parsed.agy ?? true,
-        opencode: parsed.opencode ?? true,
+        kimicode: parsed.kimicode ?? (parsed as { kimi?: boolean }).kimi ?? false,
+        agy: parsed.agy ?? false,
+        opencode: parsed.opencode ?? false,
+        pi: parsed.pi ?? true,
       }
       // 防御：localStorage 里若全是 false（脏数据/手改）就回退到默认开启项。
       if (ALL_AGENTS.some((a) => merged[a])) {
@@ -539,7 +541,7 @@ export function clearAppCache() {
   localStorage.removeItem(LAUNCH_ARGS_KEY)
   terminalApp.value = 'terminal'
   useExternalTerminal.value = false
-  launchArgs.value = { claude: '', codex: '', agy: '', opencode: '', grok: '', kimicode: '' }
+  launchArgs.value = { claude: '', codex: '', agy: '', opencode: '', grok: '', kimicode: '', pi: '' }
 }
 
 // ---------- Statistics 页的 scope / range 持久化 ----------
@@ -550,7 +552,7 @@ export function clearAppCache() {
 function readStatsScope(): StatsScope {
   const v = localStorage.getItem(STATS_SCOPE_KEY)
   if (v === 'kimi') return 'kimicode'
-  return v === 'claude' || v === 'codex' || v === 'grok' || v === 'kimicode' || v === 'opencode' || v === 'all'
+  return v === 'claude' || v === 'codex' || v === 'grok' || v === 'kimicode' || v === 'pi' || v === 'opencode' || v === 'all'
     ? v as StatsScope
     : 'all'
 }
@@ -594,9 +596,9 @@ export function resetSettings() {
   setBackgroundImageOpacity(BACKGROUND_IMAGE_OPACITY_DEFAULT)
   setBackgroundBorderOpacity(BACKGROUND_BORDER_OPACITY_DEFAULT)
   setQuickOpenTarget('session')
-  launchArgs.value = { claude: '', codex: '', agy: '', opencode: '', grok: '', kimicode: '' }
+  launchArgs.value = { claude: '', codex: '', agy: '', opencode: '', grok: '', kimicode: '', pi: '' }
   localStorage.removeItem(LAUNCH_ARGS_KEY)
-  enabledAgents.value = { claude: true, codex: true, grok: true, kimicode: true, agy: false, opencode: false }
+  enabledAgents.value = { claude: true, codex: true, grok: true, kimicode: false, pi: true, agy: false, opencode: false }
   localStorage.removeItem(ENABLED_AGENTS_KEY)
   setFontScale(FONT_SCALE_DEFAULT)
   applyFontScale()

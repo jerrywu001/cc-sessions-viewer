@@ -154,7 +154,7 @@ export default {
   'welcome.removeRecent': '履歴から削除',
   'welcome.clearRecent': 'クリア',
   'welcome.announcement':
-    'Gemini CLI はサポート終了となり、Antigravity CLI に変更されました（トークン統計は非対応）　·　Codex 内蔵ターミナルで画像を貼り付けできない問題を修正しました',
+    'Gemini CLI はサポート終了となり、Antigravity CLI に変更されました（トークン統計は非対応）　·　さらに agent を切り替えるには、設定で選択してください（最大 4 つ）',
 
   'trash.title': 'ゴミ箱',
   'trash.subtitle':
@@ -221,6 +221,9 @@ export default {
   'chat.action.resume': 'ターミナルで再開',
   'chat.action.resumeHere': 'ウィンドウ内で開く',
   'chat.action.resumeUnavailable': '作業ディレクトリが見つからず再開できません',
+  'chat.pi.resumeTitle': 'Pi はデフォルト位置から再開します',
+  'chat.pi.resumeMessage': '現在は非デフォルト分岐を表示中です。Pi はファイル末尾の entry から再開します。',
+  'chat.pi.branch': 'Pi 分岐',
   'chat.action.switchToChat': 'チャットモードに切り替え',
   'chat.action.switchToRead': '閲覧モードに切り替え',
   'chat.composer.placeholder': '/ でコマンドを入力 · {key} でファイル添付',
@@ -765,7 +768,7 @@ export default {
   'settings.section.turnStatus': 'セッション状態トラッキング',
   'settings.turnStatus.categoryTitle': 'セッション状態トラッキング',
   'settings.turnStatus.desc':
-    'Claude Code、Codex、AGY、Grok、Kimi Code の公式ライフサイクル Hooks でタブの実行状態をリアルタイムに更新します。',
+    '対応 CLI のライフサイクル Hooks と Pi グローバル拡張機能でタブの実行状態をリアルタイムに更新します。',
   'settings.turnStatus.brief': 'タブ状態インジケーター',
   'settings.turnStatus.install': 'セッション状態トラッキングを有効化',
   'settings.turnStatus.installing': '有効化中…',
@@ -773,9 +776,9 @@ export default {
   'settings.turnStatus.enabled': '有効',
   'settings.turnStatus.notEnabled': '未有効',
   'settings.turnStatus.actionTitle': 'セッション状態トラッキングを有効化',
-  'settings.turnStatus.actionDesc': '他の Hooks を変更せず、4 つの CLI 設定に状態 Hook を追加します。',
+  'settings.turnStatus.actionDesc': '他の Hooks を変更せず、対応 CLI 設定と Pi グローバル拡張機能に状態連携を追加します。',
   'settings.turnStatus.readyTitle': '状態トラッキングの準備完了',
-  'settings.turnStatus.readyDesc': '4 セットの状態 Hooks はすべてインストール済みです。',
+  'settings.turnStatus.readyDesc': '対応する状態連携はすべてインストール済みです。',
   'settings.turnStatus.installed': '状態トラッキング Hooks を有効にしました。Codex で /hooks を実行して確認・信頼してください。',
   'settings.turnStatus.detectFail': '確認に失敗しました: {e}',
   'settings.turnStatus.installFail': '有効化に失敗しました: {e}',
@@ -836,6 +839,7 @@ export default {
   'stats.pricing.modelsMissing': '{n} モデルの価格がありません。トークン数と呼び出し数は集計済みです',
   'stats.pricing.estimated': '{n} 回の呼び出しは Grok Build 公式価格による推定です。第三者の実際の請求とは異なる場合があります',
   'stats.pricing.modelsEstimated': '{n} モデルは Grok Build 公式価格で推定しています',
+  'stats.pricing.recorded': '{n} 回の呼び出しは agent が記録したコストを使用しています',
   'stats.sessionTitle': 'セッション統計',
   'stats.scope.label': '範囲',
   'stats.scope.all': 'すべての agent',

@@ -46,7 +46,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agent_command::AgentCommand;
 use crate::types::{
-    AgentStats, ClaudeRuntimeInfo, CodexRuntimeInfo, Msg, ProjectInfo, SearchHit, SessionPage,
+    AgentStats, ClaudeRuntimeInfo, CodexRuntimeInfo, Msg, PiTreeNode, ProjectInfo, SearchHit, SessionPage,
     TrashItem, TrayStats, UsageSummary,
 };
 #[allow(unused_imports)]
@@ -93,11 +93,11 @@ fn list_projects(
     Ok(out)
 }
 
-/// 支持本应用 worktree 展示/创建的 agent：Claude、Codex、Grok Build、Kimi Code 都按 `cwd` 归属会话。
+/// 支持本应用 worktree 展示/创建的 agent：Claude、Codex、Grok Build、Kimi Code、Pi 都按 `cwd` 归属会话。
 /// opencode / agy 按 git 仓库归属会话，worktree 里起的会话会被 CLI 塞回主仓库，展示 worktree
 /// 反而误导，故对它们整体隐藏 worktree。这里不接管 Grok 自己的 worktree registry。
 fn agent_supports_worktrees(agent: &str) -> bool {
-    matches!(agent, "claude" | "codex" | "grok" | "kimicode")
+    matches!(agent, "claude" | "codex" | "grok" | "kimicode" | "pi")
 }
 
 /// 把磁盘上 `<项目根>/.claude/worktrees/*` 里的 worktree 注入项目列表 —— agent 无关，
@@ -112,7 +112,7 @@ fn inject_worktrees(agent: &str, out: &mut Vec<ProjectInfo>) {
         return;
     }
     // 候选父根 = 当前 agent 列表里存在、且自身不是 worktree 的项目路径
-    //           ∪ 曾建过 worktree 的父根（持久化，agent 无关 → 四端都能看到）。
+    //           ∪ 曾建过 worktree 的父根（持久化，agent 无关 → 所有支持端都能看到）。
     let mut roots: Vec<String> = out
         .iter()
         .filter(|p| p.exists && p.worktree_name.is_none())
@@ -217,8 +217,18 @@ fn list_sessions(
 }
 
 #[tauri::command]
-fn read_session(agent: String, path: String) -> Result<Vec<Msg>, String> {
-    agents::source(&agent)?.read_session(&path)
+fn read_session(agent: String, path: String, leaf_id: Option<String>) -> Result<Vec<Msg>, String> {
+    agents::source(&agent)?.read_session_at(&path, leaf_id.as_deref())
+}
+
+#[tauri::command]
+fn session_tree(agent: String, path: String) -> Result<Vec<PiTreeNode>, String> {
+    agents::source(&agent)?.session_tree(&path)
+}
+
+#[tauri::command]
+fn session_export_json(agent: String, path: String, leaf_id: Option<String>) -> Result<String, String> {
+    agents::source(&agent)?.session_export_json(&path, leaf_id.as_deref())
 }
 
 #[tauri::command]
@@ -499,6 +509,7 @@ mod codex_runtime_tests {
         assert!(agent_supports_worktrees("codex"));
         assert!(agent_supports_worktrees("grok"));
         assert!(agent_supports_worktrees("kimicode"));
+        assert!(agent_supports_worktrees("pi"));
         assert!(!agent_supports_worktrees("agy"));
         assert!(!agent_supports_worktrees("opencode"));
     }
@@ -791,7 +802,11 @@ fn pty_spawn(
     {
         return Err("Invalid session ID".to_string());
     }
-    let command = agents::source(&agent)?
+    let source = agents::source(&agent)?;
+    if agent == "pi" {
+        agents::pi::validate_terminal_cwd(Path::new(&path), Path::new(&cwd))?;
+    }
+    let command = source
         .resume_command(&session_id, &path)
         .with_extra_args(&extra_args);
     pty::spawn(
@@ -1161,7 +1176,11 @@ fn resume_session(
     {
         return Err("Invalid session ID".to_string());
     }
-    let command = agents::source(&agent)?
+    let source = agents::source(&agent)?;
+    if agent == "pi" {
+        agents::pi::validate_terminal_cwd(Path::new(&path), Path::new(&cwd))?;
+    }
+    let command = source
         .resume_command(&session_id, &path)
         .with_extra_args(&extra_args);
     runtime::ensure_session_available(&agent, &session_id)?;
@@ -2385,6 +2404,8 @@ pub fn run() {
             list_projects,
             list_sessions,
             read_session,
+            session_tree,
+            session_export_json,
             watch_session,
             unwatch_session,
             check_watched_session,

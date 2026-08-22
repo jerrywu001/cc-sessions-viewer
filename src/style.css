@@ -148,6 +148,11 @@
   --ctx-track: hsl(0 0% 18%);
 }
 
+/* Pi's supplied mark is black for light surfaces; invert it on dark surfaces. */
+:root.theme-dark .pi-logo {
+  filter: invert(1);
+}
+
 :root.theme-codex {
   --bg: #ffffff;
   --surface: #ffffff;
@@ -2583,6 +2588,26 @@ mark.locate-hl {
   color: var(--text-mute);
   margin-top: 2px;
   font-variant-numeric: tabular-nums;
+}
+
+.pi-branch-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 210px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.pi-branch-picker-label { white-space: nowrap; }
+.pi-branch-picker select {
+  max-width: 145px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  padding: 2px 5px;
 }
 
 /* 左侧「快速用户消息导航」导轨（参考 Codex 官方客户端 turn rail）。

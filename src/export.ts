@@ -41,6 +41,7 @@ const AVATAR_SVG = {
   claude: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><g fill="#ff7043"><path d="m14.375 6.48l.49.28v.209l-.14.489l-5.937 1.397l-.558-1.387zm0 0"/><path d="m12.155 2.373l.683.143l.182.224l.173.535l-.072.342l-3.983 5.447L7.81 7.737l3.673-4.82z"/><path d="m8.719 1.522l.419-.28l.349.14l.349.49l-.957 5.748l-.65-.441l-.279-.769l.49-4.33z"/><path d="m4.239 1.614l.43-.55L4.95 1l.558.081l.275.216l2.004 4.442l.724 2.11l-.848.471l-3.231-5.864z"/><path d="m2.154 4.665l-.14-.56l.42-.488l.488.07h.14l2.933 2.165l.908.698l1.257.978l-.698 1.187l-.629-.489l-.419-.419l-4.05-2.863z"/><path d="M1.316 8.296L1 7.946v-.31l.316-.108l3.562.21l3.491.279l-.113.695l-6.66-.346z"/><path d="M3.411 11.931h-.698l-.278-.32v-.382l1.186-.838l4.82-3.068l.487.833z"/><path d="m4.738 13.883l-.28.07l-.418-.21l.07-.35l4.12-5.446l.558.768l-3.072 4.05z"/><path d="m8.23 14.581l-.21.28l-.419.14l-.349-.28l-.21-.42L8.09 8.646l.629.07z"/><path d="M11.791 13.045v.558l-.07.21l-.279.14l-.489-.066l-3.356-4.996l1.331-1.014l1.117 2.025l.105.733z"/><path d="m13.398 12.207l.07.349l-.21.279l-.21-.07l-1.187-.838l-1.815-1.606l-1.397-.978l.419-1.326l.698.419l.42.768z"/><path d="m12.49 8.645l1.746.14l.419.28l.279.418v.302l-.768.327l-3.911-.978l-1.606-.07l.419-1.466l1.117.838z"/></g></svg>',
   codex: '<svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"><path d="M18.38 27.94v-14.4l11.19-6.46c6.2-3.58 17.3 5.25 12.64 13.33"/><path d="m18.38 20.94l12.47-7.2l11.19 6.46c6.2 3.58 4.1 17.61-5.23 17.61"/><path d="m24.44 17.44l12.47 7.2v12.93c0 7.16-13.2 12.36-17.86 4.28"/><path d="M30.5 21.2v14.14L19.31 41.8c-6.2 3.58-17.3-5.25-12.64-13.33"/><path d="m30.5 27.94l-12.47 7.2l-11.19-6.46c-6.21-3.59-4.11-17.61 5.22-17.61"/><path d="m24.44 31.44l-12.47-7.2V11.31c0-7.16 13.2-12.36 17.86-4.28"/></g></svg>',
   grok: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5l14 14"/><path d="M19 5L5 19"/><circle cx="12" cy="12" r="9"/></svg>',
+  pi: '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 1.1 5.9L19 10l-5.9 1.1L12 17l-1.1-5.9L5 10l5.9-1.1L12 3Z"/><path d="m19 16 .5 2.5L22 19l-2.5.5L19 22l-.5-2.5L16 19l2.5-.5L19 16Z"/></svg>',
   user: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>',
   tool: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
   arrowUp: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>',
@@ -54,6 +55,7 @@ function avatarSvg(role: string, agent: Agent): string {
   if (agent === 'grok') return AVATAR_SVG.grok
   if (agent === 'agy') return AVATAR_SVG.claude // agy 暂复用 claude 的 SVG 头像
   if (agent === 'opencode') return AVATAR_SVG.claude // opencode 同样复用
+  if (agent === 'pi') return AVATAR_SVG.pi
   return AVATAR_SVG.claude
 }
 
@@ -1601,6 +1603,15 @@ export function exportJson(
   return pickAndWrite(json, `${sanitizeFilename(session.title)}.json`, 'json')
 }
 
+/** Lossless Pi v3 export. The raw envelope is produced by Rust from one
+ * stable JSONL snapshot and includes every tree entry plus the selected leaf. */
+export function exportPiJson(
+  session: SessionMeta,
+  rawEnvelope: string,
+): Promise<string | null> {
+  return pickAndWrite(rawEnvelope, `${sanitizeFilename(session.title)}.json`, 'json')
+}
+
 // ============================ 批量导出 ============================
 // 批量场景：让用户挑一个目标目录，所有会话以 `<title>-<id8>.<ext>` 落进去。
 // 用 `/` 拼接：Rust 端走 `PathBuf::from`，Windows 也能接受正斜杠。
@@ -1659,4 +1670,12 @@ export async function exportJsonToDir(
 ): Promise<string> {
   const json = buildExportEnvelope(session, messages, agent)
   return writeFile(`${dir}/${batchFileName(session, 'json')}`, json)
+}
+
+export async function exportPiJsonToDir(
+  session: SessionMeta,
+  rawEnvelope: string,
+  dir: string,
+): Promise<string> {
+  return writeFile(`${dir}/${batchFileName(session, 'json')}`, rawEnvelope)
 }

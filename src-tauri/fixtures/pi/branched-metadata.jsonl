@@ -1,0 +1,9 @@
+{"type":"session","version":3,"id":"fixture-branch","timestamp":"2026-08-22T00:00:00.000Z","cwd":"/tmp/pi-fixture"}
+{"type":"message","id":"u","timestamp":"2026-08-22T00:00:01.000Z","message":{"role":"user","content":"Branch root"}}
+{"type":"message","id":"a-left","parentId":"u","timestamp":"2026-08-22T00:00:03.000Z","message":{"role":"assistant","content":"left"}}
+{"type":"message","id":"a-right","parentId":"u","timestamp":"2026-08-22T00:00:02.000Z","message":{"role":"assistant","content":"right"}}
+{"type":"session_info","id":"info","parentId":"a-right","timestamp":"2026-08-22T00:00:04.000Z","name":""}
+{"type":"label","id":"label","parentId":"a-left","timestamp":"2026-08-22T00:00:05.000Z","targetId":"a-right","label":"shared"}
+{"type":"compaction","id":"compact","parentId":"info","timestamp":"2026-08-22T00:00:06.000Z","firstKeptEntryId":"a-right","retainedTail":[]}
+{"type":"branch_summary","id":"summary","parentId":"compact","timestamp":"2026-08-22T00:00:07.000Z","summary":"sanitized"}
+{"type":"custom_message","id":"custom","parentId":"summary","timestamp":"2026-08-22T00:00:08.000Z","display":false,"content":"hidden"}

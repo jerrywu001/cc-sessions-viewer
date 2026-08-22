@@ -31,7 +31,7 @@ static SEARCH_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
 use crate::agent_command::AgentCommand;
 use crate::stats::types::Turn;
 use crate::types::{
-    AgentStats, DailyActivity, Msg, ProjectInfo, ProjectStats, SearchHit, SessionMeta, SessionPage,
+    AgentStats, DailyActivity, Msg, PiTreeNode, ProjectInfo, ProjectStats, SearchHit, SessionMeta, SessionPage,
     UsageSummary,
 };
 use crate::util::yyyymmdd_local;
@@ -106,6 +106,7 @@ pub mod codex;
 pub mod grok;
 pub mod kimi;
 pub mod opencode;
+pub mod pi;
 
 /// A session's on-disk storage boundary.
 ///
@@ -244,6 +245,23 @@ pub trait SessionSource: Send + Sync {
 
     /// 解析一个 JSONL 文件并返回标准 `Msg[]`（前端只认这一个形状）。
     fn read_session(&self, path: &str) -> Result<Vec<Msg>, String>;
+
+    /// Read a read-only lineage ending at an explicit entry. Agents without
+    /// tree locations retain their historical reader behavior.
+    fn read_session_at(&self, path: &str, _leaf_id: Option<&str>) -> Result<Vec<Msg>, String> {
+        self.read_session(path)
+    }
+
+    /// Optional read-only transcript tree metadata. Pi implements this for its
+    /// v3 parent-linked JSONL; other agents retain the historical no-tree API.
+    fn session_tree(&self, _path: &str) -> Result<Vec<PiTreeNode>, String> {
+        Err("此 agent 不支持会话树".into())
+    }
+
+    /// Optional raw export envelope for agents with lossless transcript formats.
+    fn session_export_json(&self, _path: &str, _leaf_id: Option<&str>) -> Result<String, String> {
+        Err("此 agent 不支持原始会话导出".into())
+    }
 
     /// 实施重命名：写入合适的元数据行 + 必要的旁路（如 codex 还要更新 session_index / sqlite）。
     /// path 已经被 lib.rs 预校验（存在且是 .jsonl），不必再重复检查。
@@ -861,6 +879,7 @@ fn classify_hit(
     let id_l = session.id.to_lowercase();
     let mut match_msg_index: Option<usize> = None;
     let mut match_msg_uuid: Option<String> = None;
+    let mut pi_leaf_id: Option<String> = None;
     let (field, snippet) = if !keyword_search_only && id_l.contains(q) {
         ("id", session.id.clone())
     } else if !id_search_only && title_l.contains(q) {
@@ -873,7 +892,16 @@ fn classify_hit(
         if cancel.cancelled() {
             return None;
         }
+        // Pi 的用户正文可能只存在于放弃分支；扫描所有 terminal lineage，
+        // 不复用默认 lineage 的全局文本缓存。
+        if src.name() == "pi" {
+            let hit = find_pi_text_hit(src, &session.path, q, cancel)?;
+            match_msg_index = Some(hit.hit.msg_index);
+            match_msg_uuid = hit.hit.msg_uuid;
+            pi_leaf_id = Some(hit.leaf_id);
+            ("text", hit.hit.snippet)
         // 缓存热时直接内存扫描，跳过磁盘 I/O
+        } else {
         let mtime = src.source_mtime(&session.path);
         let cached = cached_user_text(&session.path, mtime);
         if let Some(ref texts) = cached {
@@ -898,6 +926,7 @@ fn classify_hit(
                 ("text", hit.snippet)
             }
         }
+        }
     };
     Some(SearchHit {
         project_key: project_key.to_string(),
@@ -907,6 +936,7 @@ fn classify_hit(
         snippet,
         match_msg_index,
         match_msg_uuid,
+        pi_leaf_id,
     })
 }
 
@@ -916,6 +946,43 @@ struct TextHit {
     snippet: String,
     msg_index: usize,
     msg_uuid: Option<String>,
+}
+
+struct PiTextHit {
+    hit: TextHit,
+    leaf_id: String,
+}
+
+fn find_pi_text_hit(
+    src: &(dyn SessionSource + Sync),
+    path: &str,
+    q: &str,
+    cancel: Cancel<'_>,
+) -> Option<PiTextHit> {
+    let tree = src.session_tree(path).ok()?;
+    for node in tree.into_iter().filter(|node| node.terminal) {
+        if cancel.cancelled() { return None; }
+        let Ok(msgs) = src.read_session_at(path, Some(&node.id)) else { continue; };
+        let mut texts = Vec::new();
+        for (index, msg) in msgs.into_iter().enumerate() {
+            if msg.role != "user" { continue; }
+            let mut combined = String::new();
+            for block in msg.blocks {
+                if block.kind != "text" { continue; }
+                if let Some(text) = block.text {
+                    if !combined.is_empty() { combined.push('\n'); }
+                    combined.push_str(&text);
+                }
+            }
+            if !combined.is_empty() {
+                texts.push((index, msg.uuid, combined));
+            }
+        }
+        if let Some(hit) = scan_user_text(&texts, q) {
+            return Some(PiTextHit { hit, leaf_id: node.id });
+        }
+    }
+    None
 }
 
 /// 读一个会话，找第一条命中。仅匹配「用户消息的 text 块」 ——
@@ -1053,6 +1120,7 @@ pub fn source(agent: &str) -> Result<Box<dyn SessionSource>, String> {
         "grok" => Ok(Box::new(grok::GrokSource)),
         "kimicode" | "kimi" => Ok(Box::new(kimi::KimiSource)),
         "opencode" => Ok(Box::new(opencode::OpencodeSource)),
+        "pi" => Ok(Box::new(pi::PiSource)),
         other => Err(format!("Unknown agent: {other}")),
     }
 }

@@ -1,4 +1,4 @@
-export type Agent = 'claude' | 'codex' | 'agy' | 'opencode' | 'grok' | 'kimicode'
+export type Agent = 'claude' | 'codex' | 'agy' | 'opencode' | 'grok' | 'kimicode' | 'pi'
 
 export interface ProjectInfo {
   dirName: string
@@ -22,12 +22,25 @@ export interface SessionMeta {
   modified: number
   size: number
   messageCount: number
+  /** Pi-only: terminal branches and complete persisted tree entries. */
+  piBranchCount?: number
+  piEntryCount?: number
   codexAppListRank?: number | null
   codexAppListScanned: number
   codexAppFirstPageSize: number
   codexAppFirstPagePosition: number
   codexInternal: boolean
   codexArchived: boolean
+}
+
+export interface PiTreeNode {
+  id: string
+  parentId?: string | null
+  children: string[]
+  kind: string
+  timestamp?: string | null
+  ordinal: number
+  terminal: boolean
 }
 
 export interface SessionPage {
@@ -124,6 +137,8 @@ export interface SearchHit {
   matchMsgIndex?: number
   /** 文本命中所在消息的 uuid（若 agent 写了）；前端定位时优先用 uuid 兜底。 */
   matchMsgUuid?: string
+  /** Pi-only terminal entry containing the text hit. */
+  piLeafId?: string
 }
 
 /** 单个会话的 token 用量；与 Rust 端 UsageSummary 同形。
@@ -223,6 +238,10 @@ export interface AgentStats {
   unpricedCallCount: number
   /** 使用 Grok 官方旗舰价格兜底估算的真实 API 调用数。 */
   estimatedCallCount: number
+  /** Pi persisted `usage.cost.total` calls. */
+  recordedCallCount: number
+  /** Calls priced by the strict provider/model catalog fallback. */
+  catalogCallCount: number
   cacheHitRate: number
   /** 按 cost_usd 降序的项目列表。 */
   projects: ProjectStats[]
@@ -513,7 +532,7 @@ export interface TrayStats {
 // ---- CLI 环境检测 ----
 
 export interface CliVersionInfo {
-  cli: 'claude' | 'codex' | 'agy' | 'opencode' | 'grok' | 'kimi'
+  cli: 'claude' | 'codex' | 'agy' | 'opencode' | 'grok' | 'kimi' | 'pi'
   npmPackage: string
   currentVersion: string | null
   latestVersion: string | null
@@ -537,7 +556,7 @@ export interface CliInstallation {
 }
 
 export interface CliDiagnosisResult {
-  cli: 'claude' | 'codex' | 'agy' | 'opencode' | 'grok' | 'kimi'
+  cli: 'claude' | 'codex' | 'agy' | 'opencode' | 'grok' | 'kimi' | 'pi'
   binaryName: string
   installations: CliInstallation[]
   hasConflict: boolean
@@ -545,7 +564,7 @@ export interface CliDiagnosisResult {
 }
 
 export interface CliUpgradeResult {
-  cli: 'claude' | 'codex' | 'agy' | 'opencode' | 'grok' | 'kimi'
+  cli: 'claude' | 'codex' | 'agy' | 'opencode' | 'grok' | 'kimi' | 'pi'
   success: boolean
   newVersion: string | null
   error: string | null

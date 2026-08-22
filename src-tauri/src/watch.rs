@@ -13,7 +13,7 @@
 //
 // 前端事件契约：
 //   session:append   { path, messages: Msg[] }    新增的尾段
-//   session:reset    { path }                      文件被截断或替换 → 整文件重拉
+//   session:reset    { path }                      文件被截断/替换或元数据变更 → 整文件重拉
 //   session:gone     { path }                      文件不再存在
 //
 // 这一层不缓存 mtime —— 文件系统事件本身就是触发源，不需要轮询。
@@ -346,6 +346,19 @@ fn process_change(app: &AppHandle, agent: &str, path: &str) {
             Err(_) => return,
         };
         m.insert(path.to_string(), msgs.len());
+        return;
+    }
+
+    if msgs.len() == prev_count {
+        // Metadata-only records (for example Pi's session_info rename entry)
+        // do not create a visible Msg, but they still change the session title
+        // and must invalidate the open detail/list views.
+        let _ = app.emit(
+            "session:reset",
+            PathPayload {
+                path: path.to_string(),
+            },
+        );
         return;
     }
 

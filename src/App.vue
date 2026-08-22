@@ -45,6 +45,8 @@ import {
   exportMarkdownToDir,
   exportHtmlToDir,
   exportJsonToDir,
+  exportPiJson,
+  exportPiJsonToDir,
   pickExportDir,
   batchExportFolderName,
   type ExportKind,
@@ -334,11 +336,7 @@ async function refreshAll() {
   const curViewTab = activeViewTab.value
   if (curViewTab?.type === 'session' && curViewTab.session) {
     tasks.push(
-      api
-        .readSession(agent.value, curViewTab.session.path)
-        .then((msgs) => {
-          curViewTab.msgs = msgs
-        })
+      loadSessionTab(curViewTab, curViewTab.agent, curViewTab.session.path, curViewTab.piLeafId)
         .catch(() => {}),
     )
   }
@@ -724,7 +722,7 @@ function openCtxMenu(e: MouseEvent, p: ProjectInfo) {
   const x = Math.min(e.clientX, window.innerWidth - W - 8)
   const y = Math.min(e.clientY, window.innerHeight - H - 8)
   ctxMenu.value = { x, y, project: p, isGitRepo: false }
-  // 「创建 Worktree」仅对 git 仓库、且自身不是 worktree 的项目显示；Claude/Codex/Grok Build
+  // 「创建 Worktree」仅对 git 仓库、且自身不是 worktree 的项目显示；支持 worktree 的 agent
   // 都按 cwd 归属会话，opencode/agy 则会把 worktree 会话塌回主仓库，故对后两者隐藏。git 探测
   // 是异步的，先把菜单弹出来，探测回来后再点亮该项（响应式更新，避免右键卡一下）。
   if (p.exists && !p.worktreeName && agentSupports(agent.value, 'worktree')) {
@@ -822,10 +820,10 @@ async function confirmCreateWorktree() {
   }
 }
 
-// app 创建的 worktree 是 Claude / Codex / Grok Build 共享的物理目录。三个 agent 都按 cwd
+// app 创建的 worktree 是 Claude / Codex / Grok Build / Kimi Code / Pi 共享的物理目录。各 agent 都按 cwd
 // 归属会话，删 worktree、统计会话数时必须一起覆盖，避免留下无法访问的会话目录。
 // 这不接管 Grok 自己的 worktree registry。
-const WORKTREE_AGENTS: Agent[] = ['claude', 'codex', 'grok', 'kimicode']
+const WORKTREE_AGENTS: Agent[] = ['claude', 'codex', 'grok', 'kimicode', 'pi']
 
 const normPath = (s: string) => s.replace(/\\/g, '/').replace(/\/+$/, '')
 
@@ -845,7 +843,7 @@ function findWorktreeProjectIn(projs: ProjectInfo[], worktreePath: string): Proj
   )
 }
 
-/** 两个 agent 在该 worktree 路径下的会话总数之和（供删除确认框如实告知）。 */
+/** 支持 worktree 的 agent 在该路径下的会话总数之和（供删除确认框如实告知）。 */
 async function countWorktreeSessions(worktreePath: string): Promise<number> {
   let total = 0
   for (const a of WORKTREE_AGENTS) {
@@ -859,7 +857,7 @@ async function countWorktreeSessions(worktreePath: string): Promise<number> {
 }
 
 async function deleteWorktree(p: ProjectInfo) {
-  // 共享 worktree → 统计两 agent 的会话总数再弹框，让「将永久删除 N 个会话」如实反映实际删除量。
+  // 共享 worktree → 统计全部支持 agent 的会话总数，让「将永久删除 N 个会话」如实反映实际删除量。
   const n = await countWorktreeSessions(p.displayPath)
   ask({
     title: t('dialog.deleteWorktree.title'),
@@ -932,7 +930,7 @@ async function performWorktreeDelete(p: ProjectInfo) {
     //   2) 内嵌 TUI / shell 的 PTY（closeTabsByProject 里 ptyKill，异步，句柄释放由后端重试兜底）。
     await stopWorktreeChats(p.displayPath)
     closeTabsByProject(p.dirName)
-    // worktree 是 Claude / Codex / Grok Build 共享目录，先清理三个 agent 在该 cwd 的会话，
+    // worktree 是支持 worktree 的 agent 共享目录，先清理该 cwd 下的全部会话，
     // 避免移除工作树后留下无法访问的 transcript。最后再移除工作树 + 删除分支。
     for (const a of WORKTREE_AGENTS) {
       await hardDeleteWorktreeSessionsFor(a, p.displayPath)
@@ -1848,7 +1846,7 @@ async function loadTrash() {
   }
 }
 
-async function openChat(s: SessionMeta) {
+async function openChat(s: SessionMeta, requestedPiLeaf?: string) {
   setActiveTui(null)
   openTrashItem.value = null
   // Capture the click context before any async work. In split panes and while the
@@ -1868,10 +1866,7 @@ async function openChat(s: SessionMeta) {
       existing.session = s
     }
     existing.loadingMsgs = true
-    api.readSession(existing.agent, s.path).then(msgs => {
-      existing.msgs = msgs
-      existing.loadingMsgs = false
-    }).catch(() => { existing.loadingMsgs = false })
+    loadSessionTab(existing, existing.agent, s.path, requestedPiLeaf ?? existing.piLeafId).catch(() => {})
     setActiveViewTab(existing.uiId)
     return
   }
@@ -1886,7 +1881,7 @@ async function openChat(s: SessionMeta) {
   })
   await nextTick()
   try {
-    tab.msgs = await api.readSession(openAgent, s.path)
+    await loadSessionTab(tab, openAgent, s.path, requestedPiLeaf)
     try {
       await api.watchSession(openAgent, s.path)
       const ageMs = Date.now() - (s.modified ?? 0)
@@ -1906,6 +1901,48 @@ async function openChat(s: SessionMeta) {
   }
   if (openProjectKey) {
     recordView({ agent: openAgent, dir: openProjectKey, session: s, mode: 'read' })
+  }
+}
+
+/** Load a read-only tab without mutating Pi's append-only transcript. Pi gets
+ * its tree and the selected lineage together; all other agents use read_session. */
+async function loadSessionTab(
+  tab: ViewTab,
+  sourceAgent: Agent,
+  path: string,
+  requestedLeaf?: string | null,
+) {
+  if (sourceAgent === 'pi') {
+    try {
+      const tree = await api.sessionTree(sourceAgent, path)
+      tab.piTree = tree
+      const leaf = requestedLeaf || tree[tree.length - 1]?.id || null
+      tab.piLeafId = leaf
+      tab.msgs = await api.readSession(sourceAgent, path, leaf ?? undefined)
+    } catch {
+      tab.piTree = null
+      tab.piLeafId = null
+      tab.msgs = await api.readSession(sourceAgent, path)
+    }
+  } else {
+    tab.msgs = await api.readSession(sourceAgent, path)
+  }
+  tab.loadingMsgs = false
+}
+
+async function switchPiLeaf(leafId: string) {
+  const tab = activeViewTab.value
+  if (!tab || tab.type !== 'session' || tab.agent !== 'pi' || !tab.session || !leafId) return
+  if (tab.piLeafId === leafId) return
+  tab.loadingMsgs = true
+  try {
+    tab.msgs = await api.readSession('pi', tab.session.path, leafId)
+    tab.piLeafId = leafId
+    persistViewTabs()
+  } catch (e) {
+    notify(`Pi branch read failed: ${String(e)}`, true)
+  } finally {
+    tab.loadingMsgs = false
   }
 }
 
@@ -2399,7 +2436,12 @@ async function batchExportSessions(kind: ExportKind) {
           : kind === 'json'
             ? exportJsonToDir
             : exportHtmlToDir
-      lastPath = await fn(s, msgs, agent.value, dir)
+      if (kind === 'json' && agent.value === 'pi') {
+        const raw = await api.sessionExportJson('pi', s.path)
+        lastPath = await exportPiJsonToDir(s, raw, dir)
+      } else {
+        lastPath = await fn(s, msgs, agent.value, dir)
+      }
       recordExport({ path: s.path, title: s.title, agent: agent.value, sessionId: s.id, cwd: s.cwd, exportedAt: Date.now() })
       ok++
     } catch {
@@ -2460,7 +2502,9 @@ async function exportSession(kind: ExportKind) {
   const a = chatAgent.value
   try {
     const hiddenKeys = kind === 'html' ? getHiddenKeys(s.path) : undefined
-    const path = await exportFn(kind)(s, chatMsgs.value, a, hiddenKeys)
+    const path = kind === 'json' && a === 'pi'
+      ? await exportPiJson(s, await api.sessionExportJson('pi', s.path, activeViewTab.value?.piLeafId),)
+      : await exportFn(kind)(s, chatMsgs.value, a, hiddenKeys)
     // 用户在 Save As 对话框点了取消时返回 null —— 静默放弃
     if (!path) return
     recordExport({ path: s.path, title: s.title, agent: a, sessionId: s.id, cwd: s.cwd, exportedAt: Date.now() })
@@ -3202,7 +3246,7 @@ async function deleteFromLiveChat() {
 
 
 /** Resume 一个会话 —— 根据设置决定走窗口内 TUI 还是外部终端。 */
-async function resumeHere(s: SessionMeta) {
+async function resumeHere(s: SessionMeta, allowNonDefault = false) {
   if (s.cwd?.startsWith('ide://')) {
     notify(t('toast.resumeIdeSession'))
     return
@@ -3210,6 +3254,22 @@ async function resumeHere(s: SessionMeta) {
   const cwd = s.cwd || activeProject.value?.displayPath || ''
   if (!cwd) {
     notify(t('toast.resumeNoCwd'), true)
+    return
+  }
+  const activeTab = activeViewTab.value
+  const piNonDefault = chatAgent.value === 'pi'
+    && activeTab?.type === 'session'
+    && activeTab.session?.path === s.path
+    && !!activeTab.piLeafId
+    && !!activeTab.piTree?.length
+    && activeTab.piLeafId !== activeTab.piTree[activeTab.piTree.length - 1]?.id
+  if (piNonDefault && !allowNonDefault) {
+    ask({
+      title: t('chat.pi.resumeTitle'),
+      message: t('chat.pi.resumeMessage'),
+      okText: t('chat.action.resumeHere'),
+      onOk: () => { void resumeHere(s, true) },
+    })
     return
   }
   try {
@@ -3702,13 +3762,11 @@ onMounted(() => {
           loadingMsgs: true,
           trashAgent: sv.trashAgent,
           importedAgent: sv.importedAgent,
+          piLeafId: sv.piLeafId ?? null,
         })
         if (sv.isActive) activeTabs.push(tab)
         if (i === savedVT.activeIdx) restoredActiveIdx = tab.uiId
-        api.readSession(sv.agent, sv.session.path).then(msgs => {
-          tab.msgs = msgs
-          tab.loadingMsgs = false
-        }).catch(() => {
+        loadSessionTab(tab, sv.agent, sv.session.path, sv.piLeafId).catch(() => {
           removeViewTab(tab.uiId)
         })
       }
@@ -3967,7 +4025,7 @@ let menuUnlisten: UnlistenFn | null = null
 // Live tail：监听 watch.rs emit 的 3 个事件。安装一次，整个应用生命周期共用。
 //   session:append → 后端把新增的尾段 Msg 推过来；前端 push 进 chatMsgs，
 //                    再调 ChatView.onLiveAppend(n) 让它做 smart-scroll。
-//   session:reset  → 文件被截断 / 替换 → 整段重拉。
+//   session:reset  → 文件被截断 / 替换或元数据变更 → 整段重拉并同步列表标题。
 //   session:gone   → 文件不在了 → 关闭当前会话，toast 一下。
 // path 兜底校验：用户在 emit 飞过来的极短窗口里切换了会话 / 关掉了详情页，
 // 我们只接当前 openSession.path 一致的事件，避免把 A 会话的尾段塞到 B 里。
@@ -4011,10 +4069,17 @@ async function installLiveTailListeners() {
   )
   const resetUnlisten = await listen<{ path: string }>('session:reset', async (e) => {
     const tab = viewTabs.value.find(t => t.type === 'session' && t.session?.path === e.payload.path)
+    const listed = sessions.value.some(session => session.path === e.payload.path)
+    if (activeDir.value && (tab || listed)) {
+      // Pi's /rename appends session_info without adding a visible message.
+      // Refresh the authoritative list so both the sidebar and open view tab
+      // receive the new title.
+      await refreshSessions()
+    }
     if (!tab) return
     try {
       markTabSessionActivity(tab.agent, e.payload.path)
-      tab.msgs = await api.readSession(tab.agent, e.payload.path)
+      await loadSessionTab(tab, tab.agent, e.payload.path, tab.piLeafId)
     } catch {}
   })
   const goneUnlisten = await listen<{ path: string }>('session:gone', (e) => {
@@ -4225,7 +4290,7 @@ async function onGlobalSearchOpen(hit: SearchHit) {
     }
     await selectProject(hit.projectKey)
   }
-  await openChat(hit.session)
+  await openChat(hit.session, hit.piLeafId)
   if (hit.matchedField === 'text' && typeof hit.matchMsgIndex === 'number') {
     for (let i = 0; i < 10; i++) {
       await nextTick()
@@ -4274,6 +4339,7 @@ provide<PaneActions>(PaneActionsKey, {
   exportSession,
   restore,
   openSessionStats,
+  switchPiLeaf,
   reveal,
   chatFromList,
   notifyArchivedBlock,

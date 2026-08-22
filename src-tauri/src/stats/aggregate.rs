@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::stats::classifier;
 use crate::stats::pricing;
-use crate::stats::types::Turn;
+use crate::stats::types::{CostSource, Turn};
 use crate::types::{
     ActivityStat, AgentStats, DailyActivity, ModelStat, NamedCount, ProjectStats, SessionStat,
     UsageSummary,
@@ -40,6 +40,8 @@ pub struct Aggregator {
     cost_usd: f64,
     unpriced_call_count: u64,
     estimated_call_count: u64,
+    recorded_call_count: u64,
+    catalog_call_count: u64,
 
     /// project key = dir_name；display 走 ProjectStats.display_path
     projects: HashMap<String, ProjectStats>,
@@ -160,6 +162,11 @@ impl Aggregator {
                 }
                 if call.pricing_estimated {
                     self.estimated_call_count += call_weight;
+                }
+                match call.cost_source {
+                    CostSource::Recorded => self.recorded_call_count += call_weight,
+                    CostSource::Catalog => self.catalog_call_count += call_weight,
+                    _ => {}
                 }
                 turn_cost += call.cost_usd;
                 turn_usage.add_assign(&call.usage);
@@ -355,6 +362,8 @@ impl Aggregator {
             cost_usd: self.cost_usd,
             unpriced_call_count: self.unpriced_call_count,
             estimated_call_count: self.estimated_call_count,
+            recorded_call_count: self.recorded_call_count,
+            catalog_call_count: self.catalog_call_count,
             cache_hit_rate: cache_hit_rate(&total_usage),
             projects,
             daily_activity: daily,

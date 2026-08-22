@@ -6,6 +6,28 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ---
 
+## [v0.3.24]
+
+### Features
+
+- **Pi session integration** — discover, read, search, rename, trash/restore, export, statistics, CLI checks, embedded/external terminal resume, worktrees, lifecycle status relay, and the Pi logo are now integrated across the viewer.
+- **Pi branch-aware viewing** — read Pi's parent-linked session tree, switch terminal branches in the session detail header, persist the selected branch, search across terminal lineages, and restore search hits to their matching branch.
+- **Pi exports and recovery guidance** — Markdown/HTML exports follow the selected branch, JSON exports preserve the full Pi tree with the selected leaf, and resuming a non-default branch explains Pi's native last-entry resume behavior.
+- **Pi compatibility fixtures and documentation** — add versioned Pi fixtures for v1/v2/v3 sessions, tree diagnostics, dense tool loops, images, skills, aborted turns, cost accounting, and update the integration plan.
+
+### Improvements
+
+- **Pi usage and pricing** — aggregate persisted usage/cost across the whole tree without double counting shared entries, while keeping recorded, catalog-priced, estimated, and unpriced calls distinct.
+- **Agent capability metadata** — align Pi's worktree and hooks capability flags with the implemented worktree flow and app-managed extension relay.
+
+## [v0.3.23]
+
+### Bug Fixes
+
+- **Kimi terminal synchronization** — keep embedded terminal sessions, session lists, and session details aligned after terminal-side changes.
+- **Agent selection limits** — enforce the maximum number of enabled agents, preserve canonical ordering, and migrate older visibility preferences safely.
+- **OpenCode image labels** — preserve image labels when rendering and passing session attachments through the viewer.
+
 ## [v0.3.22]
 
 ### Features

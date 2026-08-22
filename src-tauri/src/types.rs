@@ -208,6 +208,12 @@ pub struct SessionMeta {
     pub modified: u64,
     pub size: u64,
     pub message_count: usize,
+    /// Pi exposes the selected-lineage count separately from its complete tree.
+    /// Other sources leave these unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pi_branch_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pi_entry_count: Option<usize>,
     pub codex_app_list_rank: Option<usize>,
     pub codex_app_list_scanned: usize,
     pub codex_app_first_page_size: usize,
@@ -355,6 +361,24 @@ pub struct SearchHit {
     /// 文本命中所在消息的 uuid（若该 agent 写了 uuid）。和 index 同源；前端优先用 uuid，
     /// 万一从打开会话到滚动之间消息数组发生重排，uuid 能比 index 更稳。
     pub match_msg_uuid: Option<String>,
+    /// Pi-only terminal leaf containing the text hit, so Viewer can reopen the
+    /// corresponding lineage instead of silently falling back to the physical last entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pi_leaf_id: Option<String>,
+}
+
+/// Pi v3 transcript tree node. The viewer keeps this flat shape so callers can
+/// cheaply build either a branch picker or a full tree view without reparsing JSONL.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PiTreeNode {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub children: Vec<String>,
+    pub kind: String,
+    pub timestamp: Option<String>,
+    pub ordinal: usize,
+    pub terminal: bool,
 }
 
 /// 一个会话的 token 用量汇总。三个 agent 用的字段名各不相同，这里统一抽象：
@@ -519,6 +543,10 @@ pub struct AgentStats {
     pub unpriced_call_count: u64,
     /// 使用 Grok 官方旗舰价估算的真实 API 调用数；不等于第三方实际账单。
     pub estimated_call_count: u64,
+    /// Calls whose cost came from Pi's persisted `usage.cost.total`.
+    pub recorded_call_count: u64,
+    /// Calls priced by the strict provider/model catalog fallback.
+    pub catalog_call_count: u64,
     /// 顶层 cache 命中率（cache_read / (input + cache_read + cache_creation)）。
     pub cache_hit_rate: f64,
     /// 按 cost_usd 降序的项目列表。

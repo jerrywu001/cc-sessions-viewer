@@ -93,6 +93,7 @@ import IconSlashSquareRaw from '~icons/lucide/square-slash'
 import IconSkillRaw from '~icons/lucide/box'
 import IconContextWindowRaw from '~icons/lucide/layout-grid'
 import IconExitPaneRaw from '~icons/lucide/log-out'
+import piLogo from '../assets/pi.svg'
 
 export const IconPinUp = IconPinUpRaw
 export const IconPinDown = IconPinDownRaw
@@ -408,6 +409,22 @@ const IconKimiRaw = defineComponent({
   },
 })
 
+const IconPiRaw = defineComponent({
+  name: 'IconPi',
+  setup() {
+    return () =>
+      h('img', {
+        src: piLogo,
+        width: 16,
+        height: 16,
+        alt: 'Pi',
+        'aria-hidden': 'true',
+        class: 'iconify pi-logo',
+        style: 'vertical-align: middle',
+      })
+  },
+})
+
 // Brand marks for the agents, pulled from iconify at build time so
 // runtime stays offline-friendly. Sources: `material-icon-theme:claude`,
 // our own `assets/codex.svg`, and inline render for agy / opencode.
@@ -419,6 +436,7 @@ export const IconAgy = IconAgyRaw
 export const IconOpencode = IconOpencodeRaw
 export const IconGrok = IconGrokRaw
 export const IconKimi = IconKimiRaw
+export const IconPi = IconPiRaw
 
 /**
  * Global dictionary of agent → brand-mark icon component. Use as
@@ -433,6 +451,7 @@ export const agentIcons: Record<Agent, Component> = {
   opencode: IconOpencodeRaw,
   grok: IconGrokRaw,
   kimicode: IconKimiRaw,
+  pi: IconPiRaw,
 }
 
 // ---- 文件附件按扩展名分型的图标 ----
