@@ -205,9 +205,21 @@ fn get_installed_version(spec: &CliSpec) -> Option<String> {
     extract_version(&out)
 }
 
+fn managed_grok_binary(home: &std::path::Path) -> Option<std::path::PathBuf> {
+    let bin_dir = home.join(".grok").join("bin");
+    #[cfg(windows)]
+    const NAMES: &[&str] = &["grok.exe", "grok.cmd", "grok.bat", "grok.ps1", "grok"];
+    #[cfg(not(windows))]
+    const NAMES: &[&str] = &["grok"];
+
+    NAMES
+        .iter()
+        .map(|name| bin_dir.join(name))
+        .find(|path| path.is_file())
+}
+
 fn resolve_grok_binary() -> String {
-    let managed = crate::util::home().join(".grok/bin/grok");
-    if managed.is_file() {
+    if let Some(managed) = managed_grok_binary(&crate::util::home()) {
         return managed.to_string_lossy().into_owned();
     }
     find_all_paths("grok")
@@ -344,6 +356,20 @@ fn extract_command_latest_info(output: &str) -> Result<CommandVersionInfo, Strin
             });
         }
     }
+    // Some Grok builds report `latestVersion: null` when the installed build
+    // is already current, while still returning `updateAvailable: false`.
+    // Preserve the useful up-to-date signal instead of dropping the entire
+    // result and making the UI look like the CLI has no latest version.
+    for value in values.iter() {
+        if value.get("updateAvailable").and_then(|v| v.as_bool()) == Some(false) {
+            if let Some(version) = value.get("currentVersion").and_then(|v| v.as_str()) {
+                return Ok(CommandVersionInfo {
+                    latest_version: version.to_string(),
+                    update_available: Some(false),
+                });
+            }
+        }
+    }
     Err("missing latest version field".into())
 }
 
@@ -362,33 +388,28 @@ fn run_binary(binary: &str, args: &[&str]) -> Result<String, String> {
     } else {
         format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", grok_bin_dir.display())
     };
-    // Version probes must not inherit the GUI/terminal integration environment.
-    // Grok's updater reads its own environment in addition to PATH, while pnpm
-    // only resolves a binary from PATH.  Keeping this child deterministic also
-    // prevents a shell wrapper or an injected CLI selector from changing the
-    // update metadata returned to the UI.
+    // Keep the user's system environment intact: Grok's updater needs platform
+    // variables such as USERPROFILE/APPDATA/TEMP on Windows (and proxy/TLS
+    // settings on all platforms). Remove only the variables that can redirect
+    // Grok to a different channel, endpoint, or embedded version. Do not force
+    // HOME/GROK_HOME here: on Windows Grok resolves its profile through
+    // USERPROFILE, and overriding them makes `update --check` wait instead of
+    // returning its JSON result.
     let mut cmd = Command::new(binary);
     for key in [
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "NO_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-        "no_proxy",
-        "SSL_CERT_FILE",
-        "SSL_CERT_DIR",
+        "GROK_CLI_BASE_URL",
+        "GROK_CHANNEL",
+        "GROK_VERSION",
+        "GROK_MINIMUM_VERSION",
+        "GROK_MAXIMUM_VERSION",
+        "GROK_REQUIRED_MINIMUM_VERSION",
+        "GROK_REQUIRED_MAXIMUM_VERSION",
+        "XAI_API_BASE_URL",
     ] {
-        if let Some(value) = std::env::var_os(key) {
-            cmd.env(key, value);
-        }
+        cmd.env_remove(key);
     }
     let out = cmd
         .args(args)
-        .env_clear()
-        .env("HOME", &home)
-        .env("GROK_HOME", home.join(".grok"))
         .env("PATH", system_path)
         .env("TERM", "dumb")
         .env("LANG", "C.UTF-8")
@@ -468,9 +489,12 @@ fn redact_doctor_summary(error: &str) -> String {
         .find(|line| !line.is_empty())
         .unwrap_or("Kimi doctor failed")
         .to_string();
-    if let Some(home) = crate::util::home().to_str() {
-        summary = summary.replace(home, "~");
-    }
+    // Diagnostics are displayed as cross-platform text. Normalize Windows
+    // separators before replacing the home directory so the redacted path is
+    // consistently shown as `~/.kimi-code/...`.
+    summary = summary.replace('\\', "/");
+    let home = crate::util::home().to_string_lossy().replace('\\', "/");
+    summary = summary.replace(&home, "~");
     for pattern in [
         r"(?i)(authorization|bearer|token|api[_-]?key|secret|password|credential|cookie)\s*(=|:|\s+)\S+",
         r"(?i)([?&](?:token|api[_-]?key|secret|password|credential)=)[^&\s]+",
@@ -1080,6 +1104,45 @@ mod tests {
         assert_eq!(check.latest_version, "1.0.5");
         assert_eq!(check.update_available, Some(true));
         assert!(extract_command_latest_info("{\"error\":null}").is_err());
+    }
+
+    #[test]
+    fn grok_version_check_uses_current_version_when_update_is_confirmed_false() {
+        let check = extract_command_latest_info(
+            r#"{"currentVersion":"1.0.5","latestVersion":null,"updateAvailable":false}"#,
+        )
+        .unwrap();
+        assert_eq!(check.latest_version, "1.0.5");
+        assert_eq!(check.update_available, Some(false));
+    }
+
+    #[test]
+    fn managed_grok_binary_resolves_platform_executable_name() {
+        let root = std::env::temp_dir().join(format!(
+            "cc-sessions-viewer-grok-bin-{}",
+            std::process::id()
+        ));
+        let bin = root.join(".grok").join("bin");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&bin).unwrap();
+
+        #[cfg(windows)]
+        let expected = {
+            let exe = bin.join("grok.exe");
+            let shim = bin.join("grok.cmd");
+            std::fs::write(&exe, b"exe").unwrap();
+            std::fs::write(&shim, b"shim").unwrap();
+            exe
+        };
+        #[cfg(not(windows))]
+        let expected = {
+            let binary = bin.join("grok");
+            std::fs::write(&binary, b"binary").unwrap();
+            binary
+        };
+
+        assert_eq!(managed_grok_binary(&root), Some(expected));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
