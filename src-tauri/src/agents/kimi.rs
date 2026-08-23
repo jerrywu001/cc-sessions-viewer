@@ -2173,7 +2173,7 @@ mod tests {
         let root = scratch("unsafe");
         let sessions = sessions_dir(&root);
         fs::create_dir_all(sessions.join("wd_project").join("session_incomplete")).unwrap();
-        let valid = create_session(
+        let _valid = create_session(
             &root,
             "wd_project",
             "session_valid",
@@ -2185,7 +2185,7 @@ mod tests {
             use std::os::unix::fs::symlink;
             let link = sessions.join("wd_project").join("session_link");
             symlink(
-                valid.parent().unwrap().parent().unwrap().parent().unwrap(),
+                _valid.parent().unwrap().parent().unwrap().parent().unwrap(),
                 link,
             )
             .unwrap();

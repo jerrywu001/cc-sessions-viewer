@@ -68,7 +68,11 @@ fn list_projects(
         agents::source(&agent)?.list_projects(include_codex_internal, include_codex_archived)?;
     let bm = bookmarks::load(&agent);
     for bp in bm {
-        if out.iter().any(|p| p.display_path == bp) {
+        if let Some(project) = out
+            .iter_mut()
+            .find(|p| project_paths_equal(&p.display_path, &bp))
+        {
+            project.bookmarked = true;
             continue;
         }
         let bp_path = Path::new(&bp);
@@ -91,6 +95,63 @@ fn list_projects(
     }
     inject_worktrees(&agent, &mut out);
     Ok(out)
+}
+
+/// Compare project paths using the platform's path spelling rules.
+///
+/// Kimi stores Windows `cwd` values with `/`, while folder bookmarks may be
+/// returned by the file picker with `\\`. Windows paths are also
+/// case-insensitive. Keep the existing exact-string behavior on Unix-like
+/// systems so their project keys and display paths remain unchanged.
+#[cfg(windows)]
+fn project_paths_equal(left: &str, right: &str) -> bool {
+    fn key(path: &str) -> String {
+        let normalized = path.replace('\\', "/");
+        let trimmed = normalized.trim_end_matches('/');
+        if trimmed.is_empty() {
+            return normalized.to_lowercase();
+        }
+        let mut trimmed = trimmed.to_lowercase();
+        if trimmed.len() == 2 && trimmed.as_bytes()[1] == b':' {
+            trimmed.push('/');
+        }
+        trimmed
+    }
+
+    key(left) == key(right)
+}
+
+#[cfg(not(windows))]
+fn project_paths_equal(left: &str, right: &str) -> bool {
+    left == right
+}
+
+#[cfg(test)]
+mod project_path_tests {
+    use super::project_paths_equal;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_project_paths_match_across_common_spellings() {
+        assert!(project_paths_equal(
+            r"D:\AI\axure\electron-demo",
+            "d:/AI/axure/electron-demo/"
+        ));
+        assert!(project_paths_equal(r"C:\", "c:/"));
+        assert!(!project_paths_equal("/", ""));
+        assert!(!project_paths_equal(
+            r"D:\AI\axure\electron-demo",
+            "D:/AI/axure/other-demo"
+        ));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_project_paths_keep_exact_string_semantics() {
+        assert!(project_paths_equal("/tmp/project", "/tmp/project"));
+        assert!(!project_paths_equal("/tmp/project", "/tmp/project/"));
+        assert!(!project_paths_equal("/tmp/project", r"\tmp\project"));
+    }
 }
 
 /// 支持本应用 worktree 展示/创建的 agent：Claude、Codex、Grok Build、Kimi Code、Pi 都按 `cwd` 归属会话。

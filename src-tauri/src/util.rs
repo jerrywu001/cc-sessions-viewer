@@ -1034,7 +1034,8 @@ pub fn post_process_session_msgs(msgs: &mut [Msg]) {
 /// 只依据当前消息实际解析出的块和正文 token 判断，不依赖文件名、会话示例或固定
 /// 的编号；因此普通图片不会因为正文里另有一个图片 token 而被误标记。
 fn bind_inline_image_placeholders(msg: &mut Msg) {
-    let image_token_re = regex_lite::Regex::new(r"\[Image #(\d+)\]").expect("valid regex");
+    let image_token_re =
+        regex_lite::Regex::new(r"\[(?:Image #(\d+)|#image (\d+))\]").expect("valid regex");
     let image_numbers: HashSet<usize> = msg
         .blocks
         .iter()
@@ -1043,6 +1044,7 @@ fn bind_inline_image_placeholders(msg: &mut Msg) {
         .flat_map(|text| {
             image_token_re.captures_iter(text).filter_map(|caps| {
                 caps.get(1)
+                    .or_else(|| caps.get(2))
                     .and_then(|value| value.as_str().parse::<usize>().ok())
             })
         })
@@ -1267,7 +1269,12 @@ fn lift_paths_from_text_inner(text: &str, preserve_clipboard_tags: bool) -> (Vec
     // 共享路径和 `\\?\` 扩展路径也在这里处理；路径组件允许空格和 Unicode 用户名。
     // clipboard 图片的文件名有稳定前缀。单独保留其非贪婪匹配，避免两张图之间的正文
     // 被通用路径正则吞进一个伪路径（`clipboard-a.png text /tmp/clipboard-b.png`）。
-    let re_clipboard_image = regex_lite::Regex::new(
+    let clipboard_prefix = if cfg!(windows) {
+        r#"(?: pi-)? clipboard-"#
+    } else {
+        r#"clipboard-"#
+    };
+    let re_clipboard_image = regex_lite::Regex::new(&format!(
         r#"(?xi)
         (?:
             ~[/\\]
@@ -1278,9 +1285,9 @@ fn lift_paths_from_text_inner(text: &str, preserve_clipboard_tags: bool) -> (Vec
             | \\\\ [^/\\\r\n]
         )
         (?: [^/\\\r\n]+ [/\\] )*?
-        clipboard- [^/\\\r\n]*? \. (?:png|jpe?g|gif|webp|bmp|tiff|ico)
+        {clipboard_prefix} [^/\\\r\n]*? \. (?:png|jpe?g|gif|webp|bmp|tiff|ico)
         "#,
-    )
+    ))
     .expect("valid regex");
     let re_abs = regex_lite::Regex::new(
         r#"(?x)
@@ -1437,7 +1444,9 @@ fn is_clipboard_image_reference(path: &str) -> bool {
     let Some(name) = components.next_back() else {
         return false;
     };
-    name.to_ascii_lowercase().starts_with("clipboard-")
+    let name = name.to_ascii_lowercase();
+    name.starts_with("clipboard-")
+        || (cfg!(windows) && name.starts_with("pi-clipboard-"))
         || components.any(|component| component.eq_ignore_ascii_case("clipboard"))
 }
 
@@ -1861,6 +1870,10 @@ Only after the original task is complete, process this follow-up in the order re
         assert!(is_clipboard_image_reference(
             r#"C:\Users\Jane Doe\AppData\Local\Temp\clipboard-2026-08-21.png"#
         ));
+        #[cfg(windows)]
+        assert!(is_clipboard_image_reference(
+            r#"C:\Users\Jane Doe\AppData\Local\Temp\pi-clipboard-2026-08-21.png"#
+        ));
         assert!(is_clipboard_image_reference(
             r#"\\?\C:\Users\Jane Doe\AppData\Local\Temp\clipboard-2026-08-21.png"#
         ));
@@ -1870,6 +1883,55 @@ Only after the original task is complete, process this follow-up in the order re
         assert!(!is_clipboard_image_reference(
             r#"C:\Users\Jane Doe\AppData\Local\Temp\screen-2026-08-21.png"#
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_post_process_binds_pi_clipboard_images_like_codex() {
+        let root = std::env::temp_dir().join(format!(
+            "cc-sessions-viewer-pi-clipboard-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("pi-clipboard-first.png");
+        let second = root.join("pi-clipboard-second.png");
+        fs::write(&first, b"first").unwrap();
+        fs::write(&second, b"second").unwrap();
+
+        let text = format!(
+            "hi, {}, ooo, {} , 只需要回答我hi即可",
+            first.display(),
+            second.display()
+        );
+        let mut msgs = vec![Msg {
+            role: "user".to_string(),
+            blocks: vec![text_block("text", &text)],
+            ..Default::default()
+        }];
+
+        post_process_session_msgs(&mut msgs);
+
+        let images: Vec<&Block> = msgs[0]
+            .blocks
+            .iter()
+            .filter(|block| block.kind == "image")
+            .collect();
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].image_src.as_deref(), first.to_str());
+        assert_eq!(images[1].image_src.as_deref(), second.to_str());
+        assert_eq!(images[0].inline_placeholder.as_deref(), Some("[Image #1]"));
+        assert_eq!(images[1].inline_placeholder.as_deref(), Some("[Image #2]"));
+        assert_eq!(
+            msgs[0]
+                .blocks
+                .iter()
+                .find_map(|block| (block.kind == "text").then_some(block.text.as_deref()))
+                .flatten(),
+            Some("hi, [Image #1], ooo, [Image #2] , 只需要回答我hi即可")
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -1,6 +1,14 @@
 /** Chat 正文内联图片占位符的纯函数辅助工具。 */
 
-const IMAGE_TOKEN_RE = /\[Image #(\d+)\]/g
+const IMAGE_TOKEN_RE = /\[(?:Image #(\d+)|#image (\d+))\]/gi
+
+function imageTokenNumber(token: string): number | undefined {
+  const match = token.match(/^\[(?:Image #(\d+)|#image (\d+))\]$/i)
+  const value = match?.[1] ?? match?.[2]
+  if (!value) return undefined
+  const number = Number(value)
+  return Number.isSafeInteger(number) && number > 0 ? number : undefined
+}
 
 export function inlineImagePlaceholders(text: string): string[] {
   const out: string[] = []
@@ -18,7 +26,7 @@ export function inlineImagePlaceholders(text: string): string[] {
 export function nextInlineImageNumber(text: string, start = 1): number {
   let next = Math.max(1, start)
   for (const match of text.matchAll(IMAGE_TOKEN_RE)) {
-    const n = Number(match[1])
+    const n = Number(match[1] ?? match[2])
     if (Number.isSafeInteger(n)) next = Math.max(next, n + 1)
   }
   return next
@@ -66,15 +74,16 @@ export function bindInlineImagePlaceholdersAtAttachmentPositions<T extends { inl
   // transcripts where [Image #N] follows an interleaved image block and N is not
   // the overall file/image attachment position.
   if (images.some((image) => image.inlinePlaceholder)) return images
-  const placeholders = new Set(placeholderList)
   const used = new Set(images.map((image) => image.inlinePlaceholder).filter(Boolean))
   let boundByPosition = false
   const bound = images.map((image, index) => {
     if (image.inlinePlaceholder) return image
     const position = positions[index]
     if (!Number.isSafeInteger(position) || position < 1) return image
-    const placeholder = `[Image #${position}]`
-    if (!placeholders.has(placeholder) || used.has(placeholder)) return image
+    const placeholder = placeholderList.find(
+      (token) => imageTokenNumber(token) === position && !used.has(token),
+    )
+    if (!placeholder) return image
     used.add(placeholder)
     boundByPosition = true
     return { ...image, inlinePlaceholder: placeholder }

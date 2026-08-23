@@ -636,6 +636,91 @@ fn image_src(el: &Value) -> Option<String> {
     }
 }
 
+fn image_token_number(token: &str) -> Option<usize> {
+    let token = token.strip_prefix('[')?.strip_suffix(']')?;
+    let number = token
+        .strip_prefix("Image #")
+        .or_else(|| token.strip_prefix("#image "))?;
+    number.parse::<usize>().ok().filter(|n| *n > 0)
+}
+
+fn image_tokens_in_message(msg: &Msg) -> Vec<String> {
+    let Ok(token_re) = regex_lite::Regex::new(r"\[(?:Image #\d+|#image \d+)\]") else {
+        return Vec::new();
+    };
+    msg.blocks
+        .iter()
+        .filter(|block| block.kind == "text")
+        .filter_map(|block| block.text.as_deref())
+        .flat_map(|text| token_re.find_iter(text).map(|m| m.as_str().to_string()))
+        .collect()
+}
+
+/// `view_image` is recorded as a JavaScript tool input rather than a JSON path
+/// field. Recover its path so the resulting base64 image can hydrate the
+/// original user attachment, even after the temp file has been removed.
+fn tool_input_path(input: &str) -> Option<String> {
+    let marker = input.find("path")?;
+    let rest = &input[marker + "path".len()..];
+    let colon = rest.find(':')?;
+    let rest = rest[colon + 1..].trim_start();
+    let quote = rest.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let mut value = String::new();
+    let mut escaped = false;
+    for ch in rest[quote.len_utf8()..].chars() {
+        if escaped {
+            value.push(match ch {
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                '\\' => '\\',
+                '"' => '"',
+                '\'' => '\'',
+                other => other,
+            });
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == quote {
+            return (!value.is_empty()).then_some(value);
+        } else {
+            value.push(ch);
+        }
+    }
+    None
+}
+
+fn hydrate_codex_image_attachment(msgs: &mut [Msg], path: &str, src: String) {
+    for msg in msgs.iter_mut().rev() {
+        let tokens = image_tokens_in_message(msg);
+        let mut attachment_position = 0usize;
+        for block in &mut msg.blocks {
+            if block.kind != "image" && block.kind != "file" {
+                continue;
+            }
+            attachment_position += 1;
+            let matches = block.file_path.as_deref() == Some(path)
+                || block.image_src.as_deref() == Some(path);
+            if !matches {
+                continue;
+            }
+            block.kind = "image".to_string();
+            block.file_path = None;
+            block.image_src = Some(src);
+            if block.inline_placeholder.is_none() {
+                block.inline_placeholder = tokens
+                    .iter()
+                    .find(|token| image_token_number(token) == Some(attachment_position))
+                    .cloned();
+            }
+            return;
+        }
+    }
+}
+
 /// 从 Codex 原始 user content 中读取贴图与正文占位符的对应关系。
 ///
 /// Codex 会把一张图拆成三个相邻的 block：打开 `<image name=[Image #N]>` 的
@@ -645,7 +730,8 @@ fn codex_input_images(content: &Value) -> Vec<Block> {
     let Some(arr) = content.as_array() else {
         return Vec::new();
     };
-    let token_re = regex_lite::Regex::new(r"\[Image #(\d+)\]").expect("valid image token regex");
+    let token_re =
+        regex_lite::Regex::new(r"\[(?:Image #\d+|#image \d+)\]").expect("valid image token regex");
     let mut current_placeholder: Option<String> = None;
     let mut images = Vec::new();
 
@@ -655,10 +741,15 @@ fn codex_input_images(content: &Value) -> Vec<Block> {
                 let text = el.get("text").and_then(Value::as_str).unwrap_or_default();
                 if text.contains("<image") {
                     current_placeholder = token_re.captures(text).and_then(|caps| {
-                        caps.get(1)
-                            .and_then(|n| n.as_str().parse::<usize>().ok())
-                            .filter(|n| *n > 0)
-                            .map(|n| format!("[Image #{n}]"))
+                        caps.get(0).and_then(|token| {
+                            image_token_number(token.as_str()).map(|n| {
+                                if token.as_str().starts_with("[#image ") {
+                                    format!("[#image {n}]")
+                                } else {
+                                    format!("[Image #{n}]")
+                                }
+                            })
+                        })
                     });
                 }
                 if text.contains("</image>") {
@@ -700,8 +791,7 @@ fn order_codex_attachments(images: Vec<Block>, files: Vec<Block>) -> Vec<Block> 
     let max_position = images
         .iter()
         .filter_map(|block| block.inline_placeholder.as_deref())
-        .filter_map(|token| token.strip_prefix("[Image #")?.strip_suffix(']'))
-        .filter_map(|n| n.parse::<usize>().ok())
+        .filter_map(image_token_number)
         .max()
         .unwrap_or(0);
     let slot_count = total.max(max_position);
@@ -711,8 +801,7 @@ fn order_codex_attachments(images: Vec<Block>, files: Vec<Block>) -> Vec<Block> 
         let position = image
             .inline_placeholder
             .as_deref()
-            .and_then(|token| token.strip_prefix("[Image #")?.strip_suffix(']'))
-            .and_then(|n| n.parse::<usize>().ok());
+            .and_then(image_token_number);
         if let Some(position) = position {
             if position > 0 && position <= slots.len() && slots[position - 1].is_none() {
                 slots[position - 1] = Some(image);
@@ -1343,6 +1432,7 @@ fn read_with_title_index(
     let file = fs::File::open(path).map_err(|e| format!("Failed to open session: {e}"))?;
     let mut msgs = Vec::new();
     let mut pending_user_images: Vec<Block> = Vec::new();
+    let mut tool_input_paths: HashMap<String, String> = HashMap::new();
     let mut apply_patch_by_call_id: HashMap<String, usize> = HashMap::new();
     let mut wrapped_apply_patch_indices: Vec<usize> = Vec::new();
     let mut session_id: Option<String> = None;
@@ -1556,12 +1646,19 @@ fn read_with_title_index(
                 }
             }
             ("response_item", "function_call") | ("response_item", "custom_tool_call") => {
+                let raw_input = format_args(p.get("arguments").or_else(|| p.get("input")));
+                let call_id = p.get("call_id").and_then(|x| x.as_str()).map(str::to_owned);
+                if let (Some(call_id), Some(path)) =
+                    (call_id.as_deref(), tool_input_path(&raw_input))
+                {
+                    tool_input_paths.insert(call_id.to_string(), path);
+                }
                 let mut name = p
                     .get("name")
                     .and_then(|x| x.as_str())
                     .unwrap_or("tool")
                     .to_string();
-                let mut input = format_args(p.get("arguments").or_else(|| p.get("input")));
+                let mut input = raw_input;
                 let mut wrapped_apply_patch = false;
                 if name == "exec" {
                     if let Some(patch) = extract_exec_apply_patch(&input) {
@@ -1605,6 +1702,9 @@ fn read_with_title_index(
                     .get("call_id")
                     .and_then(|x| x.as_str())
                     .map(|s| s.to_string());
+                let image_path = id
+                    .as_deref()
+                    .and_then(|call_id| tool_input_paths.remove(call_id));
                 let output_is_error = output_indicates_tool_error(p.get("output"));
                 if output_is_error {
                     if let Some(msg_index) = id
@@ -1662,6 +1762,16 @@ fn read_with_title_index(
                             ..Default::default()
                         });
                     }
+                }
+                if let (Some(path), Some(src)) = (
+                    image_path,
+                    blocks.iter().find_map(|block| {
+                        (block.kind == "image")
+                            .then(|| block.image_src.clone())
+                            .flatten()
+                    }),
+                ) {
+                    hydrate_codex_image_attachment(&mut msgs, &path, src);
                 }
                 if !blocks.is_empty() {
                     msgs.push(Msg {
@@ -2762,6 +2872,73 @@ mod tests {
         bind_codex_pasted_file_placeholders("hi [Image #1]", &mut blocks);
         assert_eq!(blocks[0].inline_placeholder, None);
         assert_eq!(blocks[1].inline_placeholder.as_deref(), Some("[Image #1]"));
+    }
+
+    #[test]
+    fn parses_view_image_windows_path_from_javascript_tool_input() {
+        let input = r#"const r = await tools.view_image({path:"C:\\Users\\Jane\\Temp\\screen.png",detail:"high"}); image(r.image_url)"#;
+        assert_eq!(
+            tool_input_path(input).as_deref(),
+            Some(r#"C:\Users\Jane\Temp\screen.png"#)
+        );
+    }
+
+    #[test]
+    fn hydrates_stale_codex_image_file_and_preserves_hash_image_token() {
+        let path = r#"C:\Users\Jane\AppData\Local\Temp\screen.png"#;
+        let user_text = format!(
+            "# Files mentioned by the user:\n\n## {path}: {path}\n\n## My request for Codex:\n[#image 1] hi"
+        );
+        let escaped_path = path.replace('\\', "\\\\");
+        let lines = [
+            json!({
+                "type": "session_meta",
+                "payload": { "id": "stale-image", "cwd": "C:\\repo" }
+            })
+            .to_string(),
+            json!({
+                "type": "event_msg",
+                "payload": { "type": "user_message", "message": user_text }
+            })
+            .to_string(),
+            json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "call_id": "view-1",
+                    "name": "exec",
+                    "input": format!(
+                        "const r = await tools.view_image({{path:\"{escaped_path}\",detail:\"high\"}}); image(r.image_url)"
+                    )
+                }
+            })
+            .to_string(),
+            json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "view-1",
+                    "output": [
+                        { "type": "input_image", "image_url": "data:image/png;base64,abc" }
+                    ]
+                }
+            })
+            .to_string(),
+        ];
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let p = write_temp("codex-stale-image-hydration.jsonl", &refs);
+        let msgs = read_with_title_index(p.to_string_lossy().as_ref(), &HashMap::new()).unwrap();
+        let user = msgs.iter().find(|msg| msg.role == "user").unwrap();
+        assert_eq!(user.blocks[0].kind, "image");
+        assert_eq!(
+            user.blocks[0].image_src.as_deref(),
+            Some("data:image/png;base64,abc")
+        );
+        assert_eq!(
+            user.blocks[0].inline_placeholder.as_deref(),
+            Some("[#image 1]")
+        );
+        assert_eq!(user.blocks[1].text.as_deref(), Some("[#image 1] hi"));
     }
 
     #[test]

@@ -458,7 +458,7 @@ dependencies = [
 
 [[package]]
 name = "cc-sessions-viewer"
-version = "0.3.23"
+version = "0.3.24"
 dependencies = [
  "base64 0.22.1",
  "chrono",

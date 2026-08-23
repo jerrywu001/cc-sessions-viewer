@@ -175,7 +175,21 @@ fn valid_timestamp(value: &str) -> bool {
 }
 
 fn normalize_cwd(value: &str) -> Option<String> {
-    let path = Path::new(value.trim());
+    let raw = value.trim();
+    if cfg!(windows) && raw.starts_with('/') {
+        let mut segments = Vec::new();
+        for segment in raw.split('/') {
+            match segment {
+                "" | "." => {}
+                ".." => {
+                    segments.pop()?;
+                }
+                segment => segments.push(segment),
+            }
+        }
+        return (!segments.is_empty()).then(|| format!("/{}", segments.join("/")));
+    }
+    let path = Path::new(raw);
     if !path.is_absolute() {
         return None;
     }
@@ -190,7 +204,7 @@ fn normalize_cwd(value: &str) -> Option<String> {
                 }
             }
             Component::Normal(segment) => normalized.push(segment),
-            Component::Prefix(_) => return None,
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
         }
     }
     (normalized != Path::new("/")).then(|| normalized.to_string_lossy().to_string())
@@ -671,10 +685,14 @@ fn pi_image_prefix_end(text: &str) -> Option<usize> {
         while i < bytes.len() && bytes[i].is_ascii_whitespace() {
             i += 1;
         }
-        if !text[i..].starts_with("[Image #") {
+        let marker = if text[i..].starts_with("[Image #") {
+            "[Image #"
+        } else if text[i..].starts_with("[#image ") {
+            "[#image "
+        } else {
             break;
-        }
-        let start = i + "[Image #".len();
+        };
+        let start = i + marker.len();
         let mut end = start;
         while end < bytes.len() && bytes[end].is_ascii_digit() {
             end += 1;
@@ -1740,6 +1758,12 @@ Use tmux-bridge for pane control.
             ),
             "[Image #1] [Image #2] /smux"
         );
+        assert_eq!(
+            normalize_pi_skill_text(
+                "[#image 1] <skill name=\"smux\" location=\"/tmp/smux/SKILL.md\">\ndocs\n</skill>"
+            ),
+            "[#image 1] /smux"
+        );
     }
 
     #[test]
@@ -1834,6 +1858,15 @@ Use tmux-bridge for pane control.
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].header.cwd, "/tmp/pi-project");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalizes_windows_drive_absolute_cwds() {
+        assert_eq!(
+            normalize_cwd(r"D:\tmp\pi-project\.\child\.."),
+            Some(r"D:\tmp\pi-project".to_string())
+        );
     }
 
     #[test]
