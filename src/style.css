@@ -3141,6 +3141,42 @@ mark.locate-hl {
   border-radius: 10px;
   overflow: hidden;
 }
+.msg-image-thumb.is-image-unavailable {
+  cursor: default;
+}
+.msg-image-missing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 160px;
+  min-height: 92px;
+  max-width: 160px;
+  padding: 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.2;
+  text-align: center;
+}
+.msg-image-missing-icon {
+  width: 25px;
+  height: 25px;
+  color: var(--text-muted);
+}
+.msg-image-missing small {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .msg-image-thumb img {
   display: block;
   width: auto;

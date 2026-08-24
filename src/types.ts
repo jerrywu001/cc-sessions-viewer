@@ -102,6 +102,8 @@ export interface Block {
   isDir?: boolean
   diff?: DiffHunk[]
   imageSrc?: string
+  /** 历史剪贴板图片路径存在但本地临时文件已被清理。仍按图片布局显示裂图占位。 */
+  imageUnavailable?: boolean
   /** Chat 粘贴图片在正文中的 token；历史/本地回显用来保持图片绑定。 */
   inlinePlaceholder?: string
 }

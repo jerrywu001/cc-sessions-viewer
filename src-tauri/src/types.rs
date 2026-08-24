@@ -304,6 +304,10 @@ pub struct Block {
     pub diff: Option<Vec<DiffHunk>>,
     /// 图片源：通常为 data:<mime>;base64,<...> 的内联 URL 或 http(s) URL。
     pub image_src: Option<String>,
+    /// 历史会话只保存了剪贴板图片路径、但本地临时文件已被清理时为 true。
+    /// 仍作为 image block 返回，让前端保持图片布局并显示不可用占位，而不是降级为文件 chip。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_unavailable: Option<bool>,
     /// Chat 粘贴图片在用户正文中的可见占位符。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inline_placeholder: Option<String>,

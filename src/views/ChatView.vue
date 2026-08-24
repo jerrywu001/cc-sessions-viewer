@@ -62,6 +62,7 @@ import {
   IconChat,
   IconReader,
   IconStop,
+  IconImageOff,
   fileIconFor,
   agentIcons,
 } from '../components/icons'
@@ -612,6 +613,15 @@ function imageSrcUrl(src: string): string {
   }
 }
 
+function imageUnavailable(block: Block): boolean {
+  return !!block.imageUnavailable || (!!block.imageSrc && failedImagePaths.value.has(block.imageSrc))
+}
+
+function markImageUnavailable(block: Block): void {
+  if (!block.imageSrc || failedImagePaths.value.has(block.imageSrc)) return
+  failedImagePaths.value = new Set(failedImagePaths.value).add(block.imageSrc)
+}
+
 function imageBlocks(m: Msg): Block[] {
   const images: Block[] = []
   const positions: number[] = []
@@ -636,6 +646,13 @@ function imageBlocks(m: Msg): Block[] {
     .map((b) => b.text ?? '')
     .join('')
   return bindInlineImagePlaceholdersAtAttachmentPositions(text, images, positions)
+}
+
+function openImagePreview(m: Msg, block: Block): void {
+  const blocks = imageBlocks(m).filter((item) => !imageUnavailable(item))
+  const index = blocks.indexOf(block)
+  if (index < 0) return
+  openLightbox(blocks.map((item) => imageSrcUrl(item.imageSrc!)), index)
 }
 // 图片缩略图单独展示，但正文仍保留 CLI 写入的 [Image #n] 占位符。
 // 占位符是图片与正文的语义锚点，尤其是同一条消息包含多张图片时不能省略。
@@ -955,6 +972,7 @@ const stats = computed(() => {
 const lightboxVisible = ref(false)
 const lightboxImgs = ref<string[]>([])
 const lightboxIndex = ref(0)
+const failedImagePaths = ref(new Set<string>())
 // 同一条消息的多张图片整组进灯箱，点哪张就从哪张开始，可左右翻看。
 function openLightbox(imgs: string[], index = 0) {
   lightboxImgs.value = imgs
@@ -2460,9 +2478,24 @@ function onDocClick(e: MouseEvent) {
               :key="'img' + bi"
               type="button"
               class="msg-image-thumb"
-              @click="openLightbox(imageBlocks(m).map((x) => imageSrcUrl(x.imageSrc!)), bi)"
+              :class="{ 'is-image-unavailable': imageUnavailable(b) }"
+              :aria-label="imageUnavailable(b) ? 'Image unavailable' : 'Open image'"
+              @click="openImagePreview(m, b)"
             >
-              <img :src="imageSrcUrl(b.imageSrc!)" loading="lazy" alt="" />
+              <template v-if="imageUnavailable(b)">
+                <div class="msg-image-missing">
+                  <IconImageOff class="msg-image-missing-icon" />
+                  <span>图片不可用</span>
+                  <small>{{ fileName(b.imageSrc!) }}</small>
+                </div>
+              </template>
+              <img
+                v-else
+                :src="imageSrcUrl(b.imageSrc!)"
+                loading="lazy"
+                alt=""
+                @error="markImageUnavailable(b)"
+              />
               <span v-if="b.inlinePlaceholder" class="msg-image-tag">{{ t('chat.composer.pastedImage') }}</span>
             </button>
           </div>

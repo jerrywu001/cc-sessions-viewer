@@ -1269,11 +1269,11 @@ fn lift_paths_from_text_inner(text: &str, preserve_clipboard_tags: bool) -> (Vec
     // 共享路径和 `\\?\` 扩展路径也在这里处理；路径组件允许空格和 Unicode 用户名。
     // clipboard 图片的文件名有稳定前缀。单独保留其非贪婪匹配，避免两张图之间的正文
     // 被通用路径正则吞进一个伪路径（`clipboard-a.png text /tmp/clipboard-b.png`）。
-    let clipboard_prefix = if cfg!(windows) {
-        r#"(?: pi-)? clipboard-"#
-    } else {
-        r#"clipboard-"#
-    };
+    // Pi/Kimi have used both `clipboard-*` (macOS/Linux) and
+    // `pi-clipboard-*` (Windows) names over time.  A session can be read on a
+    // different platform than the one that created it, so the filename
+    // convention must not depend on the viewer's compile target.
+    let clipboard_prefix = r#"(?: pi-)? clipboard-"#;
     let re_clipboard_image = regex_lite::Regex::new(&format!(
         r#"(?xi)
         (?:
@@ -1334,7 +1334,7 @@ fn lift_paths_from_text_inner(text: &str, preserve_clipboard_tags: bool) -> (Vec
                 let end = capture_start + clipboard_path.end();
                 let clipboard_path = clipboard_path.as_str();
                 temp.push_str(&cleaned_text[last..start]);
-                if preserve_clipboard_tags && is_clipboard_image_path(clipboard_path) {
+                if preserve_clipboard_tags && is_clipboard_image_reference(clipboard_path) {
                     temp.push_str(CLIPBOARD_IMAGE_TAG);
                 }
                 lift_path_block(clipboard_path, &mut lifted);
@@ -1344,7 +1344,7 @@ fn lift_paths_from_text_inner(text: &str, preserve_clipboard_tags: bool) -> (Vec
         }
 
         temp.push_str(&cleaned_text[last..capture_start]);
-        if preserve_clipboard_tags && is_clipboard_image_path(&path) {
+        if preserve_clipboard_tags && is_clipboard_image_reference(&path) {
             temp.push_str(CLIPBOARD_IMAGE_TAG);
         }
         last = whole.end();
@@ -1372,7 +1372,7 @@ fn lift_paths_from_text_inner(text: &str, preserve_clipboard_tags: bool) -> (Vec
 
         if let Some(path) = parse_line_as_path(trimmed_line) {
             lift_path_block(&path, &mut lifted);
-            if preserve_clipboard_tags && is_clipboard_image_path(&path) {
+            if preserve_clipboard_tags && is_clipboard_image_reference(&path) {
                 remaining_lines.push(CLIPBOARD_IMAGE_TAG);
             }
         } else {
@@ -1411,6 +1411,19 @@ fn lift_path_block(path: &str, lifted: &mut Vec<Block>) {
     let exists = path_buf.exists();
     let is_dir = exists && path_buf.is_dir();
 
+    // Pi/Kimi persist pasted screenshots as temp-file paths. Those files may
+    // be gone by the time an old session is reopened; keep the attachment in
+    // the image lane so the UI can show a broken-image state instead of a file chip.
+    if is_clipboard_image_reference(path) && is_image_file(&path_buf) {
+        lifted.push(Block {
+            kind: "image".to_string(),
+            image_src: Some(path.to_string()),
+            image_unavailable: (!exists || is_dir).then_some(true),
+            ..Default::default()
+        });
+        return;
+    }
+
     if exists && !is_dir && is_image_file(&path_buf) {
         lifted.push(Block {
             kind: "image".to_string(),
@@ -1446,7 +1459,7 @@ fn is_clipboard_image_reference(path: &str) -> bool {
     };
     let name = name.to_ascii_lowercase();
     name.starts_with("clipboard-")
-        || (cfg!(windows) && name.starts_with("pi-clipboard-"))
+        || name.starts_with("pi-clipboard-")
         || components.any(|component| component.eq_ignore_ascii_case("clipboard"))
 }
 
@@ -1835,8 +1848,9 @@ Only after the original task is complete, process this follow-up in the order re
         let text = "这个应该像Claude一样/var/folders/8h/ddvbjjrn74q1v55wywphwkdc0000gn/T/clipboard-2026-07-05-122944-350E5680.png";
         let (blocks, remaining) = lift_paths_from_text(text);
         assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].kind, "file");
-        assert_eq!(blocks[0].file_path.as_deref().unwrap(), "/var/folders/8h/ddvbjjrn74q1v55wywphwkdc0000gn/T/clipboard-2026-07-05-122944-350E5680.png");
+        assert_eq!(blocks[0].kind, "image");
+        assert_eq!(blocks[0].image_src.as_deref().unwrap(), "/var/folders/8h/ddvbjjrn74q1v55wywphwkdc0000gn/T/clipboard-2026-07-05-122944-350E5680.png");
+        assert_eq!(blocks[0].image_unavailable, Some(true));
         assert_eq!(remaining, "这个应该像Claude一样");
     }
 
@@ -1846,8 +1860,9 @@ Only after the original task is complete, process this follow-up in the order re
         let text = format!("请看这个截图 {path} 并说明问题");
         let (blocks, remaining) = lift_paths_from_text(&text);
         assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].kind, "file");
-        assert_eq!(blocks[0].file_path.as_deref(), Some(path));
+        assert_eq!(blocks[0].kind, "image");
+        assert_eq!(blocks[0].image_src.as_deref(), Some(path));
+        assert_eq!(blocks[0].image_unavailable, Some(true));
         assert_eq!(remaining, "请看这个截图  并说明问题");
     }
 
@@ -1860,8 +1875,9 @@ Only after the original task is complete, process this follow-up in the order re
         let (blocks, remaining) = lift_paths_from_text(&text);
 
         assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0].file_path.as_deref(), Some(first));
-        assert_eq!(blocks[1].file_path.as_deref(), Some(second));
+        assert_eq!(blocks[0].image_src.as_deref(), Some(first));
+        assert_eq!(blocks[1].image_src.as_deref(), Some(second));
+        assert!(blocks.iter().all(|block| block.image_unavailable == Some(true)));
         assert_eq!(remaining, "请看  hihhi ，一共几张图？");
     }
 
@@ -1870,7 +1886,6 @@ Only after the original task is complete, process this follow-up in the order re
         assert!(is_clipboard_image_reference(
             r#"C:\Users\Jane Doe\AppData\Local\Temp\clipboard-2026-08-21.png"#
         ));
-        #[cfg(windows)]
         assert!(is_clipboard_image_reference(
             r#"C:\Users\Jane Doe\AppData\Local\Temp\pi-clipboard-2026-08-21.png"#
         ));
@@ -1885,9 +1900,8 @@ Only after the original task is complete, process this follow-up in the order re
         ));
     }
 
-    #[cfg(windows)]
     #[test]
-    fn test_post_process_binds_pi_clipboard_images_like_codex() {
+    fn test_post_process_binds_pi_clipboard_images_cross_platform() {
         let root = std::env::temp_dir().join(format!(
             "cc-sessions-viewer-pi-clipboard-{}",
             std::process::id()
@@ -1941,8 +1955,9 @@ Only after the original task is complete, process this follow-up in the order re
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].kind, "file");
         assert_eq!(blocks[0].file_path.as_deref().unwrap(), ".env.local");
-        assert_eq!(blocks[1].kind, "file");
-        assert_eq!(blocks[1].file_path.as_deref().unwrap(), "/var/folders/8h/ddvbjjrn74q1v55wywphwkdc0000gn/T/clipboard-2026-07-05-123507-F13776EE.png");
+        assert_eq!(blocks[1].kind, "image");
+        assert_eq!(blocks[1].image_src.as_deref().unwrap(), "/var/folders/8h/ddvbjjrn74q1v55wywphwkdc0000gn/T/clipboard-2026-07-05-123507-F13776EE.png");
+        assert_eq!(blocks[1].image_unavailable, Some(true));
         assert_eq!(remaining, "hello");
     }
 }

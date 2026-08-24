@@ -55,6 +55,7 @@ import IconJsonRaw from '~icons/lucide/braces'
 import IconFileSheetRaw from '~icons/lucide/file-spreadsheet'
 import IconFileSlidesRaw from '~icons/lucide/presentation'
 import IconFileImageRaw from '~icons/lucide/file-image'
+import IconImageOffRaw from '~icons/lucide/image-off'
 import IconFileVideoRaw from '~icons/lucide/file-video'
 import IconFileAudioRaw from '~icons/lucide/file-audio'
 import IconFileArchiveRaw from '~icons/lucide/file-archive'
@@ -459,6 +460,7 @@ export const IconFileDoc = IconMarkdownRaw
 export const IconFileSheet = IconFileSheetRaw
 export const IconFileSlides = IconFileSlidesRaw
 export const IconFileImage = IconFileImageRaw
+export const IconImageOff = IconImageOffRaw
 export const IconFileVideo = IconFileVideoRaw
 export const IconFileAudio = IconFileAudioRaw
 export const IconFileArchive = IconFileArchiveRaw
