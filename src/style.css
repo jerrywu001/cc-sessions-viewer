@@ -3794,6 +3794,80 @@ details[open] > .block-summary > .chev {
   overflow: auto;
   color: var(--text);
 }
+
+/* Pi todo/skill notices are intentionally plain text, not tool cards. */
+.pi-todo-plain {
+  margin: calc(10px * var(--chat-spacing-scale)) 0 calc(12px * var(--chat-spacing-scale));
+  padding-left: 12px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 48%, var(--border));
+  color: var(--text);
+}
+.pi-todo-plain .text-run {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.pi-todo-plain strong {
+  color: var(--accent);
+  font-weight: 650;
+}
+.pi-todo-plain code {
+  display: inline-block;
+  margin-top: 3px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+}
+.pi-todo-plain.status-in_progress {
+  border-left-color: color-mix(in srgb, var(--accent) 75%, var(--border));
+}
+.pi-todo-plain.status-in_progress code {
+  color: var(--accent);
+}
+.pi-todo-plain.status-completed {
+  border-left-color: color-mix(in srgb, var(--success, #22a06b) 70%, var(--border));
+}
+.pi-todo-plain.status-completed code {
+  color: var(--success, #22a06b);
+}
+.pi-todo-summary {
+  margin: calc(10px * var(--chat-spacing-scale)) 0 calc(12px * var(--chat-spacing-scale));
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.pi-todo-summary strong {
+  color: var(--accent);
+  font-weight: 650;
+}
+.pi-todo-summary .md-list {
+  margin: 4px 0 0;
+}
+.pi-todo-summary .md-task {
+  color: var(--text-dim);
+}
+.pi-todo-summary .md-check.checked {
+  color: var(--success, #22a06b);
+}
+.pi-skill-read-plain {
+  position: relative;
+  margin: calc(10px * var(--chat-spacing-scale)) 0;
+  padding-left: 20px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.pi-skill-read-plain::before {
+  position: absolute;
+  left: 2px;
+  color: var(--accent);
+  content: '↳';
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 14px;
+}
 /* Thinking 是助手过程信息，不是工具调用：用轻量的可折叠文本和引导线，
    不继承 .block-card 的边框/底色，避免和工具结果抢视觉层级。 */
 .thinking-block {
@@ -3836,6 +3910,22 @@ details[open] > .block-summary > .chev {
 .recap-block .thinking-summary:hover {
   color: var(--text-dim);
   background: transparent;
+}
+.cancelled-block .thinking-summary {
+  cursor: default;
+  color: var(--text-dim);
+}
+.cancelled-block .thinking-summary:hover {
+  color: var(--text);
+  background: transparent;
+}
+.cancelled-block .thinking-icon {
+  color: var(--accent);
+}
+.cancelled-block .thinking-content {
+  margin-top: 2px;
+  color: var(--text-mute);
+  font-size: 12px;
 }
 .thinking-icon {
   width: 17px;

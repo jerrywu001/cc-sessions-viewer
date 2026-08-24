@@ -83,6 +83,15 @@ import { openPathExternal, agentChatSlashCommands } from '../api'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { showTooltipFor, hideTooltip } from '../tooltip'
 import { bindInlineImagePlaceholdersAtAttachmentPositions } from '../inlineImages'
+import {
+  isPiSkillReadPath,
+  parsePiReadArgs,
+  parsePiTodo,
+  parsePiTodoSummary,
+  piTodoSummaryMarkdown,
+  type PiTodoSummary,
+  type PiTodoView,
+} from '../piToolRendering'
 import { chatSupported } from '../chatComposerOptions'
 import {
   chatHistoryEntryFromMsg,
@@ -388,6 +397,73 @@ function isPiFileMutationToolUse(b: Block): boolean {
   return props.agent === 'pi' && b.kind === 'tool_use' && !b.isError && isFileMutatingToolName(b.toolName)
 }
 
+function isPiTodoToolUse(b: Block): boolean {
+  return props.agent === 'pi' && b.kind === 'tool_use' && b.toolName === 'todo'
+}
+
+function piReadArgs(b: Block) {
+  return props.agent === 'pi' && b.kind === 'tool_use' && b.toolName === 'read'
+    ? parsePiReadArgs(b.toolInput ?? '')
+    : null
+}
+
+function isPiSkillReadToolUse(b: Block): boolean {
+  const args = piReadArgs(b)
+  return !!args && isPiSkillReadPath(args.path)
+}
+
+function piSkillName(b: Block): string {
+  const path = piReadArgs(b)?.path ?? ''
+  const parts = path.split('/').filter(Boolean)
+  return parts[parts.length - 2] ?? 'skill'
+}
+
+function piToolResultFor(b: Block): Block | undefined {
+  return b.toolId ? resultByToolId.value.get(b.toolId) : undefined
+}
+
+function piTodoView(b: Block): PiTodoView | null {
+  if (!isPiTodoToolUse(b)) return null
+  const view = parsePiTodo(b.toolInput ?? '', piToolResultFor(b)?.text ?? '')
+  if (!view || !/^#\d+$/.test(view.subject)) return view
+  return { ...view, subject: piTodoSubjectById.value.get(view.subject.slice(1)) ?? view.subject }
+}
+
+function isPiSpecialToolUse(b: Block): boolean {
+  return isPiTodoToolUse(b) || isPiSkillReadToolUse(b)
+}
+
+function isPiSpecialToolResult(b: Block): boolean {
+  if (props.agent !== 'pi' || b.kind !== 'tool_result' || !b.toolId) return false
+  if (b.piTodoSummary) return true
+  const source = toolUseById.value.get(b.toolId)
+  return !!source && isPiSpecialToolUse(source)
+}
+
+function piTodoSummaryForResult(b: Block): PiTodoSummary | null {
+  if (props.agent !== 'pi' || b.kind !== 'tool_result') return null
+  return parsePiTodoSummary(b.piTodoSummary)
+}
+
+const latestPiTodoSummaryId = computed(() => {
+  let latest: string | undefined
+  for (const message of props.messages) {
+    for (const block of message.blocks) {
+      if (block.kind === 'tool_result' && block.toolId && parsePiTodoSummary(block.piTodoSummary)) {
+        latest = block.toolId
+      }
+    }
+  }
+  return latest
+})
+
+function shouldRenderPiTodoSummary(b: Block): boolean {
+  return b.kind === 'tool_result'
+    && !!b.toolId
+    && b.toolId === latestPiTodoSummaryId.value
+    && !!piTodoSummaryForResult(b)
+}
+
 function renderNumberedCodeHtml(html: string): string {
   const lines = html.split('\n')
   return lines
@@ -468,6 +544,30 @@ const toolUseById = computed(() => {
   return map
 })
 
+// Pi todo update calls carry only a numeric id. Build the subject index from
+// the create call's persisted result (`Created #1: ...`) once per transcript.
+const piTodoSubjectById = computed(() => {
+  const map = new Map<string, string>()
+  if (props.agent !== 'pi') return map
+  for (const message of props.messages) {
+    for (const block of message.blocks) {
+      if (!isPiTodoToolUse(block)) continue
+      let input: { id?: string | number; subject?: string } | null = null
+      try {
+        input = JSON.parse(block.toolInput ?? '') as { id?: string | number; subject?: string }
+      } catch {
+        continue
+      }
+      const subject = typeof input.subject === 'string' ? input.subject.trim() : ''
+      if (!subject) continue
+      const resultId = /(?:Created|Updated)\s+#(\d+)\b/i.exec(piToolResultFor(block)?.text ?? '')?.[1]
+      const id = input.id != null ? String(input.id) : resultId
+      if (id) map.set(id, subject)
+    }
+  }
+  return map
+})
+
 const inlinedResultIds = computed(() => {
   const set = new Set<string>()
   for (const m of props.messages) {
@@ -543,6 +643,7 @@ function shouldShowAttachedResult(b: Block): boolean {
 
 function shouldHideToolResult(b: Block): boolean {
   if (b.kind !== 'tool_result' || !b.toolId) return false
+  if (isPiSpecialToolResult(b) && !piTodoSummaryForResult(b)) return true
   const sourceTool = toolUseById.value.get(b.toolId)
   if (sourceTool && isAskUserQuestion(sourceTool)) return true
   return !!sourceTool && isCodexInlineCodeToolUse(sourceTool)
@@ -561,6 +662,7 @@ function isAlwaysVisibleToolResult(b: Block): boolean {
 function shouldShowToolUse(b: Block): boolean {
   if (b.kind !== 'tool_use') return false
   if (isAskUserQuestion(b)) return true
+  if (isPiSpecialToolUse(b)) return true
   // Failure diagnostics are actionable and must remain visible even when the
   // session's ordinary tool-call display is disabled.
   if (b.isError) return true
@@ -576,6 +678,7 @@ function shouldShowToolUse(b: Block): boolean {
  * 文件结果则强制保留。 */
 function shouldShowToolResult(b: Block): boolean {
   if (b.kind !== 'tool_result') return false
+  if (piTodoSummaryForResult(b)) return shouldRenderPiTodoSummary(b)
   if (props.agent === 'kimicode') return false
   if (shouldHideToolResult(b) || isInlinedResult(b) || isAttachedResult(b)) return false
   return b.isError || readToolCallsVisible.value || isAlwaysVisibleToolResult(b)
@@ -920,6 +1023,7 @@ const META_KIND_KEY: Record<string, string> = {
   system: 'chat.metaKind.system',
   'command-output': 'chat.metaKind.commandOutput',
   'teammate-message': 'chat.metaKind.teammateMessage',
+  cancelled: 'chat.metaKind.cancelled',
 }
 function metaKindLabel(kind: string | undefined): string {
   if (!kind) return ''
@@ -930,11 +1034,12 @@ function metaKindLabel(kind: string | undefined): string {
  *  但以终端 / 信息 / 提醒图标明确区分来源。Task notification 与 Context Summary
  *  同属系统过程信息，也保持这套无边框的轻量折叠样式。 */
 function usesLightweightMetaStyle(kind: string | undefined): boolean {
-  return kind === 'command-output' || kind === 'meta' || kind === 'recap' || kind === 'compact' || kind === 'task-notification'
+  return kind === 'command-output' || kind === 'meta' || kind === 'recap' || kind === 'compact' || kind === 'task-notification' || kind === 'cancelled'
 }
 
 function lightweightMetaIcon(kind: string | undefined) {
   if (kind === 'task-notification') return IconBell
+  if (kind === 'cancelled') return IconStop
   return kind === 'command-output' ? IconTerminal : IconInfo
 }
 
@@ -2419,21 +2524,21 @@ function onDocClick(e: MouseEvent) {
             </span>
           </div>
           <component
-            :is="m.metaKind === 'recap' ? 'div' : 'details'"
-            :class="m.metaKind === 'recap'
-              ? 'thinking-block meta-lightweight-block recap-block'
+            :is="m.metaKind === 'recap' || m.metaKind === 'cancelled' ? 'div' : 'details'"
+            :class="m.metaKind === 'recap' || m.metaKind === 'cancelled'
+              ? `thinking-block meta-lightweight-block ${m.metaKind === 'cancelled' ? 'cancelled-block' : 'recap-block'}`
               : usesLightweightMetaStyle(m.metaKind) ? 'thinking-block meta-lightweight-block' : 'block-card'"
-            :open="m.metaKind === 'recap' ? undefined : isDetailOpen(vr.index, -1)"
+            :open="m.metaKind === 'recap' || m.metaKind === 'cancelled' ? undefined : isDetailOpen(vr.index, -1)"
             @toggle="onDetailToggle(vr.index, -1, $event)"
           >
             <component
-              :is="m.metaKind === 'recap' ? 'div' : 'summary'"
+              :is="m.metaKind === 'recap' || m.metaKind === 'cancelled' ? 'div' : 'summary'"
               :class="usesLightweightMetaStyle(m.metaKind) ? 'thinking-summary' : 'block-summary'"
             >
               <template v-if="usesLightweightMetaStyle(m.metaKind)">
                 <component :is="lightweightMetaIcon(m.metaKind)" class="thinking-icon" aria-hidden="true" />
                 <span class="thinking-label">{{ metaKindLabel(m.metaKind) }}</span>
-                <span v-if="m.metaKind !== 'recap'" class="thinking-chev"><IconChevronRight /></span>
+                <span v-if="m.metaKind !== 'recap' && m.metaKind !== 'cancelled'" class="thinking-chev"><IconChevronRight /></span>
               </template>
               <template v-else>
                 <span class="chev"><IconChevronRight /></span>
@@ -2459,8 +2564,14 @@ function onDocClick(e: MouseEvent) {
 
         <div v-else-if="isToolOnly(m)" style="max-width: 86%; min-width: 0">
           <template v-for="(b, bi) in m.blocks" :key="bi">
+            <div
+              v-if="shouldRenderPiTodoSummary(b)"
+              class="pi-todo-summary"
+              data-search-scope="tools-other"
+              v-rich-html="renderText(piTodoSummaryMarkdown(piTodoSummaryForResult(b)!))"
+            />
             <ToolResult
-              v-if="b.kind === 'tool_result' && shouldShowToolResult(b)"
+              v-else-if="b.kind === 'tool_result' && shouldShowToolResult(b)"
               :block="b"
               :cwd="cwd"
               :persist-open="isDetailOpen(vr.index, bi, 'r')"
@@ -2564,6 +2675,27 @@ function onDocClick(e: MouseEvent) {
                 <div class="thinking-content" v-rich-html="renderText(b.text ?? '')" />
               </details>
 
+              <!-- Pi 的 todo 直接按 Markdown 文本显示，不再套通用工具卡。 -->
+              <div
+                v-else-if="isPiTodoToolUse(b) && shouldShowToolUse(b) && piTodoView(b)"
+                class="pi-todo-plain"
+                :class="`status-${piTodoView(b)!.status}`"
+                :data-search-scope="toolUseScope(b)"
+              >
+                <div
+                  v-rich-html="renderText(`**todo** ${piTodoView(b)!.action === 'update' ? '→' : '+'} ${piTodoView(b)!.subject}\n\`${piTodoView(b)!.symbol} ${piTodoView(b)!.statusLabel}\``)"
+                ></div>
+              </div>
+
+              <!-- Pi 读取 skill 只保留一行状态提示，正文属于执行上下文，不挤占会话阅读。 -->
+              <div
+                v-else-if="isPiSkillReadToolUse(b) && shouldShowToolUse(b)"
+                class="pi-skill-read-plain"
+                :data-search-scope="toolUseScope(b)"
+              >
+                正在读取 {{ piSkillName(b) }} skill
+              </div>
+
               <div
                 v-else-if="isStructuredFileChangeToolUse(b) && shouldShowToolUse(b)"
                 class="inline-tool-code inline-tool-code-flat"
@@ -2617,6 +2749,13 @@ function onDocClick(e: MouseEvent) {
                   />
                 </div>
               </details>
+
+              <div
+                v-else-if="shouldRenderPiTodoSummary(b)"
+                class="pi-todo-summary"
+                data-search-scope="tools-other"
+                v-rich-html="renderText(piTodoSummaryMarkdown(piTodoSummaryForResult(b)!))"
+              />
 
               <ToolResult
                 v-else-if="b.kind === 'tool_result' && shouldShowToolResult(b)"

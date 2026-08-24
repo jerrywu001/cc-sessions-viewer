@@ -209,6 +209,7 @@ export default {
   'chat.metaKind.system': '系統訊息',
   'chat.metaKind.commandOutput': '命令輸出',
   'chat.metaKind.teammateMessage': '隊友訊息',
+  'chat.metaKind.cancelled': '已取消',
   'chat.context.title': '上下文視窗',
   'export.meta.agent': '智慧代理',
   'export.meta.cwd': '工作目錄',

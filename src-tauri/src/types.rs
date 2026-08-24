@@ -282,6 +282,21 @@ pub struct GitDiffFile {
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct PiTodoTask {
+    pub subject: String,
+    pub status: String,
+}
+
+#[derive(Serialize, Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PiTodoSummary {
+    pub completed: usize,
+    pub total: usize,
+    pub tasks: Vec<PiTodoTask>,
+}
+
+#[derive(Serialize, Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Block {
     pub kind: String, // text | thinking | tool_use | tool_result | image
     pub text: Option<String>,
@@ -311,6 +326,11 @@ pub struct Block {
     /// Chat 粘贴图片在用户正文中的可见占位符。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inline_placeholder: Option<String>,
+    /// Pi `todo` tool results expose the current task list in `details.tasks`.
+    /// Keep it structured so the UI can render the list without leaking the
+    /// tool's JSON payload into the conversation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pi_todo_summary: Option<PiTodoSummary>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]

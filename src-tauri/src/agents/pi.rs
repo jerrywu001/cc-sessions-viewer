@@ -17,7 +17,10 @@ use super::SessionSource;
 use crate::agent_command::AgentCommand;
 use crate::stats::pricing;
 use crate::stats::types::{CostSource, Turn};
-use crate::types::{Block, Msg, PiTreeNode, ProjectInfo, SessionMeta, SessionPage, UsageSummary};
+use crate::types::{
+    Block, Msg, PiTodoSummary, PiTodoTask, PiTreeNode, ProjectInfo, SessionMeta, SessionPage,
+    UsageSummary,
+};
 use crate::util::{
     append_jsonl_line, clean_title, home, mtime_millis, now_millis, parse_iso8601_ms,
     validate_rename_name,
@@ -586,6 +589,7 @@ fn content_blocks(content: &Value, tool_id: Option<&str>, is_error: bool) -> Vec
                     .get("thinking")
                     .or_else(|| item.get("text"))
                     .and_then(Value::as_str)
+                    .filter(|text| !text.trim().is_empty())
                 {
                     blocks.push(Block {
                         kind: "thinking".into(),
@@ -617,6 +621,32 @@ fn content_blocks(content: &Value, tool_id: Option<&str>, is_error: bool) -> Vec
         });
     }
     blocks
+}
+
+fn pi_todo_summary(details: &Value) -> Option<PiTodoSummary> {
+    let tasks = details.get("tasks")?.as_array()?;
+    let tasks: Vec<PiTodoTask> = tasks
+        .iter()
+        .filter_map(|task| {
+            let subject = task.get("subject").and_then(Value::as_str)?.trim();
+            let status = task.get("status").and_then(Value::as_str)?.trim();
+            if subject.is_empty() || status.is_empty() {
+                return None;
+            }
+            Some(PiTodoTask {
+                subject: subject.to_string(),
+                status: status.to_string(),
+            })
+        })
+        .collect();
+    (!tasks.is_empty()).then(|| PiTodoSummary {
+        completed: tasks
+            .iter()
+            .filter(|task| task.status.eq_ignore_ascii_case("completed"))
+            .count(),
+        total: tasks.len(),
+        tasks,
+    })
 }
 
 /// Pi expands a slash skill into the complete `<skill ...>SKILL.md</skill>`
@@ -762,6 +792,25 @@ fn entry_to_msgs(entry: &PiEntry) -> Vec<Msg> {
                         });
                     }
                 }
+                // Pi records an interrupted turn as an assistant entry with no
+                // content and `stopReason: "aborted"`. Preserve that user action
+                // as a lightweight cancellation note instead of dropping it.
+                let aborted = message
+                    .get("stopReason")
+                    .and_then(Value::as_str)
+                    == Some("aborted");
+                let error_message = message
+                    .get("errorMessage")
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.trim().is_empty());
+                let cancelled = aborted || error_message == Some("Operation aborted");
+                if cancelled {
+                    blocks.push(Block {
+                        kind: "text".into(),
+                        text: Some(error_message.unwrap_or("Operation aborted").into()),
+                        ..Default::default()
+                    });
+                }
                 let model = message
                     .get("model")
                     .and_then(Value::as_str)
@@ -773,12 +822,12 @@ fn entry_to_msgs(entry: &PiEntry) -> Vec<Msg> {
                     sidechain: false,
                     model,
                     blocks,
-                    meta_kind: None,
+                    meta_kind: cancelled.then(|| "cancelled".into()),
                 }];
             }
             "toolResult" => {
                 let id = message.get("toolCallId").and_then(Value::as_str);
-                let blocks = content_blocks(
+                let mut blocks = content_blocks(
                     message.get("content").unwrap_or(&Value::Null),
                     id,
                     message
@@ -786,6 +835,13 @@ fn entry_to_msgs(entry: &PiEntry) -> Vec<Msg> {
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
                 );
+                if let Some(summary) = message.get("details").and_then(pi_todo_summary) {
+                    for block in &mut blocks {
+                        if block.kind == "tool_result" {
+                            block.pi_todo_summary = Some(summary.clone());
+                        }
+                    }
+                }
                 return vec![Msg {
                     uuid: Some(entry.id.clone()),
                     role: "assistant".into(),
@@ -2040,6 +2096,73 @@ Use tmux-bridge for pane control.
             messages[0].blocks[0].text.as_deref(),
             Some("$ git pull\nAlready up to date.")
         );
+    }
+
+    #[test]
+    fn preserves_pi_todo_details_for_markdown_rendering() {
+        let entry = PiEntry {
+            id: "todo-result".into(),
+            parent_id: None,
+            value: serde_json::json!({
+                "type": "message",
+                "id": "todo-result",
+                "message": {
+                    "role": "toolResult",
+                    "toolCallId": "call-todo",
+                    "toolName": "todo",
+                    "content": [{"type": "text", "text": "Updated #2 (in_progress → completed)"}],
+                    "details": {
+                        "tasks": [
+                            {"id": 1, "subject": "第一项", "status": "completed"},
+                            {"id": 2, "subject": "第二项", "status": "in_progress"}
+                        ]
+                    }
+                }
+            }),
+        };
+        let messages = entry_to_msgs(&entry);
+        let summary = messages[0].blocks[0].pi_todo_summary.as_ref().unwrap();
+        assert_eq!(summary.completed, 1);
+        assert_eq!(summary.total, 2);
+        assert_eq!(summary.tasks[1].subject, "第二项");
+    }
+
+    #[test]
+    fn ignores_empty_pi_thinking_blocks() {
+        let entry = PiEntry {
+            id: "thinking".into(),
+            parent_id: None,
+            value: serde_json::json!({
+                "type":"message",
+                "id":"thinking",
+                "message":{"role":"assistant","content":[
+                    {"type":"thinking","thinking":""},
+                    {"type":"thinking","thinking":"  \n  "},
+                    {"type":"text","text":"done"}
+                ]}
+            }),
+        };
+        let messages = entry_to_msgs(&entry);
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].blocks.iter().all(|block| block.kind != "thinking"));
+        assert_eq!(messages[0].blocks[0].text.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn keeps_pi_aborted_turn_as_cancelled_note() {
+        let entry = PiEntry {
+            id: "aborted".into(),
+            parent_id: None,
+            value: serde_json::json!({
+                "type":"message",
+                "id":"aborted",
+                "message":{"role":"assistant","content":[],"stopReason":"aborted","errorMessage":"Operation aborted"}
+            }),
+        };
+        let messages = entry_to_msgs(&entry);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].meta_kind.as_deref(), Some("cancelled"));
+        assert_eq!(messages[0].blocks[0].text.as_deref(), Some("Operation aborted"));
     }
 
     #[test]

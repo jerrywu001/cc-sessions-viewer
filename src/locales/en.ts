@@ -210,6 +210,7 @@ export default {
   'chat.metaKind.system': 'System message',
   'chat.metaKind.commandOutput': 'Command output',
   'chat.metaKind.teammateMessage': 'Teammate message',
+  'chat.metaKind.cancelled': 'Cancelled',
   'chat.context.title': 'Context window',
   'export.meta.agent': 'Agent',
   'export.meta.cwd': 'cwd',

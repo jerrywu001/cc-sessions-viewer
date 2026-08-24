@@ -210,6 +210,7 @@ export default {
   'chat.metaKind.system': 'システムメッセージ',
   'chat.metaKind.commandOutput': 'コマンド出力',
   'chat.metaKind.teammateMessage': 'チームメイトメッセージ',
+  'chat.metaKind.cancelled': 'キャンセル済み',
   'chat.context.title': 'コンテキストウィンドウ',
   'export.meta.agent': 'エージェント',
   'export.meta.cwd': '作業ディレクトリ',

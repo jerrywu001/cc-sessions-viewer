@@ -211,6 +211,7 @@ export default {
   'chat.metaKind.system': '系统消息',
   'chat.metaKind.commandOutput': '命令输出',
   'chat.metaKind.teammateMessage': '队友消息',
+  'chat.metaKind.cancelled': '已取消',
   'chat.context.title': '上下文窗口',
   'export.meta.agent': '智能体',
   'export.meta.cwd': '工作目录',

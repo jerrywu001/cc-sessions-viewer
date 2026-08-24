@@ -1225,9 +1225,17 @@ fn lift_paths_from_text_inner(text: &str, preserve_clipboard_tags: bool) -> (Vec
     }
     cleaned_text = strip_edge_references(&cleaned_text, &refs);
 
-    // 2. `@path` / `@"path"` 是正文语义，必须原样保留在原位置。
-    //    旧版实现会把它们提升成顶部 file block；这会让历史消息和实时消息的
-    //    布局不一致，也会让用户输入中的文件位置丢失。
+    // 2. `@"path"` 是显式附件引用；未加引号的 `@path` 是正文里的 CLI 指令/提及，
+    //    必须原样保留在原位置。显式引用沿用 @[path] 的首尾清理规则，中间引用保留原文。
+    let re_quoted = regex_lite::Regex::new(r#"@\"([^\"]+)\""#).expect("valid regex");
+    let mut quoted_refs = Vec::new();
+    for caps in re_quoted.captures_iter(&cleaned_text) {
+        let whole = caps.get(0).unwrap();
+        let path = caps.get(1).unwrap().as_str().trim().to_string();
+        lift_path_block(&path, &mut lifted);
+        quoted_refs.push((whole.start(), whole.end()));
+    }
+    cleaned_text = strip_edge_references(&cleaned_text, &quoted_refs);
 
     // 2b. 提取 [name](path/) 形式的文件夹/文件 markdown 链接（Codex 文件夹引用格式）
     let re_mdlink = regex_lite::Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").expect("valid regex");
@@ -1317,10 +1325,13 @@ fn lift_paths_from_text_inner(text: &str, preserve_clipboard_tags: bool) -> (Vec
 
         let capture = caps.get(1).unwrap();
         let capture_start = capture.start();
-        // 行内 `@/path` 已在步骤 2 识别；正文必须保留其原文，不能被这里再次剥走。
-        if (capture_start > 0 && cleaned_text.as_bytes()[capture_start - 1] == b'@')
-            || (capture_start >= 2 && cleaned_text[..capture_start].ends_with("@\""))
-        {
+        // 正则可能从未加引号的 `@docs/foo/bar.md` 中间斜杠开始命中。只要当前
+        // whitespace-delimited token 内已经出现 `@`，整个 token 都属于正文指令，跳过。
+        let token_start = cleaned_text[..capture_start]
+            .rfind(char::is_whitespace)
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        if cleaned_text[token_start..capture_start].contains('@') {
             continue;
         }
         if is_rust_diagnostic_location(&cleaned_text, capture_start) {
@@ -1828,19 +1839,27 @@ Only after the original task is complete, process this follow-up in the order re
     }
 
     #[test]
-    fn test_trailing_at_file_references_stay_in_the_original_text_position() {
-        let text = "我加了几个附件，回答我即可 @\"/tmp/one.xlsx\" @\"docs/two.md\" @\".vscode/launch.json\"";
+    fn unquoted_at_paths_are_prose_not_attachment_blocks() {
+        let text = "@docs/前端技术实现/结算需求变更/页面改动清单.md @docs/前端技术实现/结算需求变更/页面改动清单.md\n\n这两个是结算需求开发计划，一个是清单，一个是详细。\n\n@/Users/wuchao/develop/protocol/ningxiaoshe/docs/更新记录/active/M06-应付结算单.md 这个是需求文档PRD";
         let (blocks, remaining) = lift_paths_from_text(text);
         assert!(blocks.is_empty());
         assert_eq!(remaining, text);
     }
 
     #[test]
+    fn test_trailing_at_file_references_stay_in_the_original_text_position() {
+        let text = "我加了几个附件，回答我即可 @\"/tmp/one.xlsx\" @\"docs/two.md\" @\".vscode/launch.json\"";
+        let (blocks, remaining) = lift_paths_from_text(text);
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(remaining, "我加了几个附件，回答我即可");
+    }
+
+    #[test]
     fn test_multiple_leading_at_file_references_stay_in_the_original_text_position() {
         let text = "@\"src/a.ts\" @\"src/b.ts\" 比较两个文件";
         let (blocks, remaining) = lift_paths_from_text(text);
-        assert!(blocks.is_empty());
-        assert_eq!(remaining, text);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(remaining, "比较两个文件");
     }
 
     #[test]

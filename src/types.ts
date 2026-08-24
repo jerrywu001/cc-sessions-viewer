@@ -106,6 +106,17 @@ export interface Block {
   imageUnavailable?: boolean
   /** Chat 粘贴图片在正文中的 token；历史/本地回显用来保持图片绑定。 */
   inlinePlaceholder?: string
+  /** Pi todo tool result's structured current task list. */
+  piTodoSummary?: PiTodoSummary
+}
+
+export interface PiTodoSummary {
+  completed: number
+  total: number
+  tasks: Array<{
+    subject: string
+    status: string
+  }>
 }
 
 export interface Msg {
