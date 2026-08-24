@@ -9,6 +9,7 @@ import {
   shouldCopyWindowsTerminalSelection,
   shouldBufferTerminalImeSwitch,
   shouldUseStableTerminalCursor,
+  terminalPtyColumns,
   type TerminalTab,
 } from '../src/terminals'
 import { setLang } from '../src/settings'
@@ -45,6 +46,15 @@ function key(over: Partial<KeyboardEvent> = {}) {
 }
 
 describe('terminal keyboard handling', () => {
+  it('reserves one Windows PTY column for Kimi and Pi borders only', () => {
+    expect(terminalPtyColumns('kimicode', 100, 'Win32')).toBe(99)
+    expect(terminalPtyColumns('pi', 100, 'Win32')).toBe(98)
+    expect(terminalPtyColumns('grok', 100, 'Win32')).toBe(100)
+    expect(terminalPtyColumns('kimicode', 100, 'MacIntel')).toBe(100)
+    expect(terminalPtyColumns('pi', 100, 'MacIntel')).toBe(100)
+    expect(terminalPtyColumns('grok', 100, 'MacIntel')).toBe(100)
+  })
+
   it('copies terminal selection on Windows Ctrl+C', () => {
     expect(shouldCopyWindowsTerminalSelection(key(), true, 'Win32')).toBe(true)
   })

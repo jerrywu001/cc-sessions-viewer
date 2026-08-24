@@ -1508,6 +1508,25 @@ fn spawn_terminal(command: &AgentCommand, cwd: &str, _terminal_app: &str) -> Res
 
     #[cfg(target_os = "windows")]
     {
+        // Kimi's Node runtime can assert in win\util.c while changing its
+        // process title when it is launched through PowerShell + `start`.
+        // Launch its console executable directly with the requested cwd;
+        // other agents keep the shared PowerShell path handling below.
+        if command.program() == "kimi" && !command.has_extra_args() && !command.args().is_empty() {
+            let kimi_exe = agents::kimi::kimi_home().join("bin").join("kimi.exe");
+            let program = if kimi_exe.is_file() {
+                kimi_exe
+            } else {
+                PathBuf::from("kimi")
+            };
+            std::process::Command::new(program)
+                .args(command.args())
+                .current_dir(cwd)
+                .spawn()
+                .map_err(|e| format!("Failed to launch Kimi Code: {e}"))?;
+            return Ok(());
+        }
+
         // 编码后的命令里已含 powershell_refresh_path()：起来的 powershell 会以继承到的
         // $processPath 打头、再并上注册表 User + Machine PATH，无需在 cmd 这层注入 PATH
         // （注入反而会覆盖掉继承来的完整 PATH，留下未展开的注册表字面量）。

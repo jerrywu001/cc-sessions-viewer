@@ -28,6 +28,10 @@ impl AgentCommand {
         &self.args
     }
 
+    pub fn has_extra_args(&self) -> bool {
+        !self.extra_args.is_empty()
+    }
+
     /// Replace the executable while retaining the arguments. Embedded PTYs
     /// use this to pin self-managed CLIs to their canonical install path.
     pub fn with_program(mut self, program: impl Into<String>) -> Self {

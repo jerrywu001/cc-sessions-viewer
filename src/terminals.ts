@@ -127,6 +127,17 @@ export function shouldUseStableTerminalCursor(
   return /Win/i.test(platform) && agent === 'codex' && !isShell && turnState === 'working'
 }
 
+export function terminalPtyColumns(
+  agent: Agent,
+  cols: number,
+  platform = navigator.platform,
+): number {
+  if (!/Win/i.test(platform)) return cols
+  if (agent === 'pi') return Math.max(20, cols - 2)
+  if (agent === 'kimicode') return Math.max(20, cols - 1)
+  return cols
+}
+
 function isCapsLockEvent(event: KeyboardEvent): boolean {
   // Chromium on macOS may expose Caps Lock as keyCode 20 while IME composition
   // is active, with an empty or non-standard `key`/`code` value.
@@ -1724,13 +1735,21 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
     const colorScheme = terminalColorScheme()
     const reclaude = opts.agent === 'claude' && useReclaude.value
     ptyId = isNew
-      ? await api.ptySpawnNew(opts.agent, opts.cwd, cols, rows, extra, colorScheme, reclaude)
+      ? await api.ptySpawnNew(
+          opts.agent,
+          opts.cwd,
+          terminalPtyColumns(opts.agent, cols),
+          rows,
+          extra,
+          colorScheme,
+          reclaude,
+        )
       : await api.ptySpawn(
           opts.agent,
           opts.sessionId,
           opts.cwd,
           opts.sessionPath,
-          cols,
+          terminalPtyColumns(opts.agent, cols),
           rows,
           extra,
           colorScheme,
@@ -2083,6 +2102,6 @@ export function refit(uiId?: number) {
   ) {
     target.lastSyncedCols = cols
     target.lastSyncedRows = rows
-    api.ptyResize(target.ptyId, cols, rows).catch(() => {})
+    api.ptyResize(target.ptyId, terminalPtyColumns(target.agent, cols), rows).catch(() => {})
   }
 }
