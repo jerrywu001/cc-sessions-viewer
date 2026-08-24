@@ -116,7 +116,7 @@ onMounted(() => {
         <button
           v-if="cliVersions.length > 0"
           class="ce-btn"
-          :disabled="anyDiagnosing"
+          :disabled="loading || anyDiagnosing"
           @click="diagnoseAll"
         >
           <svg v-if="anyDiagnosing" class="ce-spin" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="8" r="6" opacity=".25"/><path d="M14 8a6 6 0 0 0-6-6"/></svg>
@@ -125,7 +125,7 @@ onMounted(() => {
         <button
           v-if="upgradableCount > 0"
           class="ce-btn ce-btn-primary"
-          :disabled="anyUpgrading"
+          :disabled="loading || anyUpgrading"
           @click="upgradeAll"
         >
           {{ t('settings.cli.upgradeAllCount', { n: upgradableCount }) }}
@@ -562,6 +562,6 @@ onMounted(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ce-skel-circle, .ce-skel-bar, .ce-spin { animation: none; }
+  .ce-skel-circle, .ce-skel-bar { animation: none; }
 }
 </style>

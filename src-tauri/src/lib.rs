@@ -1634,6 +1634,13 @@ async fn check_cli_versions() -> Result<Vec<types::CliVersionInfo>, String> {
 }
 
 #[tauri::command]
+async fn check_cli_version(cli_name: String) -> Result<types::CliVersionInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || cli_env::check_version(&cli_name))
+        .await
+        .map_err(|e| format!("join: {e}"))?
+}
+
+#[tauri::command]
 async fn install_cli(cli_name: String) -> Result<types::CliUpgradeResult, String> {
     tauri::async_runtime::spawn_blocking(move || cli_env::install_single(&cli_name))
         .await
@@ -2567,6 +2574,7 @@ pub fn run() {
             tray_quick_stats,
             set_tray_enabled_agents,
             check_cli_versions,
+            check_cli_version,
             install_cli,
             upgrade_cli,
             upgrade_all_clis,

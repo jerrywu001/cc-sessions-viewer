@@ -11,6 +11,9 @@ export const diagnosing = ref<Record<string, boolean>>({})
 export const diagnosisResults = ref<Record<string, CliDiagnosisResult | null>>({})
 export const upgradeMsg = ref<Record<string, { ok: boolean; text: string }>>({})
 
+const cliOrder = ['claude', 'codex', 'agy', 'opencode', 'grok', 'kimi', 'pi']
+let refreshGeneration = 0
+
 export const upgradableCount = computed(() =>
   cliVersions.value.filter((v) => v.upgradable).length,
 )
@@ -19,14 +22,28 @@ export const anyUpgrading = computed(() =>
   Object.values(upgrading.value).some(Boolean),
 )
 
-async function fetchVersions() {
+function fetchVersions() {
+  const generation = ++refreshGeneration
   loading.value = true
-  try {
-    cliVersions.value = await api.checkCliVersions()
-  } catch {
-    cliVersions.value = []
-  } finally {
-    loading.value = false
+  cliVersions.value = []
+
+  let pending = cliOrder.length
+  for (const cli of cliOrder) {
+    void api.checkCliVersion(cli)
+      .then((info) => {
+        if (generation !== refreshGeneration) return
+        cliVersions.value = [...cliVersions.value, info].sort(
+          (a, b) => cliOrder.indexOf(a.cli) - cliOrder.indexOf(b.cli),
+        )
+      })
+      .catch(() => {
+        // A single unavailable CLI must not block the other cards.
+      })
+      .finally(() => {
+        if (generation !== refreshGeneration) return
+        pending -= 1
+        if (pending === 0) loading.value = false
+      })
   }
 }
 
@@ -109,7 +126,7 @@ export const hasDiagnosisResults = computed(() =>
   Object.values(diagnosisResults.value).some(Boolean),
 )
 
-export async function diagnoseAll() {
+export function diagnoseAll() {
   if (hasDiagnosisResults.value) {
     diagnosisResults.value = {}
     return
@@ -119,18 +136,18 @@ export async function diagnoseAll() {
   const next: Record<string, boolean> = {}
   for (const v of installed) next[v.cli] = true
   diagnosing.value = { ...diagnosing.value, ...next }
-  try {
-    const results = await Promise.all(
-      installed.map((v) => api.diagnoseCli(v.cli).catch(() => null)),
-    )
-    const updated: Record<string, CliDiagnosisResult | null> = {}
-    for (let i = 0; i < installed.length; i++) {
-      updated[installed[i].cli] = results[i]
-    }
-    diagnosisResults.value = { ...diagnosisResults.value, ...updated }
-  } finally {
-    const done: Record<string, boolean> = {}
-    for (const v of installed) done[v.cli] = false
-    diagnosing.value = { ...diagnosing.value, ...done }
+
+  diagnosisResults.value = {}
+  for (const v of installed) {
+    void api.diagnoseCli(v.cli)
+      .then((result) => {
+        diagnosisResults.value = { ...diagnosisResults.value, [v.cli]: result }
+      })
+      .catch(() => {
+        diagnosisResults.value = { ...diagnosisResults.value, [v.cli]: null }
+      })
+      .finally(() => {
+        diagnosing.value = { ...diagnosing.value, [v.cli]: false }
+      })
   }
 }

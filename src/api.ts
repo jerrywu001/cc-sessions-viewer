@@ -647,6 +647,9 @@ import type { CliVersionInfo, CliDiagnosisResult, CliUpgradeResult } from './typ
 export const checkCliVersions = () =>
   invoke<CliVersionInfo[]>('check_cli_versions')
 
+export const checkCliVersion = (cliName: string) =>
+  invoke<CliVersionInfo>('check_cli_version', { cliName })
+
 export const installCli = (cliName: string) =>
   invoke<CliUpgradeResult>('install_cli', { cliName })
 

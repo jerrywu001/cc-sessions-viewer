@@ -396,6 +396,13 @@ fn run_binary(binary: &str, args: &[&str]) -> Result<String, String> {
     // USERPROFILE, and overriding them makes `update --check` wait instead of
     // returning its JSON result.
     let mut cmd = Command::new(binary);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // The packaged app is a GUI process, so a console CLI would otherwise
+        // open a visible terminal during settings refresh/version checks.
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
     for key in [
         "GROK_CLI_BASE_URL",
         "GROK_CHANNEL",
@@ -609,6 +616,11 @@ pub fn check_all_versions() -> Vec<CliVersionInfo> {
             })
             .collect()
     })
+}
+
+pub fn check_version(cli_name: &str) -> Result<CliVersionInfo, String> {
+    let spec = find_spec(cli_name)?;
+    Ok(check_cli_version(spec))
 }
 
 // ---- install ----
