@@ -1896,7 +1896,9 @@ fn post_process_codex_session_msgs(msgs: &mut [Msg]) {
         if skip_path_lifting {
             crate::util::post_process_session_msgs_without_path_lifting(std::slice::from_mut(msg));
         } else {
-            crate::util::post_process_session_msgs(std::slice::from_mut(msg));
+            crate::util::post_process_session_msgs_without_unmarked_path_lifting(
+                std::slice::from_mut(msg),
+            );
         }
     }
 }
@@ -2865,6 +2867,36 @@ mod tests {
         let (files, body) = extract_codex_files("just a normal question\n");
         assert!(files.is_empty());
         assert_eq!(body, "just a normal question\n");
+    }
+
+    #[test]
+    fn read_codex_keeps_plain_document_paths_in_user_message_as_text() {
+        let mac_path = "/Users/wuchao/develop/protocol/ningxiaoshe/docs/更新记录/_index.md";
+        let windows_path = r#"C:\Users\Jane Doe\Documents\_index.md"#;
+        let text = format!("需要查看 PRD：{mac_path}，Windows 版本：{windows_path}");
+        let line = json!({
+            "type": "event_msg",
+            "payload": { "type": "user_message", "message": text }
+        })
+        .to_string();
+        let path = write_temp("codex-plain-document-paths.jsonl", &[&line]);
+
+        let msgs = CodexSource
+            .read_session(path.to_string_lossy().as_ref())
+            .expect("Codex rollout should parse");
+        let user = msgs
+            .iter()
+            .find(|msg| msg.role == "user")
+            .expect("user message");
+
+        assert!(user.blocks.iter().all(|block| block.kind != "file"));
+        assert!(user.blocks.iter().any(|block| {
+            block.kind == "text"
+                && block
+                    .text
+                    .as_deref()
+                    .is_some_and(|body| body.contains(mac_path) && body.contains(windows_path))
+        }));
     }
 
     #[test]

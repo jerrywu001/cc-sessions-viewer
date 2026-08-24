@@ -988,16 +988,23 @@ mod tests {
 // ─── 消息后处理：提取文本块中的图片与文件物理路径并抬升为独立 Block ───
 
 pub fn post_process_session_msgs(msgs: &mut [Msg]) {
-    post_process_session_msgs_inner(msgs, true);
+    post_process_session_msgs_inner(msgs, true, true);
 }
 
 /// Finish messages whose attachment blocks were already recovered from the
 /// source protocol without interpreting paths in their text as attachments.
 pub fn post_process_session_msgs_without_path_lifting(msgs: &mut [Msg]) {
-    post_process_session_msgs_inner(msgs, false);
+    post_process_session_msgs_inner(msgs, false, false);
 }
 
-fn post_process_session_msgs_inner(msgs: &mut [Msg], lift_paths: bool) {
+/// Codex already recovers protocol attachments before this pass. Keep explicit
+/// `@"path"`/`@[path]` references and legacy clipboard image paths, but leave
+/// ordinary absolute paths in user prose untouched.
+pub(crate) fn post_process_session_msgs_without_unmarked_path_lifting(msgs: &mut [Msg]) {
+    post_process_session_msgs_inner(msgs, true, false);
+}
+
+fn post_process_session_msgs_inner(msgs: &mut [Msg], lift_paths: bool, lift_unmarked_paths: bool) {
     for msg in msgs {
         if msg.role != "user" {
             continue;
@@ -1010,7 +1017,8 @@ fn post_process_session_msgs_inner(msgs: &mut [Msg], lift_paths: bool) {
         for block in std::mem::take(&mut msg.blocks) {
             if lift_paths && block.kind == "text" {
                 if let Some(text) = &block.text {
-                    let (lifted, remaining_text) = lift_paths_from_text_with_clipboard_tags(text);
+                    let (lifted, remaining_text) =
+                        lift_paths_from_text_with_options(text, true, lift_unmarked_paths);
                     for lifted_block in lifted {
                         if let Some(key) = attachment_key(&lifted_block) {
                             if !attachment_keys.insert(key) {
@@ -1212,14 +1220,14 @@ pub fn edge_reference_flags(text: &str, refs: &[(usize, usize)]) -> Vec<bool> {
 
 #[cfg(test)]
 fn lift_paths_from_text(text: &str) -> (Vec<Block>, String) {
-    lift_paths_from_text_inner(text, false)
+    lift_paths_from_text_with_options(text, false, true)
 }
 
-fn lift_paths_from_text_with_clipboard_tags(text: &str) -> (Vec<Block>, String) {
-    lift_paths_from_text_inner(text, true)
-}
-
-fn lift_paths_from_text_inner(text: &str, preserve_clipboard_tags: bool) -> (Vec<Block>, String) {
+fn lift_paths_from_text_with_options(
+    text: &str,
+    preserve_clipboard_tags: bool,
+    lift_unmarked_paths: bool,
+) -> (Vec<Block>, String) {
     let mut lifted = Vec::new();
     let mut cleaned_text = text.to_string();
 
@@ -1329,50 +1337,71 @@ fn lift_paths_from_text_inner(text: &str, preserve_clipboard_tags: bool) -> (Vec
 
     let mut temp = String::new();
     let mut last = 0;
-    for caps in re_abs.captures_iter(&cleaned_text) {
-        let whole = caps.get(0).unwrap();
-        let path = caps.get(1).unwrap().as_str().trim().to_string();
+    if lift_unmarked_paths {
+        for caps in re_abs.captures_iter(&cleaned_text) {
+            let whole = caps.get(0).unwrap();
+            let path = caps.get(1).unwrap().as_str().trim().to_string();
 
-        let capture = caps.get(1).unwrap();
-        let capture_start = capture.start();
-        // 正则可能从未加引号的 `@docs/foo/bar.md` 中间斜杠开始命中。只要当前
-        // whitespace-delimited token 内已经出现 `@`，整个 token 都属于正文指令，跳过。
-        let token_start = cleaned_text[..capture_start]
-            .rfind(char::is_whitespace)
-            .map(|index| index + 1)
-            .unwrap_or(0);
-        if cleaned_text[token_start..capture_start].contains('@') {
-            continue;
-        }
-        if is_rust_diagnostic_location(&cleaned_text, capture_start) {
-            continue;
-        }
-
-        let clipboard_paths = re_clipboard_image.find_iter(&path).collect::<Vec<_>>();
-        if clipboard_paths.len() > 1 {
-            for clipboard_path in clipboard_paths {
-                let start = capture_start + clipboard_path.start();
-                let end = capture_start + clipboard_path.end();
-                let clipboard_path = clipboard_path.as_str();
-                temp.push_str(&cleaned_text[last..start]);
-                if preserve_clipboard_tags && is_clipboard_image_reference(clipboard_path) {
-                    temp.push_str(CLIPBOARD_IMAGE_TAG);
-                }
-                lift_path_block(clipboard_path, &mut lifted);
-                last = end;
+            let capture = caps.get(1).unwrap();
+            let capture_start = capture.start();
+            // 正则可能从未加引号的 `@docs/foo/bar.md` 中间斜杠开始命中。只要当前
+            // whitespace-delimited token 内已经出现 `@`，整个 token 都属于正文指令，跳过。
+            let token_start = cleaned_text[..capture_start]
+                .rfind(char::is_whitespace)
+                .map(|index| index + 1)
+                .unwrap_or(0);
+            if cleaned_text[token_start..capture_start].contains('@') {
+                continue;
             }
-            continue;
-        }
+            if is_rust_diagnostic_location(&cleaned_text, capture_start) {
+                continue;
+            }
 
-        temp.push_str(&cleaned_text[last..capture_start]);
-        if preserve_clipboard_tags && is_clipboard_image_reference(&path) {
-            temp.push_str(CLIPBOARD_IMAGE_TAG);
+            let clipboard_paths = re_clipboard_image.find_iter(&path).collect::<Vec<_>>();
+            if clipboard_paths.len() > 1 {
+                for clipboard_path in clipboard_paths {
+                    let start = capture_start + clipboard_path.start();
+                    let end = capture_start + clipboard_path.end();
+                    let clipboard_path = clipboard_path.as_str();
+                    temp.push_str(&cleaned_text[last..start]);
+                    if preserve_clipboard_tags && is_clipboard_image_reference(clipboard_path) {
+                        temp.push_str(CLIPBOARD_IMAGE_TAG);
+                    }
+                    lift_path_block(clipboard_path, &mut lifted);
+                    last = end;
+                }
+                continue;
+            }
+
+            temp.push_str(&cleaned_text[last..capture_start]);
+            if preserve_clipboard_tags && is_clipboard_image_reference(&path) {
+                temp.push_str(CLIPBOARD_IMAGE_TAG);
+            }
+            last = whole.end();
+            lift_path_block(&path, &mut lifted);
         }
-        last = whole.end();
-        lift_path_block(&path, &mut lifted);
+    } else {
+        // Codex protocol records already provide real file/image blocks. The
+        // only unmarked paths still worth recovering are legacy clipboard
+        // images; ordinary document paths are prose and stay in place.
+        for path_match in re_clipboard_image.find_iter(&cleaned_text) {
+            let start = path_match.start();
+            let end = path_match.end();
+            let path = path_match.as_str();
+            temp.push_str(&cleaned_text[last..start]);
+            if preserve_clipboard_tags && is_clipboard_image_reference(path) {
+                temp.push_str(CLIPBOARD_IMAGE_TAG);
+            }
+            lift_path_block(path, &mut lifted);
+            last = end;
+        }
     }
     temp.push_str(&cleaned_text[last..]);
     cleaned_text = temp;
+
+    if !lift_unmarked_paths {
+        return (lifted, cleaned_text.trim().to_string());
+    }
 
     // 4. 对余下文本运行逐行文件提炼（处理相对路径等）
     let mut remaining_lines = Vec::new();
