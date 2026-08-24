@@ -988,6 +988,16 @@ mod tests {
 // ─── 消息后处理：提取文本块中的图片与文件物理路径并抬升为独立 Block ───
 
 pub fn post_process_session_msgs(msgs: &mut [Msg]) {
+    post_process_session_msgs_inner(msgs, true);
+}
+
+/// Finish messages whose attachment blocks were already recovered from the
+/// source protocol without interpreting paths in their text as attachments.
+pub fn post_process_session_msgs_without_path_lifting(msgs: &mut [Msg]) {
+    post_process_session_msgs_inner(msgs, false);
+}
+
+fn post_process_session_msgs_inner(msgs: &mut [Msg], lift_paths: bool) {
     for msg in msgs {
         if msg.role != "user" {
             continue;
@@ -998,7 +1008,7 @@ pub fn post_process_session_msgs(msgs: &mut [Msg]) {
             msg.blocks.iter().filter_map(attachment_key).collect();
         let mut new_blocks = Vec::new();
         for block in std::mem::take(&mut msg.blocks) {
-            if block.kind == "text" {
+            if lift_paths && block.kind == "text" {
                 if let Some(text) = &block.text {
                     let (lifted, remaining_text) = lift_paths_from_text_with_clipboard_tags(text);
                     for lifted_block in lifted {

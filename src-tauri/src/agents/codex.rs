@@ -1886,6 +1886,21 @@ fn read(path: &str) -> Result<Vec<Msg>, String> {
     read_with_title_index(path, &title_index)
 }
 
+fn post_process_codex_session_msgs(msgs: &mut [Msg]) {
+    for msg in msgs {
+        let skip_path_lifting = cfg!(windows)
+            && msg
+                .blocks
+                .iter()
+                .any(|block| block.kind == "image" && block.inline_placeholder.is_some());
+        if skip_path_lifting {
+            crate::util::post_process_session_msgs_without_path_lifting(std::slice::from_mut(msg));
+        } else {
+            crate::util::post_process_session_msgs(std::slice::from_mut(msg));
+        }
+    }
+}
+
 // ---- GUI chat（codex exec --json 实时事件流）---------------------------------
 //
 // 注意：这跟浏览模式（read_with_title_index 读落盘 rollout）是**两套完全不同的事件
@@ -2180,7 +2195,7 @@ impl SessionSource for CodexSource {
 
     fn read_session(&self, path: &str) -> Result<Vec<Msg>, String> {
         let mut msgs = read(path)?;
-        crate::util::post_process_session_msgs(&mut msgs);
+        post_process_codex_session_msgs(&mut msgs);
         Ok(msgs)
     }
 
@@ -2964,6 +2979,89 @@ mod tests {
         let session = scan(&p, &meta, &HashMap::new(), CodexThreadFlags::default());
         assert_eq!(session.title, "[Image #1] 给宠物增加右键菜单，看截图");
         assert_eq!(session.message_count, 2);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn read_codex_keeps_example_windows_paths_in_protocol_image_message_as_text() {
+        let first = r#"C:\Users\Jane Doe\AppData\Local\Temp\pi-clipboard-first.png"#;
+        let second = r#"C:\Users\Jane Doe\AppData\Local\Temp\pi-clipboard-second.png"#;
+        let image_header =
+            r#"<image name=[Image #1] path="C:\Users\Jane Doe\AppData\Local\Temp\codex-clipboard.png">"#;
+        let text = format!("hi, {first}, ooo, {second}, this is an image test [Image #1]");
+        let lines = [
+            json!({
+                "type": "session_meta",
+                "payload": { "id": "codex-windows-path-prose", "cwd": "C:\\repo" }
+            })
+            .to_string(),
+            json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        { "type": "input_text", "text": image_header },
+                        { "type": "input_image", "image_url": "data:image/png;base64,abc" },
+                        { "type": "input_text", "text": "</image>" },
+                        { "type": "input_text", "text": text }
+                    ]
+                }
+            })
+            .to_string(),
+            json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "UserMessage",
+                        "id": "u1",
+                        "content": [{ "type": "text", "text": text }]
+                    }
+                }
+            })
+            .to_string(),
+        ];
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let path = write_temp("codex-windows-path-prose.jsonl", &refs);
+        let msgs = CodexSource
+            .read_session(path.to_string_lossy().as_ref())
+            .expect("Codex rollout should parse");
+        let user = msgs
+            .iter()
+            .find(|msg| msg.role == "user")
+            .expect("user message");
+        let image = user
+            .blocks
+            .iter()
+            .find(|block| block.kind == "image")
+            .expect("protocol image block");
+        assert_eq!(
+            image.image_src.as_deref(),
+            Some("data:image/png;base64,abc")
+        );
+        assert_eq!(image.inline_placeholder.as_deref(), Some("[Image #1]"));
+
+        assert_eq!(
+            user.blocks
+                .iter()
+                .filter(|block| block.kind == "image")
+                .count(),
+            1
+        );
+        assert_eq!(
+            user.blocks
+                .iter()
+                .filter(|block| block.kind == "file")
+                .count(),
+            0
+        );
+        assert!(user.blocks.iter().any(|block| {
+            block.kind == "text"
+                && block.text.as_deref().is_some_and(|body| {
+                    body.contains(first) && body.contains(second) && body.contains("[Image #1]")
+                })
+        }));
     }
 
     #[test]
