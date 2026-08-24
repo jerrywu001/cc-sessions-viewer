@@ -415,7 +415,10 @@ fn prompt_blocks(value: &Value) -> Vec<Block> {
     let has_image_token = items.iter().any(|item| {
         item.get("text")
             .and_then(Value::as_str)
-            .is_some_and(|text| text.contains("[Image #"))
+            .is_some_and(|text| {
+                let text = text.to_ascii_lowercase();
+                text.contains("[image #") || text.contains("[#image ")
+            })
     });
     let image_count = items
         .iter()
@@ -428,6 +431,7 @@ fn prompt_blocks(value: &Value) -> Vec<Block> {
         .count();
     let mut image_index = 0usize;
     let mut blocks = Vec::with_capacity(items.len());
+    let mut pending_placeholder: Option<String> = None;
     for item in items {
         match item.get("type").and_then(Value::as_str) {
             Some("image_url" | "imageUrl" | "image") => {
@@ -438,15 +442,32 @@ fn prompt_blocks(value: &Value) -> Vec<Block> {
                 blocks.push(Block {
                     kind: "image".to_string(),
                     image_src: Some(src),
-                    // The Windows wire has no visible image token. This is an
-                    // input image, not an ordinary attachment, so retain the
-                    // UI's pasted-image tag without adding text that Kimi did
-                    // not record. If Kimi did write `[Image #N]`, defer to the
-                    // shared binder to preserve its exact numbering.
+                    // The Windows wire has no visible image token. Keep the
+                    // image's pasted-image badge and synthesize the matching
+                    // body token below. If Kimi did write `[Image #N]`, defer
+                    // to the shared binder to preserve its exact numbering.
                     inline_placeholder: (!has_image_token && image_count > 0)
                         .then(|| format!("[Image #{image_index}]")),
                     ..Default::default()
                 });
+                if !has_image_token {
+                    let placeholder = format!("[Image #{image_index}]");
+                    if let Some(text) = blocks
+                        .iter_mut()
+                        .rev()
+                        .find(|block| block.kind == "text")
+                        .and_then(|block| block.text.as_mut())
+                    {
+                        text.push_str(&placeholder);
+                    } else {
+                        pending_placeholder = Some(
+                            pending_placeholder
+                                .take()
+                                .map(|previous| previous + &placeholder)
+                                .unwrap_or(placeholder),
+                        );
+                    }
+                }
             }
             _ => {
                 let text = item
@@ -455,12 +476,31 @@ fn prompt_blocks(value: &Value) -> Vec<Block> {
                     .map(prompt_text)
                     .unwrap_or_default();
                 if !text.is_empty() {
+                    let text = pending_placeholder
+                        .take()
+                        .map(|placeholder| placeholder + &text)
+                        .unwrap_or(text);
                     blocks.push(text_block("text", &text));
                 }
             }
         }
     }
+    if let Some(placeholder) = pending_placeholder {
+        blocks.push(text_block("text", &placeholder));
+    }
     blocks
+}
+
+fn prompt_text_with_image_tokens(value: &Value) -> String {
+    if !value.is_array() {
+        return prompt_text(value);
+    }
+    prompt_blocks(value)
+        .into_iter()
+        .filter(|block| block.kind == "text")
+        .filter_map(|block| block.text)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn is_user_prompt(event: &Value) -> bool {
@@ -490,7 +530,10 @@ fn main_user_prompts_from_bytes(bytes: &[u8]) -> Result<Vec<(Option<String>, Str
         {
             continue;
         }
-        let text = event.get("input").map(prompt_text).unwrap_or_default();
+        let text = event
+            .get("input")
+            .map(prompt_text_with_image_tokens)
+            .unwrap_or_default();
         if text.is_empty() {
             continue;
         }
@@ -1928,6 +1971,14 @@ impl SessionSource for KimiSource {
             .and_then(Path::parent)
             .and_then(Path::parent)
             .ok_or_else(|| "Invalid Kimi Code session path".to_string())?;
+        if let Some(prompt) = main_user_prompts(Path::new(path))?
+            .into_iter()
+            .last()
+            .map(|(_, prompt)| truncate_subtitle(&prompt))
+            .filter(|prompt| !prompt.is_empty())
+        {
+            return Ok(Some(prompt));
+        }
         if let Some(prompt) = read_state(session_dir)
             .as_ref()
             .and_then(|state| nonempty_string(state, "lastPrompt"))
@@ -1936,11 +1987,7 @@ impl SessionSource for KimiSource {
         {
             return Ok(Some(prompt));
         }
-        Ok(main_user_prompts(Path::new(path))?
-            .into_iter()
-            .last()
-            .map(|(_, prompt)| truncate_subtitle(&prompt))
-            .filter(|prompt| !prompt.is_empty()))
+        Ok(None)
     }
 
     fn read_turns(&self, path: &str) -> Result<Vec<Turn>, String> {
@@ -2753,6 +2800,108 @@ mod tests {
     }
 
     #[test]
+    fn renders_macos_clipboard_paths_and_keeps_their_body_placeholders() {
+        let root = scratch("macos-clipboard-paths");
+        let first =
+            "/var/folders/8h/ddvbjjrn74q1v55wywphwkdc0000gn/T/clipboard-2026-08-24-102503.png";
+        let second =
+            "/var/folders/8h/ddvbjjrn74q1v55wywphwkdc0000gn/T/clipboard-2026-08-24-102508.png";
+        let prompt = format!("oo, {first}, oopp, {second}, 只需回复ok");
+        let wire = create_session(
+            &root,
+            "wd_project",
+            "session_valid",
+            state("id", "/tmp/project", "title"),
+            &[&prompt],
+        );
+
+        let messages = KimiSource.read_session(wire.to_str().unwrap()).unwrap();
+        let blocks = &messages[0].blocks;
+        let images: Vec<_> = blocks
+            .iter()
+            .filter(|block| block.kind == "image")
+            .collect();
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].image_src.as_deref(), Some(first));
+        assert_eq!(images[1].image_src.as_deref(), Some(second));
+        let text = blocks
+            .iter()
+            .find_map(|block| (block.kind == "text").then_some(block.text.as_deref()))
+            .flatten()
+            .unwrap();
+        assert_eq!(text, "oo, [Image #1], oopp, [Image #2], 只需回复ok");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn renders_windows_pi_clipboard_paths_and_keeps_their_body_placeholders() {
+        let root = scratch("windows-pi-clipboard-paths");
+        let first = r#"C:\Users\Jane Doe\AppData\Local\Temp\pi-clipboard-first.png"#;
+        let second = r#"C:\Users\Jane Doe\AppData\Local\Temp\pi-clipboard-second.png"#;
+        let prompt = format!("hi, {first}, ooo, {second}, 只需要回答我hi即可");
+        let wire = create_session(
+            &root,
+            "wd_project",
+            "session_valid",
+            state("id", "C:\\project", "title"),
+            &[&prompt],
+        );
+
+        let messages = KimiSource.read_session(wire.to_str().unwrap()).unwrap();
+        let blocks = &messages[0].blocks;
+        let images: Vec<_> = blocks
+            .iter()
+            .filter(|block| block.kind == "image")
+            .collect();
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].image_src.as_deref(), Some(first));
+        assert_eq!(images[1].image_src.as_deref(), Some(second));
+        let text = blocks
+            .iter()
+            .find_map(|block| (block.kind == "text").then_some(block.text.as_deref()))
+            .flatten()
+            .unwrap();
+        assert_eq!(text, "hi, [Image #1], ooo, [Image #2], 只需要回答我hi即可");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preserves_lowercase_image_tokens_in_kimi_prompt_text() {
+        let root = scratch("lowercase-image-token");
+        let wire = create_session(
+            &root,
+            "wd_project",
+            "session_valid",
+            state("id", "/tmp/project", "title"),
+            &["visible prompt"],
+        );
+        append_events(
+            &wire,
+            &[serde_json::json!({
+                "type": "turn.prompt",
+                "promptId": "lowercase-image-token",
+                "origin": {"kind": "user"},
+                "input": [
+                    {"type": "text", "text": "[image #1] inspect this"},
+                    {"type": "image_url", "imageUrl": {"url": "data:image/png;base64,AQID"}}
+                ],
+            })],
+        );
+
+        let messages = KimiSource.read_session(wire.to_str().unwrap()).unwrap();
+        let message = messages.last().unwrap();
+        assert!(message.blocks.iter().any(|block| {
+            block.kind == "text" && block.text.as_deref() == Some("[image #1] inspect this")
+        }));
+        assert!(message.blocks.iter().any(|block| {
+            block.kind == "image"
+                && block.image_src.as_deref() == Some("data:image/png;base64,AQID")
+                && block.inline_placeholder.as_deref() == Some("[image #1]")
+        }));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn renders_windows_inline_prompt_images_without_indexing_the_data_uri() {
         let root = scratch("windows-inline-image");
         let wire = create_session(
@@ -2780,7 +2929,7 @@ mod tests {
         let message = messages.last().unwrap();
         assert_eq!(message.role, "user");
         assert_eq!(message.blocks.len(), 3);
-        assert_eq!(message.blocks[0].text.as_deref(), Some("hi,"));
+        assert_eq!(message.blocks[0].text.as_deref(), Some("hi,[Image #1]"));
         assert_eq!(message.blocks[1].kind, "image");
         assert_eq!(
             message.blocks[1].image_src.as_deref(),
@@ -2793,7 +2942,7 @@ mod tests {
         assert_eq!(message.blocks[2].text.as_deref(), Some(", answer hi"));
 
         let prompts = main_user_prompts(&wire).unwrap();
-        assert_eq!(prompts.last().unwrap().1, "hi,\n, answer hi");
+        assert_eq!(prompts.last().unwrap().1, "hi,[Image #1]\n, answer hi");
         assert!(!prompts.last().unwrap().1.contains("AQID"));
         let _ = fs::remove_dir_all(root);
     }
@@ -2832,6 +2981,55 @@ mod tests {
             message.blocks[1].inline_placeholder.as_deref(),
             Some("[Image #1]")
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn renders_multiple_windows_inline_images_in_the_body_order() {
+        let root = scratch("windows-multiple-inline-images");
+        let wire = create_session(
+            &root,
+            "wd_project",
+            "session_valid",
+            state("id", "C:\\project", "title"),
+            &["visible prompt"],
+        );
+        append_events(
+            &wire,
+            &[serde_json::json!({
+                "type": "turn.prompt",
+                "promptId": "windows-multiple-images",
+                "origin": {"kind": "user"},
+                "input": [
+                    {"type": "image_url", "imageUrl": {"url": "data:image/png;base64,AQID"}},
+                    {"type": "text", "text": ", first"},
+                    {"type": "image_url", "imageUrl": {"url": "data:image/png;base64,BAUG"}},
+                    {"type": "text", "text": ", second"}
+                ],
+            })],
+        );
+
+        let message = KimiSource
+            .read_session(wire.to_str().unwrap())
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+        let text: String = message
+            .blocks
+            .iter()
+            .filter(|block| block.kind == "text")
+            .filter_map(|block| block.text.as_deref())
+            .collect();
+        assert_eq!(text, "[Image #1], first[Image #2], second");
+        let images: Vec<_> = message
+            .blocks
+            .iter()
+            .filter(|block| block.kind == "image")
+            .collect();
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].inline_placeholder.as_deref(), Some("[Image #1]"));
+        assert_eq!(images[1].inline_placeholder.as_deref(), Some("[Image #2]"));
         let _ = fs::remove_dir_all(root);
     }
 

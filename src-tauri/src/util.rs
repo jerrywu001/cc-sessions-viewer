@@ -294,7 +294,7 @@ pub fn clean_title(raw: &str) -> String {
 pub fn truncate_subtitle(raw: &str) -> String {
     use once_cell::sync::Lazy;
     static RE_STRIP: Lazy<regex_lite::Regex> = Lazy::new(|| {
-        regex_lite::Regex::new(r"@\[?[A-Za-z0-9_./-]+\]?|\[Image[^\]]*\]|\!\[[^\]]*\]").unwrap()
+        regex_lite::Regex::new(r"@\[?[A-Za-z0-9_./-]+\]?|\!\[[^\]]*\]").unwrap()
     });
     let line = raw
         .lines()
@@ -724,6 +724,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn truncate_subtitle_preserves_image_tokens() {
+        assert_eq!(
+            truncate_subtitle("hello [Image #1] then [#image 2]"),
+            "hello [Image #1] then [#image 2]"
+        );
+    }
+
+    #[test]
     fn yyyymmdd_at_unix_epoch_is_1970_01_01() {
         assert_eq!(yyyymmdd_utc(0), "1970-01-01");
     }
@@ -1053,8 +1061,8 @@ fn post_process_session_msgs_inner(msgs: &mut [Msg], lift_paths: bool, lift_unma
 /// 的编号；因此普通图片不会因为正文里另有一个图片 token 而被误标记。
 fn bind_inline_image_placeholders(msg: &mut Msg) {
     let image_token_re =
-        regex_lite::Regex::new(r"\[(?:Image #(\d+)|#image (\d+))\]").expect("valid regex");
-    let image_numbers: HashSet<usize> = msg
+        regex_lite::Regex::new(r"(?i)\[(?:image #(\d+)|#image (\d+))\]").expect("valid regex");
+    let image_tokens: Vec<(usize, String)> = msg
         .blocks
         .iter()
         .filter(|block| block.kind == "text")
@@ -1063,13 +1071,23 @@ fn bind_inline_image_placeholders(msg: &mut Msg) {
             image_token_re.captures_iter(text).filter_map(|caps| {
                 caps.get(1)
                     .or_else(|| caps.get(2))
-                    .and_then(|value| value.as_str().parse::<usize>().ok())
+                    .and_then(|value| {
+                        value
+                            .as_str()
+                            .parse::<usize>()
+                            .ok()
+                            .map(|number| (number, caps.get(0).unwrap().as_str().to_string()))
+                    })
             })
         })
         .collect();
-    if image_numbers.is_empty() {
+    if image_tokens.is_empty() {
         return;
     }
+    let image_numbers: HashSet<usize> = image_tokens
+        .iter()
+        .map(|(number, _)| *number)
+        .collect();
 
     // Agent-specific readers may already have recovered an exact binding from the
     // source protocol (Claude's interleaved content is one such case). Keep those
@@ -1104,7 +1122,11 @@ fn bind_inline_image_placeholders(msg: &mut Msg) {
         if block.inline_placeholder.is_some() || !image_numbers.contains(&attachment_position) {
             continue;
         }
-        let placeholder = format!("[Image #{attachment_position}]");
+        let placeholder = image_tokens
+            .iter()
+            .find(|(number, _)| *number == attachment_position)
+            .map(|(_, token)| token.clone())
+            .unwrap_or_else(|| format!("[Image #{attachment_position}]"));
         if used.insert(placeholder.clone()) {
             block.inline_placeholder = Some(placeholder);
         }

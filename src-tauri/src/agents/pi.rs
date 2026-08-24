@@ -23,7 +23,7 @@ use crate::types::{
 };
 use crate::util::{
     append_jsonl_line, clean_title, home, mtime_millis, now_millis, parse_iso8601_ms,
-    validate_rename_name,
+    truncate_subtitle, validate_rename_name,
 };
 
 pub struct PiSource;
@@ -1208,6 +1208,35 @@ fn user_text(entry: &Value) -> Option<String> {
     }
 }
 
+fn last_user_prompt(bytes: &[u8]) -> Option<String> {
+    let parsed = parse_entries(bytes).ok()?;
+    parsed
+        .entries
+        .iter()
+        .rev()
+        .filter(|entry| {
+            entry.value.get("type").and_then(Value::as_str) == Some("message")
+                && entry.value.pointer("/message/role").and_then(Value::as_str) == Some("user")
+        })
+        .filter_map(|entry| {
+            let mut messages = entry_to_msgs(entry);
+            crate::util::post_process_session_msgs(&mut messages);
+            for message in &mut messages {
+                normalize_pi_skill_blocks(&mut message.blocks);
+            }
+            messages.into_iter().find_map(|message| {
+                message
+                    .blocks
+                    .into_iter()
+                    .filter(|block| block.kind == "text")
+                    .filter_map(|block| block.text)
+                    .map(|text| truncate_subtitle(&text))
+                    .find(|text| !text.is_empty())
+            })
+        })
+        .find(|text| !text.is_empty())
+}
+
 fn tree_summary(bytes: &[u8]) -> TreeSummary {
     let mut entries: Vec<(String, Option<String>, Value)> = Vec::new();
     let mut version = 3u64;
@@ -1455,6 +1484,11 @@ impl SessionSource for PiSource {
         }
         Ok(messages)
     }
+
+    fn last_prompt(&self, path: &str) -> Result<Option<String>, String> {
+        Ok(last_user_prompt(&stable_bytes(Path::new(path))?))
+    }
+
     fn session_tree(&self, path: &str) -> Result<Vec<PiTreeNode>, String> {
         let parsed = parse_entries(&stable_bytes(Path::new(path))?)?;
         Ok(tree_nodes(&parsed))
@@ -1978,6 +2012,83 @@ Use tmux-bridge for pane control.
         assert_eq!(meta.message_count, 2);
         assert_eq!(meta.pi_entry_count, Some(4));
         assert_eq!(meta.pi_branch_count, Some(1));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn last_prompt_reads_the_latest_pi_user_message() {
+        let root = temp_root("last-prompt");
+        let path = write_session(
+            &root,
+            "session.jsonl",
+            &[
+                header(3, "session", "/tmp/project"),
+                serde_json::json!({"type":"message","id":"u1","message":{"role":"user","content":[{"type":"text","text":"first prompt"}]}}),
+                serde_json::json!({"type":"message","id":"a1","parentId":"u1","message":{"role":"assistant","content":"answer"}}),
+                serde_json::json!({"type":"message","id":"u2","parentId":"a1","message":{"role":"user","content":[{"type":"image","source":{"media_type":"image/png","data":"AQID"}},{"type":"text","text":"latest prompt"}]}}),
+            ],
+        );
+
+        assert_eq!(
+            PiSource
+                .last_prompt(path.to_str().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("latest prompt")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn last_prompt_preserves_windows_clipboard_image_tokens() {
+        let root = temp_root("last-prompt-clipboard");
+        let first = root.join("pi-clipboard-first.png");
+        let second = root.join("pi-clipboard-second.png");
+        fs::write(&first, []).unwrap();
+        fs::write(&second, []).unwrap();
+        let prompt = format!(
+            "hi, {}, ooo, {}, 只需要回复我hi即可",
+            first.display(),
+            second.display()
+        );
+        let path = write_session(
+            &root,
+            "session.jsonl",
+            &[
+                header(3, "session", "/tmp/project"),
+                serde_json::json!({"type":"message","id":"u","message":{"role":"user","content":[{"type":"text","text":prompt}]}}),
+            ],
+        );
+
+        assert_eq!(
+            PiSource
+                .last_prompt(path.to_str().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("hi, [Image #1], ooo, [Image #2], 只需要回复我hi即可")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn last_prompt_normalizes_pi_skill_context_before_truncating() {
+        let root = temp_root("last-prompt-skill");
+        let path = write_session(
+            &root,
+            "session.jsonl",
+            &[
+                header(3, "session", "/tmp/project"),
+                serde_json::json!({"type":"message","id":"u","message":{"role":"user","content":[{"type":"text","text":"<skill name=\"git-push\" location=\"/tmp/SKILL.md\">\n# Git Push\n</skill> only this"}]}}),
+            ],
+        );
+
+        assert_eq!(
+            PiSource
+                .last_prompt(path.to_str().unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("/git-push only this")
+        );
         let _ = fs::remove_dir_all(root);
     }
 
