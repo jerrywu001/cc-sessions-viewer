@@ -55,6 +55,11 @@ import {
   type TerminalSelectionRange,
 } from './terminalSelectionDelete'
 import { installTerminalScrollbackProtection } from './terminalScrollback'
+import {
+  pasteIntentForEvent,
+  readClipboardImages,
+  runEmbeddedCliPaste,
+} from './embeddedCliPaste'
 
 export type {
   TerminalProcessState,
@@ -63,8 +68,8 @@ export type {
   TerminalTurnState,
 } from './tabStatus'
 
-/// 处理 DOM paste 事件（含图片）——用 capture 阶段拦截，先于 xterm 的 stopPropagation。
-/// Mac 上 Cmd+V / Ctrl+V 触发；图片保存为临时文件后把路径粘贴到终端。
+/// 处理纯 shell tab 的 DOM paste 事件（含图片）。内嵌 CLI 由快捷键控制器处理。
+/// Mac 上图片保存为临时文件后把路径粘贴到终端。
 async function _handleTerminalPaste(term: Terminal, e: ClipboardEvent) {
   const items = e.clipboardData?.items
   if (!items) return
@@ -80,15 +85,6 @@ async function _handleTerminalPaste(term: Terminal, e: ClipboardEvent) {
       term.paste(path)
       return
     }
-  }
-}
-
-async function pasteWindowsClipboardText(term: Terminal) {
-  try {
-    const text = await navigator.clipboard?.readText?.()
-    if (text) term.paste(text)
-  } catch {
-    /* Clipboard read can be denied by the webview; swallowing keeps Ctrl+V from reaching Codex. */
   }
 }
 
@@ -304,25 +300,6 @@ function selectionDeleteTarget(term: Terminal): TerminalSelectionDeleteTarget {
     clearSelection: () => term.clearSelection(),
     input: (data, wasUserInput) => term.input(data, wasUserInput),
   }
-}
-
-function handleWindowsCodexPaste(term: Terminal, ev: KeyboardEvent, agent: Agent): boolean {
-  if (
-    !_isWindows ||
-    agent !== 'codex' ||
-    ev.type !== 'keydown' ||
-    ev.key.toLowerCase() !== 'v' ||
-    !ev.ctrlKey ||
-    ev.shiftKey ||
-    ev.altKey ||
-    ev.metaKey
-  ) {
-    return false
-  }
-  ev.preventDefault()
-  ev.stopImmediatePropagation()
-  void pasteWindowsClipboardText(term)
-  return true
 }
 
 export interface TerminalTab {
@@ -1612,8 +1589,6 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
   // 提示 xterm 即将 attach；真正的 open(container) 推迟到 slot 把 container 放入
   // 可见 DOM 树之后，否则在 detached 节点上 open 会拿不到尺寸。
   term.open(container)
-  if (_isMac) container.addEventListener('paste', (e: Event) => _handleTerminalPaste(term, e as ClipboardEvent), true)
-
   const uiId = nextUiId++
   if (isNew && opts.knownSessionPaths) {
     snapshotKnownSessions(uiId, opts.knownSessionPaths)
@@ -1665,6 +1640,7 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
     }
   })
   const imeInputDeduper = createTerminalImeInputDeduper()
+  let embeddedPasteInFlight = false
   term.textarea?.addEventListener('compositionstart', () => {
     tab.container.classList.add('terminal-ime-composing')
   })
@@ -1685,7 +1661,26 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
     ) {
       return false
     }
-    if (handleWindowsCodexPaste(term, ev, opts.agent)) return false
+    const pasteIntent = pasteIntentForEvent(ev, navigator.platform)
+    if (pasteIntent && tab.ptyId !== null && tab.processState === 'alive') {
+      ev.preventDefault()
+      ev.stopImmediatePropagation()
+      if (!embeddedPasteInFlight) {
+        embeddedPasteInFlight = true
+        void runEmbeddedCliPaste(
+          pasteIntent,
+          term,
+          {
+            readImages: readClipboardImages,
+            readText: async () => (await navigator.clipboard?.readText?.()) ?? '',
+          },
+          { saveImage: api.saveClipboardImage },
+        ).finally(() => {
+          embeddedPasteInFlight = false
+        })
+      }
+      return false
+    }
     if (ev.type !== 'keydown' || ev.altKey) return true
     const key = ev.key.toLowerCase()
 

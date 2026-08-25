@@ -275,3 +275,15 @@ ClipboardPayload = { kind: Image | Text | Empty, mime?, bytes?, text? }
 先完成阶段 0，确认当前共享入口和右键成功所对应的底层写入路径；再按阶段 1–3 实现统一控制器和平台映射。阶段 4 的自动化测试应与实现同步补齐，最后用阶段 5 的三平台矩阵验收。
 
 不建议先按 Agent 逐个修 `Alt + V` 或 `Ctrl + V`，因为表格已证明同一个 Agent 的图片和文字路径也不一致，这样会继续保留重复监听和平台差异。
+
+## 9. 当前实现进度
+
+已完成第一阶段和跨平台统一入口的基础实现：
+
+- 新增共享 `embeddedCliPaste` 控制器，按平台修饰键返回 `image`、`text` 或 `unified` 意图。
+- Windows/Linux 内嵌 session CLI 的 `Ctrl+V`、macOS 的 `Control+V` / `Command+V` 统一走共享控制器；不再按 Agent 名称分支。
+- 图片读取使用结构化 `navigator.clipboard.read()`，继续复用 `save_clipboard_image` 临时文件流程。
+- shell tab 未接入该拦截器，保留原有粘贴行为。
+- 增加平台快捷键、图片优先、文本回退和空剪贴板单元测试。
+
+待完成：剪贴板权限失败提示、跨平台人工矩阵，以及切换 tab/PTY 生命周期的集成测试。异步读取前无法判断剪贴板内容，因此空剪贴板时快捷键仍可能被消费，这是浏览器/WebView 事件模型的已知限制。
