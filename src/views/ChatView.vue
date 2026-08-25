@@ -331,7 +331,7 @@ function isToolOnly(m: Msg): boolean {
 }
 
 function isAskUserQuestion(b: Block): boolean {
-  return b.kind === 'tool_use' && b.toolName === 'AskUserQuestion'
+  return b.kind === 'tool_use' && (b.toolName === 'AskUserQuestion' || b.toolName === 'ask_user_question')
 }
 
 /** AskUserQuestion 是 Claude 发起的工具调用。即使遇到旧 transcript 把这类

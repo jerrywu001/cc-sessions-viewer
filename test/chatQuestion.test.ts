@@ -212,3 +212,35 @@ describe('Kimi AskUserQuestion history parsing', () => {
     expect(parseQuestionAnswers('{"answers":{"Which modes?":true}}')).toEqual({})
   })
 })
+
+describe('Pi ask_user_question history parsing', () => {
+  it('renders the Pi tool payload and its quoted answer with the shared history card contract', () => {
+    const request = parseQuestionRequest(
+      JSON.stringify({
+        questions: [
+          {
+            header: '提交目标',
+            question: 'sales-dev-app 无改动可提交；sales-app 有 24 个文件的结算管理改动。git push 要提交哪个仓库？',
+            options: [
+              { label: '提交 sales-app 结算改动 (Recommended)', description: '提交后推送到远端分支' },
+              { label: 'sales-dev-app 无改动不提交', description: '流程直接结束（no-op）' },
+              { label: '两仓都检查提交', description: '两个仓库都检查一遍' },
+            ],
+          },
+        ],
+      }),
+      'call_00_zigvm6ikWBlpdqDQ4gqF8620',
+    )
+
+    expect(request?.questions[0].header).toBe('提交目标')
+    expect(request?.questions[0].options).toHaveLength(3)
+    expect(
+      parseQuestionAnswers(
+        'User has answered your questions: "sales-dev-app 无改动可提交；sales-app 有 24 个文件的结算管理改动。git push 要提交哪个仓库？"="提交 sales-app 结算改动 (Recommended)".',
+      ),
+    ).toEqual({
+      'sales-dev-app 无改动可提交；sales-app 有 24 个文件的结算管理改动。git push 要提交哪个仓库？':
+        '提交 sales-app 结算改动 (Recommended)',
+    })
+  })
+})
