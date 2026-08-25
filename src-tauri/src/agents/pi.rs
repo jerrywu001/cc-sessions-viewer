@@ -623,6 +623,37 @@ fn content_blocks(content: &Value, tool_id: Option<&str>, is_error: bool) -> Vec
     blocks
 }
 
+/// Pi may truncate the human-readable answer receipt, while retaining the
+/// complete selections in `message.details.answers`. Add those selections to
+/// the tool-result text so the shared history question card can mark options.
+fn append_pi_question_answers(blocks: &mut [Block], details: &Value) {
+    let Some(answers) = details.get("answers").and_then(Value::as_array) else {
+        return;
+    };
+    let pairs: Vec<String> = answers
+        .iter()
+        .filter_map(|answer| {
+            let question = answer.get("question").and_then(Value::as_str)?.trim();
+            let value = answer.get("answer").and_then(Value::as_str)?.trim();
+            if question.is_empty() || value.is_empty() {
+                return None;
+            }
+            Some(format!(
+                "{}={}",
+                serde_json::to_string(question).ok()?,
+                serde_json::to_string(value).ok()?
+            ))
+        })
+        .collect();
+    if pairs.is_empty() {
+        return;
+    }
+    let suffix = format!("\nUser has answered your questions: {}.", pairs.join(", "));
+    if let Some(block) = blocks.iter_mut().find(|block| block.kind == "tool_result") {
+        block.text = Some(format!("{}{}", block.text.as_deref().unwrap_or(""), suffix));
+    }
+}
+
 fn pi_todo_summary(details: &Value) -> Option<PiTodoSummary> {
     let tasks = details.get("tasks")?.as_array()?;
     let tasks: Vec<PiTodoTask> = tasks
@@ -841,6 +872,9 @@ fn entry_to_msgs(entry: &PiEntry) -> Vec<Msg> {
                             block.pi_todo_summary = Some(summary.clone());
                         }
                     }
+                }
+                if let Some(details) = message.get("details") {
+                    append_pi_question_answers(&mut blocks, details);
                 }
                 return vec![Msg {
                     uuid: Some(entry.id.clone()),
@@ -2422,6 +2456,32 @@ Use tmux-bridge for pane control.
             messages[0].blocks[0].image_src.as_deref(),
             Some("data:image/png;base64,AQID")
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preserves_structured_question_answers_when_receipt_is_truncated() {
+        let root = temp_root("question-answers");
+        let path = write_session(
+            &root,
+            "question-answers.jsonl",
+            &[
+                header(3, "question-answers", "/tmp/project"),
+                serde_json::json!({
+                    "type":"message", "id":"tool",
+                    "message":{
+                        "role":"toolResult", "toolCallId":"call-question",
+                        "content":"User has answered your questions: \"A very long question...",
+                        "details":{"answers":[{"question":"A very long question that was truncated","answer":"Selected option"}]}
+                    }
+                }),
+            ],
+        );
+        let messages = PiSource
+            .read_session_at(path.to_str().unwrap(), None)
+            .unwrap();
+        let text = messages[0].blocks[0].text.as_deref().unwrap();
+        assert!(text.contains("\"A very long question that was truncated\"=\"Selected option\""));
         let _ = fs::remove_dir_all(root);
     }
 

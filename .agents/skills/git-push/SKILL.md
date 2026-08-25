@@ -15,19 +15,20 @@ Only use this skill when the user explicitly asks to commit and push.
    - `git status --short`
    - `git diff HEAD`
 4. Generate an English commit message. The commit type must be chosen from:
-   - `Feat`
-   - `Fix`
-   - `Doc`
-   - `Style`
-   - `Update`
-   - `Refactor`
-   - `Test`
-   - `Framework`
-   - `Revert`
+   - `feat`
+   - `fix`
+   - `doc`
+   - `style`
+   - `update`
+   - `refactor`
+   - `test`
+   - `framework`
+   - `revert`
+   Use lowercase for the type because this repository's commitlint enforces lowercase conventional-commit types.
 5. The commit message format must be:
 
 ```text
-Type: brief summary of the change
+type: brief summary of the change
 
 - Change detail 1
 - Change detail 2
@@ -35,10 +36,10 @@ Type: brief summary of the change
 
 6. Do not add any AI-generated sign-off.
 7. Before staging or committing, run the CI checks locally:
-   - `rtk npx vue-tsc --noEmit`
-   - `rtk npm run test:run`
-   - `rtk cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`
-   - `rtk cargo test --manifest-path src-tauri/Cargo.toml`
+   - `npx vue-tsc --noEmit`
+   - `npm run test:run`
+   - `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`
+   - `cargo test --manifest-path src-tauri/Cargo.toml`
    Stop immediately if any check fails; do not commit or push a failing change.
 8. In the main repository, run:
    - `git add .`

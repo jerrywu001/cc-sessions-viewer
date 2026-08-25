@@ -1,0 +1,6 @@
+interface:
+  display_name: "Git Push"
+  short_description: "Analyze diff, generate English commit message, push current repo"
+  default_prompt: "Commit and push the current repository changes"
+policy:
+  allow_implicit_invocation: false

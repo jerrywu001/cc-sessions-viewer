@@ -44,9 +44,9 @@ fn job_handle() -> Result<windows_sys::Win32::Foundation::HANDLE, String> {
 #[cfg(target_os = "windows")]
 pub fn register(pid: u32) -> Result<(), String> {
     use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+    use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, IsProcessInJob};
     use windows_sys::Win32::System::Threading::{
-        OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
     };
 
     if pid == 0 {
@@ -54,12 +54,29 @@ pub fn register(pid: u32) -> Result<(), String> {
     }
     let job = job_handle()?;
     unsafe {
-        let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+        let process = OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_QUOTA | PROCESS_TERMINATE,
+            0,
+            pid,
+        );
         if process.is_null() {
             return Err(format!(
                 "OpenProcess({pid}) failed: {}",
                 std::io::Error::last_os_error()
             ));
+        }
+        // ConPTY inherits the parent job on some Windows installations. A process
+        // cannot be assigned to a second non-nested job, but it is still usable and
+        // can be cleaned up with taskkill /T when the PTY closes.
+        let mut in_job = 0;
+        if IsProcessInJob(process, std::ptr::null_mut(), &mut in_job) == 0 {
+            let error = std::io::Error::last_os_error();
+            CloseHandle(process);
+            return Err(format!("IsProcessInJob({pid}) failed: {error}"));
+        }
+        if in_job != 0 {
+            CloseHandle(process);
+            return Ok(());
         }
         let assigned = AssignProcessToJobObject(job, process);
         let error = if assigned == 0 {
@@ -172,7 +189,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn spawned_child_can_join_the_kill_on_close_job() {
+    fn spawned_child_can_join_or_reuse_a_job() {
         use std::os::windows::process::CommandExt;
 
         const CREATE_NO_WINDOW: u32 = 0x08000000;
