@@ -213,6 +213,15 @@ export function createTerminalImeInputDeduper() {
       // 覆盖 xterm 自己的延迟提交，以及 Caps Lock 触发的紧邻第二次提交。
       clearTimer = setTimeout(clear, IME_DEDUP_WINDOW_MS)
     },
+    onCompositionCancel() {
+      if (clearTimer !== undefined) clearTimeout(clearTimer)
+      if (capsTimer !== undefined) clearTimeout(capsTimer)
+      clearTimer = undefined
+      capsTimer = undefined
+      capsBuffer = ''
+      awaitingCompositionInput = false
+      forwardedData = undefined
+    },
     consume(data: string): string | null {
       if (capsTimer !== undefined) {
         capsBuffer += data
@@ -1655,9 +1664,18 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
   activateTabInPane(tab)
   if (tab.agent === 'codex' && !tab.isShell) tab.container.classList.add('terminal-codex-tui')
   term.onWriteParsed(() => {
-    if (!shouldUseStableTerminalCursor(tab.agent, tab.turnState, !!tab.isShell)) return
-    captureStableTerminalCursor(tab, true)
-    syncStableTerminalCursorGeometry(tab)
+    const imeAnchored = tab.container.classList.contains('terminal-ime-anchor')
+    if (shouldUseStableTerminalCursor(tab.agent, tab.turnState, !!tab.isShell)) {
+      if (!imeAnchored) captureStableTerminalCursor(tab, true)
+      syncStableTerminalCursorGeometry(tab)
+      return
+    }
+    // During an idle Codex composition the real cursor may still be moved by
+    // TUI redraws. Keep the IME anchor geometry, but do not replace the
+    // visible terminal cursor outside the working state.
+    if (tab.container.classList.contains('terminal-ime-anchor')) {
+      syncStableTerminalCursorGeometry(tab)
+    }
   })
   term.onRender(() => {
     if (shouldUseStableTerminalCursor(tab.agent, tab.turnState, !!tab.isShell)) {
@@ -1665,15 +1683,53 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
     }
   })
   const imeInputDeduper = createTerminalImeInputDeduper()
+  let imeComposing = false
+  let imeAnchorReleaseTimer: ReturnType<typeof setTimeout> | undefined
   term.textarea?.addEventListener('compositionstart', () => {
+    imeComposing = true
+    if (imeAnchorReleaseTimer !== undefined) {
+      clearTimeout(imeAnchorReleaseTimer)
+      imeAnchorReleaseTimer = undefined
+    }
+    if (_isWindows && tab.agent === 'codex' && !tab.isShell) {
+      captureStableTerminalCursor(tab)
+      syncStableTerminalCursorGeometry(tab)
+      tab.container.classList.add('terminal-ime-anchor')
+    }
     tab.container.classList.add('terminal-ime-composing')
   })
   term.textarea?.addEventListener('compositionend', () => {
+    imeComposing = false
     tab.container.classList.remove('terminal-ime-composing')
+    if (tab.container.classList.contains('terminal-ime-anchor')) {
+      // xterm schedules its final composition data with a zero-delay timer;
+      // release the CSS anchor after that callback so the candidate window
+      // does not jump during the final commit.
+      imeAnchorReleaseTimer = setTimeout(() => {
+        imeAnchorReleaseTimer = undefined
+        tab.container.classList.remove('terminal-ime-anchor')
+      }, 0)
+    }
     imeInputDeduper.onCompositionEnd()
   })
+  term.textarea?.addEventListener('compositioncancel', () => {
+    imeComposing = false
+    tab.container.classList.remove('terminal-ime-composing')
+    if (imeAnchorReleaseTimer !== undefined) {
+      clearTimeout(imeAnchorReleaseTimer)
+      imeAnchorReleaseTimer = undefined
+    }
+    tab.container.classList.remove('terminal-ime-anchor')
+    imeInputDeduper.onCompositionCancel()
+  })
   term.attachCustomKeyEventHandler((ev) => {
-    if (ev.type === 'keydown' && shouldBufferTerminalImeSwitch(ev)) imeInputDeduper.onInputMethodSwitch()
+    if (
+      ev.type === 'keydown'
+      && (imeComposing || ev.isComposing || ev.keyCode === 229)
+      && shouldBufferTerminalImeSwitch(ev)
+    ) {
+      imeInputDeduper.onInputMethodSwitch()
+    }
     if (handleWindowsTerminalSelectionCopy(term, ev)) return false
     if (
       handleWindowsTerminalSelectionDelete(
@@ -1980,6 +2036,7 @@ export async function openShellTab(opts: {
   })
 
   term.textarea?.addEventListener('compositionend', () => imeInputDeduper.onCompositionEnd())
+  term.textarea?.addEventListener('compositioncancel', () => imeInputDeduper.onCompositionCancel())
 
   const writeShellInput = (data: string) => {
     if (tab.ptyId === null || tab.processState !== 'alive') return

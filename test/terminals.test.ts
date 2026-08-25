@@ -183,6 +183,25 @@ describe('terminal IME input', () => {
     }
   })
 
+  it('clears pending IME input when composition is canceled', () => {
+    vi.useFakeTimers()
+    try {
+      const flushed: string[] = []
+      const deduper = createTerminalImeInputDeduper()
+      deduper.setFlushHandler((data) => flushed.push(data))
+      deduper.onInputMethodSwitch()
+      expect(deduper.consume('g')).toBeNull()
+
+      deduper.onCompositionCancel()
+      vi.advanceTimersByTime(120)
+
+      expect(flushed).toEqual([])
+      expect(deduper.consume('grok')).toBe('grok')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('accepts the same text as a new input after the debounce window', () => {
     vi.useFakeTimers()
     try {

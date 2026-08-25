@@ -5155,9 +5155,11 @@ body.is-tab-reordering * {
   color: var(--terminal-inverse-fg) !important;
 }
 /* Windows IME 的候选框锚定 xterm 隐藏 textarea；拼音预编辑文本则在 composition-view。
- * Working 时把两者固定到静态输入光标，避免 Codex 状态刷新带着输入法上下跳动。 */
+ * Working 或 Codex composition 期间把两者固定到静态输入光标，避免 TUI 重绘带着输入法上下跳动。 */
 .terminal-stable-cursor .xterm-helper-textarea,
-.terminal-stable-cursor .composition-view {
+.terminal-stable-cursor .composition-view,
+.terminal-ime-anchor .xterm-helper-textarea,
+.terminal-ime-anchor .composition-view {
   left: var(--terminal-stable-cursor-left) !important;
   top: var(--terminal-stable-cursor-top) !important;
 }
