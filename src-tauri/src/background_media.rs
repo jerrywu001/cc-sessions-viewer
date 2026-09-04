@@ -3,7 +3,6 @@ use std::io::{BufReader, ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
-use tauri::Manager;
 use uuid::Uuid;
 
 const ALLOWED_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "avif", "mp4"];
@@ -24,11 +23,7 @@ pub struct BackgroundMediaExport {
 }
 
 fn media_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let directory = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("background-media");
+    let directory = crate::app_storage::data_dir(app)?.join("background-media");
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     Ok(directory)
 }

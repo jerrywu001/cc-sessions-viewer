@@ -42,16 +42,17 @@ export function chatSupported(agent: Agent): boolean {
 export const CHAT_MODEL_MENU: Record<Agent, ModelMenuConfig> = {
   claude: {
     unavailable: [],
-    // Fable 5 排第一、直接展示（用户要求）。注意它需要 usage credits（CLI 元组带
+    // Fable 5.1 排第一、直接展示。注意 Fable 系列需要 usage credits（CLI 元组带
     // "Requires usage credits"），选中/作为新会话默认都会计费。
     primary: [
-      { value: 'claude-fable-5', label: 'Fable 5' },
+      { value: 'claude-fable-5-1', label: 'Fable 5.1' },
       { value: 'claude-opus-5', label: 'Opus 5' },
       { value: 'claude-sonnet-5', label: 'Sonnet 5' },
       { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
     ],
-    // 旧版本收在 More：上一代 Sonnet 4.6 + 旧 Opus。
+    // 旧版本和上一代 Fable 收在 More。
     more: [
+      { value: 'claude-fable-5', label: 'Fable 5' },
       { value: 'claude-opus-4-8', label: 'Opus 4.8' },
       { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
       { value: 'claude-opus-4-7', label: 'Opus 4.7' },
@@ -140,7 +141,7 @@ function claudeKnownModels(): ModelOption[] {
  * 需要 usage credits（额外计费）的模型 —— CLI 元组里带 "Requires usage credits"。
  * 这类模型可以正常选，但**不作为新会话的自动默认**，避免刚进会话首条消息就烧额度。
  */
-const CREDITS_MODELS = new Set(['claude-fable-5'])
+const CREDITS_MODELS = new Set(['claude-fable-5-1', 'claude-fable-5'])
 
 /** 该模型是否需要 usage credits（额外计费）。 */
 export function requiresCredits(value: string | undefined): boolean {
@@ -149,7 +150,7 @@ export function requiresCredits(value: string | undefined): boolean {
 
 /**
  * 全新会话进来时自动选中的模型 = 主列表里第一个「不烧额度」的模型。
- * Fable 5 虽排在展示第一位，但需 credits，默认跳过，落到 Opus 5；alias 模式下
+ * Fable 虽排在展示第一位，但需 credits，默认跳过，落到 Opus 5；alias 模式下
  * primary[0]（opus 别名）不烧额度，照常返回。都没有则回落 primary[0]。
  */
 export function autoPickModel(agent: Agent, opts: ModelMenuOptions = {}): string | undefined {
@@ -199,7 +200,7 @@ export const CHAT_EFFORT_LEVELS: Record<Agent, string[]> = {
 }
 
 /** Claude 多一档「ultracode」的模型（排在 max 之后）。 */
-const ULTRACODE_MODELS = new Set(['claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7'])
+const ULTRACODE_MODELS = new Set(['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-opus-4-7'])
 
 /** Codex 5.6-luna: base + max */
 const CODEX_MAX_MODELS = new Set(['gpt-5.6-luna'])

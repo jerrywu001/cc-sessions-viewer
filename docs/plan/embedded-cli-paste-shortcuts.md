@@ -4,36 +4,36 @@
 
 以下数据来自 `快捷键整理表.md`，记录的是当前实测行为，不是目标实现方案。范围仅限软件的内嵌 session CLI；内嵌终端贴文字正常。
 
-| 平台 | Agent | 操作 | 当前快捷键 | 备注 |
-| --- | --- | --- | --- | --- |
-| Windows/Linux | codex | 贴图 | `Alt + V` | 应该是 `Ctrl + V` |
-| Windows/Linux | codex | 贴文字 | `Ctrl + V` | 正确 |
-| Windows/Linux | claude code | 贴图 | `Alt + V` | 应该是 `Ctrl + V` |
-| Windows/Linux | claude code | 贴文字 | `Alt + V` | 应该是 `Ctrl + V` |
-| Windows/Linux | agy | 贴图 | `Ctrl + V` / `Alt + V` | 希望统一使用 `Ctrl + V` |
-| Windows/Linux | agy | 贴文字 | `-` | `Ctrl/Alt + V` 都不行，只能右键点击粘贴，需要使用 `Ctrl + V` |
-| Windows/Linux | pi | 贴图 | `Alt + V` | 应该是 `Ctrl + V` |
-| Windows/Linux | pi | 贴文字 | `Alt + V` | 应该是 `Ctrl + V` |
-| Windows/Linux | kimicode | 贴图 | `Alt + V` | 应该是 `Ctrl + V` |
-| Windows/Linux | kimicode | 贴文字 | `-` | `Ctrl/Alt + V` 都不行，只能右键点击粘贴，需要使用 `Ctrl + V` |
-| Windows/Linux | opencode | 贴图 | `Ctrl + V` | 正确 |
-| Windows/Linux | opencode | 贴文字 | `-` | `Ctrl/Alt + V` 都不行，只能右键点击粘贴，需要使用 `Ctrl + V` |
-| Windows/Linux | grokbuild | 贴图 | `Ctrl + V` / `Alt + V` | 希望统一使用 `Ctrl + V` |
-| Windows/Linux | grokbuild | 贴文字 | `Ctrl + V` / `Alt + V` | 希望统一使用 `Ctrl + V` |
-| macOS | codex | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | codex | 贴文字 | `Command + V` | 正确 |
-| macOS | claude code | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | claude code | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | agy | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | agy | 贴文字 | `Command + V` | 正确 |
-| macOS | pi | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | pi | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | kimicode | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | kimicode | 贴文字 | `Command + V` | 正确 |
-| macOS | opencode | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | opencode | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | grokbuild | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | grokbuild | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
+| 平台 | Agent | 操作 | 当前快捷键 | 备注 | 修改后效果 |
+| --- | --- | --- | --- | --- | --- |
+| Windows/Linux | codex | 贴图 | `Alt + V` | 应该是 `Ctrl + V` | |
+| Windows/Linux | codex | 贴文字 | `Ctrl + V` | 正确 | |
+| Windows/Linux | claude code | 贴图 | `Alt + V` | 应该是 `Ctrl + V` | |
+| Windows/Linux | claude code | 贴文字 | `Alt + V` | 应该是 `Ctrl + V` | |
+| Windows/Linux | agy | 贴图 | `Ctrl + V` / `Alt + V` | 希望统一使用 `Ctrl + V` | |
+| Windows/Linux | agy | 贴文字 | `-` | `Ctrl/Alt + V` 都不行，只能右键点击粘贴，需要使用 `Ctrl + V` | |
+| Windows/Linux | pi | 贴图 | `Alt + V` | 应该是 `Ctrl + V` | |
+| Windows/Linux | pi | 贴文字 | `Alt + V` | 应该是 `Ctrl + V` | |
+| Windows/Linux | kimicode | 贴图 | `Alt + V` | 应该是 `Ctrl + V` | |
+| Windows/Linux | kimicode | 贴文字 | `-` | `Ctrl/Alt + V` 都不行，只能右键点击粘贴，需要使用 `Ctrl + V` | |
+| Windows/Linux | opencode | 贴图 | `Ctrl + V` | 正确 | |
+| Windows/Linux | opencode | 贴文字 | `-` | `Ctrl/Alt + V` 都不行，只能右键点击粘贴，需要使用 `Ctrl + V` | |
+| Windows/Linux | grokbuild | 贴图 | `Ctrl + V` / `Alt + V` | 希望统一使用 `Ctrl + V` | |
+| Windows/Linux | grokbuild | 贴文字 | `Ctrl + V` / `Alt + V` | 希望统一使用 `Ctrl + V` | |
+| macOS | codex | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | |
+| macOS | codex | 贴文字 | `Command + V` | 正确 | |
+| macOS | claude code | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | |
+| macOS | claude code | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | |
+| macOS | agy | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | |
+| macOS | agy | 贴文字 | `Command + V` | 正确 | |
+| macOS | pi | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | |
+| macOS | pi | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | |
+| macOS | kimicode | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | |
+| macOS | kimicode | 贴文字 | `Command + V` | 正确 | |
+| macOS | opencode | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | |
+| macOS | opencode | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | |
+| macOS | grokbuild | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | |
+| macOS | grokbuild | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | |
 
 ## 1. 背景与目标
 

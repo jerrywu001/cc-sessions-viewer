@@ -6,7 +6,6 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 #[cfg(target_os = "windows")]
 use std::time::SystemTime;
-use tauri::Manager;
 
 const SPRITESHEET_WIDTH: u32 = 1536;
 const V1_SPRITESHEET_HEIGHT: u32 = 1872;
@@ -120,10 +119,7 @@ fn default_spritesheet_path() -> String {
 
 #[tauri::command]
 pub fn desktop_pet_catalog(app: tauri::AppHandle) -> Result<DesktopPetCatalog, String> {
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?;
+    let app_data = crate::app_storage::data_dir(&app)?;
     let imported_directory = app_data.join("desktop-pets").join("codex");
     fs::create_dir_all(&imported_directory).map_err(|error| error.to_string())?;
 

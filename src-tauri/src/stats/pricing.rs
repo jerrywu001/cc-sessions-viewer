@@ -783,6 +783,7 @@ pub(crate) fn parse_models_dev_json(body: &str) -> Option<HashMap<String, ModelC
     //       https://opencode.ai/docs/zh-cn/zen/#定价
     const OPENCODE_MODELS: &[&str] = &[
         "big-pickle",
+        "deepseek-v4-flash-vision-exp",
         "deepseek-v4-flash",
         "deepseek-v4-flash-free",
         "deepseek-v4-pro",
@@ -791,8 +792,19 @@ pub(crate) fn parse_models_dev_json(body: &str) -> Option<HashMap<String, ModelC
         "glm-5.1",
         "glm-5.2",
         "glm-5.3",
+        "glm-5.3-flash",
         "glm-5-free",
         "gpt-5.2-codex",
+        "gpt-5.3-codex",
+        "gpt-5.3-codex-spark",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+        "gpt-5.4-pro",
+        "gpt-5.5",
+        "gpt-5.5-pro",
+        "gpt-5-codex",
+        "gpt-6-astra",
         "grok-build-0.1",
         "hy3-free",
         "hy3-preview-free",
@@ -801,14 +813,18 @@ pub(crate) fn parse_models_dev_json(body: &str) -> Option<HashMap<String, ModelC
         "kimi-k2.6",
         "kimi-k2.7-code",
         "kimi-k3",
+        "kimi-k2",
+        "kimi-k2-thinking",
         "laguna-s-2.1-free",
         "ling-2.6-flash-free",
         "ling-3.0-flash-free",
+        "ling-3.0-flash-fin-free",
         "ling-3.0-tiny-free",
         "longcat-2.0-free",
         "mimo-v2.5",
         "mimo-v2.5-free",
         "mimo-v2.5-pro",
+        "mimo-v2-flash-free",
         "mimo-v2-omni-free",
         "mimo-v2-pro-free",
         "minimax-m2.5",
@@ -816,12 +832,16 @@ pub(crate) fn parse_models_dev_json(body: &str) -> Option<HashMap<String, ModelC
         "minimax-m2.7",
         "minimax-m3",
         "minimax-m3-free",
+        "minimax-m2.1",
+        "minimax-m2.1-free",
         "muse-spark-1.2",
         "muse-spark-1.2-contributor-free",
+        "muse-spark-1.3-contributor-free",
         "nemotron-3.5-lightning-free",
         "nemotron-3-super-free",
         "nemotron-3-ultra-free",
         "north-mini-code-free",
+        "qwen3-coder",
         "qwen3.5-plus",
         "qwen3.6-plus",
         "qwen3.6-plus-free",
@@ -884,6 +904,20 @@ pub(crate) fn parse_models_dev_json(body: &str) -> Option<HashMap<String, ModelC
             if let Some(costs) = parse_models_dev_entry(entry) {
                 out.insert(id.to_string(), costs);
             }
+        } else if *id == "gpt-6-astra" {
+            // OpenCode's published standard-context price; prefer live upstream
+            // data above when it becomes available. The separate 1M-context tier
+            // is not representable in the current single-rate UI.
+            out.insert(
+                id.to_string(),
+                ModelCosts {
+                    input: 10.0e-6,
+                    output: 50.0e-6,
+                    cache_write: 12.5e-6,
+                    cache_read: 1.0e-6,
+                    context: 1_000_000,
+                },
+            );
         }
     }
     if out.is_empty() {
@@ -1640,6 +1674,26 @@ mod tests {
                     "cost": { "input": 1.75, "output": 14 },
                     "limit": { "context": 400000 }
                 },
+                "gpt-5.3-codex": {
+                    "cost": { "input": 1.75, "output": 14 },
+                    "limit": { "context": 400000 }
+                },
+                "gpt-6-astra": {
+                    "cost": { "input": 2, "output": 10 },
+                    "limit": { "context": 1000000 }
+                },
+                "glm-5.3-flash": {
+                    "cost": { "input": 0.5, "output": 2 },
+                    "limit": { "context": 1000000 }
+                },
+                "qwen3-coder": {
+                    "cost": { "input": 0.45, "output": 1.8 },
+                    "limit": { "context": 262144 }
+                },
+                "kimi-k2-thinking": {
+                    "cost": { "input": 0.4, "output": 2.5 },
+                    "limit": { "context": 262144 }
+                },
                 "gemini-3.1-pro": {
                     "cost": { "input": 2, "output": 12 },
                     "limit": { "context": 1048576 }
@@ -1661,7 +1715,24 @@ mod tests {
         assert!((codex.input - 1.75e-6).abs() < 1e-15);
         assert!((codex.output - 14e-6).abs() < 1e-15);
 
+        assert!(table.contains_key("gpt-5.3-codex"));
+        assert!(table.contains_key("gpt-6-astra"));
+        assert!(table.contains_key("glm-5.3-flash"));
+        assert!(table.contains_key("qwen3-coder"));
+        assert!(table.contains_key("kimi-k2-thinking"));
+
         assert!(table.contains_key("gemini-3.1-pro"));
+    }
+
+    #[test]
+    fn includes_gpt6_astra_standard_context_fallback_price() {
+        let table = parse_models_dev_json(r#"{"opencode":{"models":{}}}"#).expect("parsed");
+        let astra = table.get("gpt-6-astra").expect("gpt-6-astra");
+        assert_eq!(astra.input, 10.0e-6);
+        assert_eq!(astra.output, 50.0e-6);
+        assert_eq!(astra.cache_read, 1.0e-6);
+        assert_eq!(astra.cache_write, 12.5e-6);
+        assert_eq!(astra.context, 1_000_000);
     }
 
     #[test]

@@ -52,6 +52,7 @@ struct KimiSessionRecord {
     main_wire_path: PathBuf,
     id: String,
     cwd: String,
+    cwd_key: String,
     title: String,
     created: Option<String>,
     modified: u64,
@@ -267,6 +268,55 @@ fn session_files_mtime(session_dir: &Path) -> u64 {
         maximum = maximum.max(mtime_millis(&agent_dir.path().join("wire.jsonl")));
     }
     maximum
+}
+
+fn lexical_normalized_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = normalized.pop();
+            }
+            Component::Normal(segment) => normalized.push(segment),
+        }
+    }
+    normalized
+}
+
+fn normalized_path_text(path: &Path) -> String {
+    let mut value = path.to_string_lossy().replace('\\', "/");
+    while value.len() > 1 && value.ends_with('/') {
+        value.pop();
+    }
+    #[cfg(windows)]
+    {
+        value.make_ascii_lowercase();
+        if value.len() == 2 && value.as_bytes()[1] == b':' {
+            value.push('/');
+        }
+    }
+    value
+}
+
+/// Kimi may persist the same workspace with different separators, trailing
+/// slashes, relative segments, or (on Windows) path casing. Use a stable key
+/// for grouping and lookups while retaining `cwd` for display and metadata.
+fn kimi_project_key(value: &str) -> String {
+    let path = Path::new(value.trim());
+    let normalized = if path.is_absolute() {
+        path.canonicalize()
+            .unwrap_or_else(|_| lexical_normalized_path(path))
+    } else {
+        lexical_normalized_path(path)
+    };
+    normalized_path_text(&normalized)
+}
+
+fn session_dir_key(path: &Path) -> String {
+    normalized_path_text(path)
 }
 
 fn is_regular_non_symlink(path: &Path) -> bool {
@@ -1033,6 +1083,7 @@ fn record_from_session_dir(root: &Path, session_dir: &Path) -> Option<KimiSessio
         session_dir,
         main_wire_path,
         id,
+        cwd_key: kimi_project_key(&cwd),
         cwd,
         title,
     })
@@ -1054,7 +1105,7 @@ fn discover_session_records(root: &Path) -> Result<Vec<KimiSessionRecord>, Strin
         let Some(session_dir) = valid_session_dir(root, &candidate) else {
             continue;
         };
-        if !seen.insert(session_dir.clone()) {
+        if !seen.insert(session_dir_key(&session_dir)) {
             continue;
         }
         if let Some(record) = record_from_session_dir(root, &session_dir) {
@@ -1076,11 +1127,16 @@ fn find_main_wire_path_at(root: &Path, session_id: &str, cwd: Option<&str>) -> O
     if session_id.is_empty() {
         return None;
     }
-    let cwd = cwd.map(str::trim).filter(|cwd| !cwd.is_empty());
+    let cwd = cwd
+        .map(str::trim)
+        .filter(|cwd| !cwd.is_empty())
+        .map(kimi_project_key);
     discover_session_records(root)
         .ok()?
         .into_iter()
-        .find(|record| record.id == session_id && cwd.is_none_or(|cwd| record.cwd == cwd))
+        .find(|record| {
+            record.id == session_id && cwd.as_ref().is_none_or(|cwd| &record.cwd_key == cwd)
+        })
         .map(|record| record.main_wire_path)
 }
 
@@ -1875,7 +1931,7 @@ impl SessionSource for KimiSource {
         let mut projects: HashMap<String, ProjectInfo> = HashMap::new();
         for record in discover_session_records(&kimi_home())? {
             let project = projects
-                .entry(record.cwd.clone())
+                .entry(record.cwd_key.clone())
                 .or_insert_with(|| ProjectInfo {
                     dir_name: record.cwd.clone(),
                     display_path: record.cwd.clone(),
@@ -1902,9 +1958,10 @@ impl SessionSource for KimiSource {
         _include_codex_internal: bool,
         _include_codex_archived: bool,
     ) -> Result<SessionPage, String> {
+        let project_key = kimi_project_key(project_key);
         let mut records: Vec<KimiSessionRecord> = discover_session_records(&kimi_home())?
             .into_iter()
-            .filter(|record| record.cwd == project_key)
+            .filter(|record| record.cwd_key == project_key)
             .collect();
         records.sort_by_key(|record| std::cmp::Reverse(record.modified));
         let total = records.len();
@@ -2184,6 +2241,21 @@ mod tests {
         assert_eq!(meta.path, wire.canonicalize().unwrap().to_string_lossy());
         assert_eq!(meta.message_count, 2);
         assert!(meta.size > 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn normalizes_cwd_aliases_to_one_project_key() {
+        let root = scratch("cwd-key");
+        let project = root.join("project");
+        fs::create_dir_all(&project).unwrap();
+        let canonical = project.to_string_lossy().to_string();
+        let dotted = format!("{canonical}/./");
+        assert_eq!(kimi_project_key(&canonical), kimi_project_key(&dotted));
+        assert_eq!(
+            kimi_project_key(&canonical),
+            kimi_project_key(&format!("{canonical}/"))
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -3167,6 +3239,10 @@ mod tests {
         );
         assert_eq!(
             find_main_wire_path_at(&root, "hook-id", Some("/tmp/project")),
+            Some(wire.canonicalize().unwrap())
+        );
+        assert_eq!(
+            find_main_wire_path_at(&root, "hook-id", Some("/tmp/./project/")),
             Some(wire.canonicalize().unwrap())
         );
         assert_eq!(

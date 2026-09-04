@@ -470,6 +470,45 @@ button {
   background: color-mix(in srgb, var(--accent-soft) 42%, transparent);
 }
 
+/* 弹出菜单在壁纸模式下保留一层阅读底色，同时透出壁纸，避免菜单像不透明色块。 */
+:root.has-custom-background .mm-menu,
+:root.has-custom-background .mm-submenu,
+:root.has-custom-background .cm-menu,
+:root.has-custom-background .cc-plus-menu,
+:root.has-custom-background .cc-slash,
+:root.has-custom-background .cc-mention,
+:root.has-custom-background .es-pop,
+:root.has-custom-background .ct-scope-menu,
+:root.has-custom-background .new-menu,
+:root.has-custom-background .ctx-menu,
+:root.has-custom-background .git-branch-menu,
+:root.has-custom-background .set-dropdown-menu,
+:root.has-custom-background .export-menu,
+:root.has-custom-background .locate-menu,
+:root.has-custom-background .topbar-more-menu,
+:root.has-custom-background .window-menu-panel,
+:root.has-custom-background .window-menu-subpanel {
+  background: color-mix(in srgb, var(--surface) 78%, transparent) !important;
+}
+/* 命令与文件选择面板内容密度高，稍微提高底色以保证长列表可读性。 */
+:root.has-custom-background .cc-slash,
+:root.has-custom-background .cc-mention {
+  background: color-mix(in srgb, var(--surface) 90%, transparent) !important;
+}
+:root.has-custom-background .mm-item:hover:not(.disabled),
+:root.has-custom-background .mm-item.is-open,
+:root.has-custom-background .cm-item:hover:not(.off),
+:root.has-custom-background .cc-plus-item:hover,
+:root.has-custom-background .cc-slash-item.active,
+:root.has-custom-background .cc-mention-item.active,
+:root.has-custom-background .new-menu-item:hover,
+:root.has-custom-background .ctx-item:hover:not(:disabled),
+:root.has-custom-background .git-branch-menu-row:hover,
+:root.has-custom-background .set-dropdown-item:hover,
+:root.has-custom-background .window-menu-item:hover {
+  background: color-mix(in srgb, var(--surface-hover) 62%, transparent) !important;
+}
+
 /* 代码块（含 Shiki 的 !important 覆盖）也透出少量壁纸，同时保留足够的代码阅读底色。 */
 :root.has-custom-background .code-block,
 :root.has-custom-background .code-block.shiki,
@@ -5490,6 +5529,16 @@ body.is-tab-reordering * {
 }
 .set-row-control {
   flex-shrink: 0;
+}
+.set-data-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+.set-icon-btn {
+  width: 32px;
+  height: 30px;
+  padding: 0;
+  justify-content: center;
 }
 .set-row.disabled {
   cursor: not-allowed;

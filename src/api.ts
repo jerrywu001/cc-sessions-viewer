@@ -75,6 +75,11 @@ export const importBackgroundMedia = (sourcePath: string) =>
 export const deleteBackgroundMedia = (id: string) =>
   invoke<void>('delete_background_media', { id })
 
+export const dataDirectory = () => invoke<string>('data_directory')
+export const changeDataDirectory = (path: string) =>
+  invoke<string>('change_data_directory', { newPath: path })
+export const resetDataDirectory = () => invoke<string>('reset_data_directory')
+
 export const addBookmark = (agent: Agent, path: string) =>
   invoke<void>('add_bookmark', { agent, path })
 

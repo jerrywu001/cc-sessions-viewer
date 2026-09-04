@@ -15,6 +15,7 @@
 mod agent_chat;
 mod agent_command;
 pub mod agents;
+mod app_storage;
 mod background_media;
 mod bookmarks;
 mod claude_config;
@@ -2489,6 +2490,9 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             list_projects,
+            app_storage::data_directory,
+            app_storage::change_data_directory,
+            app_storage::reset_data_directory,
             list_sessions,
             read_session,
             session_tree,
