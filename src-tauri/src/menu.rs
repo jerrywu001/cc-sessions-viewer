@@ -118,7 +118,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
         .item(&export)
         .build()?;
 
-    // ---------- Edit（Tauri 默认填 Cut/Copy/Paste/Select All） ----------
+    // ---------- Edit ----------
     let edit_menu = SubmenuBuilder::new(app, "Edit")
         .item(&PredefinedMenuItem::undo(app, None)?)
         .item(&PredefinedMenuItem::redo(app, None)?)

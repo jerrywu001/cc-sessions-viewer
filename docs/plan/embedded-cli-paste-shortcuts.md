@@ -4,36 +4,36 @@
 
 以下数据来自 `快捷键整理表.md`，记录的是当前实测行为，不是目标实现方案。范围仅限软件的内嵌 session CLI；内嵌终端贴文字正常。
 
-| 平台 | Agent | 操作 | 当前快捷键 | 备注 |
-| --- | --- | --- | --- | --- |
-| Windows/Linux | codex | 贴图 | `Alt + V` | 应该是 `Ctrl + V` |
-| Windows/Linux | codex | 贴文字 | `Ctrl + V` | 正确 |
-| Windows/Linux | claude code | 贴图 | `Alt + V` | 应该是 `Ctrl + V` |
-| Windows/Linux | claude code | 贴文字 | `Alt + V` | 应该是 `Ctrl + V` |
-| Windows/Linux | agy | 贴图 | `Ctrl + V` / `Alt + V` | 希望统一使用 `Ctrl + V` |
-| Windows/Linux | agy | 贴文字 | `-` | `Ctrl/Alt + V` 都不行，只能右键点击粘贴，需要使用 `Ctrl + V` |
-| Windows/Linux | pi | 贴图 | `Alt + V` | 应该是 `Ctrl + V` |
-| Windows/Linux | pi | 贴文字 | `Alt + V` | 应该是 `Ctrl + V` |
-| Windows/Linux | kimicode | 贴图 | `Alt + V` | 应该是 `Ctrl + V` |
-| Windows/Linux | kimicode | 贴文字 | `-` | `Ctrl/Alt + V` 都不行，只能右键点击粘贴，需要使用 `Ctrl + V` |
-| Windows/Linux | opencode | 贴图 | `Ctrl + V` | 正确 |
-| Windows/Linux | opencode | 贴文字 | `-` | `Ctrl/Alt + V` 都不行，只能右键点击粘贴，需要使用 `Ctrl + V` |
-| Windows/Linux | grokbuild | 贴图 | `Ctrl + V` / `Alt + V` | 希望统一使用 `Ctrl + V` |
-| Windows/Linux | grokbuild | 贴文字 | `Ctrl + V` / `Alt + V` | 希望统一使用 `Ctrl + V` |
-| macOS | codex | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | codex | 贴文字 | `Command + V` | 正确 |
-| macOS | claude code | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | claude code | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | agy | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | agy | 贴文字 | `Command + V` | 正确 |
-| macOS | pi | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | pi | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | kimicode | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | kimicode | 贴文字 | `Command + V` | 正确 |
-| macOS | opencode | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | opencode | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | grokbuild | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
-| macOS | grokbuild | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` |
+| 平台 | Agent | 操作 | 当前快捷键 | 备注 | 修改后效果 |
+| --- | --- | --- | --- | --- | --- |
+| Windows/Linux | codex | 贴图 | `Alt + V` | 应该是 `Ctrl + V` | 都可以 |
+| Windows/Linux | codex | 贴文字 | `Ctrl + V` | 正确 | Ctrl + v 正常 |
+| Windows/Linux | claude code | 贴图 | `Alt + V` | 应该是 `Ctrl + V` | 都可以 |
+| Windows/Linux | claude code | 贴文字 | `Alt + V` | 应该是 `Ctrl + V` | 都可以 |
+| Windows/Linux | agy | 贴图 | `Ctrl + V` / `Alt + V` | 希望统一使用 `Ctrl + V` | 都可以，Ctrl + v贴出来是路径（含" clipboard-"）, Alt + v贴出来是 附件形式 |
+| Windows/Linux | agy | 贴文字 | `-` | `Ctrl/Alt + V` 都不行，只能右键点击粘贴，需要使用 `Ctrl + V` | Ctrl + v 正常 |
+| Windows/Linux | pi | 贴图 | `Alt + V` | 应该是 `Ctrl + V` | 都可以，贴出来是路径，都含“clipboard-” |
+| Windows/Linux | pi | 贴文字 | `Alt + V` | 应该是 `Ctrl + V` | 都可以 |
+| Windows/Linux | kimicode | 贴图 | `Alt + V` | 应该是 `Ctrl + V` | 都可以，Ctrl + v贴出来是路径（含" clipboard-"）, Alt + v贴出来是 [image #1 (232×172)] |
+| Windows/Linux | kimicode | 贴文字 | `-` | `Ctrl/Alt + V` 都不行，只能右键点击粘贴，需要使用 `Ctrl + V` | Ctrl + v 正常 |
+| Windows/Linux | opencode | 贴图 | `Ctrl + V` | 正确 | Ctrl + v 正常 |
+| Windows/Linux | opencode | 贴文字 | `-` | `Ctrl/Alt + V` 都不行，只能右键点击粘贴，需要使用 `Ctrl + V` | Ctrl + v 正常 |
+| Windows/Linux | grokbuild | 贴图 | `Ctrl + V` / `Alt + V` | 希望统一使用 `Ctrl + V` | 都可以，Ctrl + v贴出来是路径（含" clipboard-"）, Alt + v贴出来是 [Image #1] |
+| Windows/Linux | grokbuild | 贴文字 | `Ctrl + V` / `Alt + V` | 希望统一使用 `Ctrl + V` | 都可以 |
+| macOS | codex | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | Command + V/Control + V 都出一个paste原生按钮，但是只有Control + V可以粘贴图片。 |
+| macOS | codex | 贴文字 | `Command + V` | 正确 | Command + V 正常 |
+| macOS | claude code | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | Command + V/Control + V 都出一个paste原生按钮，但是只有Control + V可以粘贴图片。 |
+| macOS | claude code | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | Command + V 正常 |
+| macOS | agy | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | Command + V/Control + V 都出一个paste原生按钮，但是只有Control + V可以粘贴图片。 |
+| macOS | agy | 贴文字 | `Command + V` | 正确 | Command + V 正常 |
+| macOS | pi | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | Command + V/Control + V 都出一个paste原生按钮，但是只有Control + V可以粘贴图片。 |
+| macOS | pi | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | Command + V 正常 |
+| macOS | kimicode | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | Command + V/Control + V 都出一个paste原生按钮，但是只有Control + V可以粘贴图片。 |
+| macOS | kimicode | 贴文字 | `Command + V` | 正确 | Command + V 正常 |
+| macOS | opencode | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | Command + V/Control + V 都出一个paste原生按钮，但是只有Control + V可以粘贴图片。 |
+| macOS | opencode | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | Command + V 正常 |
+| macOS | grokbuild | 贴图 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | Command + V/Control + V 都出一个paste原生按钮，但是只有Control + V可以粘贴图片。 |
+| macOS | grokbuild | 贴文字 | `Command + V` / `Control + V` | 希望统一使用 `Command + V` | Command + V 正常 |
 
 ## 1. 背景与目标
 
@@ -53,6 +53,12 @@
 | macOS | `Command + V` | 有文字 | 将文字写入当前内嵌 CLI 输入 |
 
 `Alt + V` 不再作为正式入口。没有可识别图片或文字时，不应吞掉快捷键，应保留原生行为。
+
+### 目标边界补充
+
+- 本期目标是**统一快捷键入口**，不是统一各 Agent 的图片粘贴表现。部分 Agent 在 `Ctrl + V` 下把剪贴板图片转换成 `clipboard-xxx.png` 路径并写入 CLI，这是该 Agent 的默认行为，应保持现状，不强行改成附件卡片或其它格式。
+- macOS 的图片快捷键（`Control + V`）不能再出现 WebView / xterm 的原生 Paste 小按钮。识别到图片后必须由 Viewer 直接完成现有图片粘贴流程并写入 CLI；只有普通文字的 `Command + V` 才走文字粘贴入口。
+- 因此验收时分别检查“快捷键是否统一”和“Agent 原生图片呈现形式是否保持”，不要把路径形式本身判定为失败。
 
 ## 2. 范围与非目标
 
@@ -179,14 +185,14 @@ ClipboardPayload = { kind: Image | Text | Empty, mime?, bytes?, text? }
 3. 删除或停用 `Alt + V` 作为正式入口，避免旧 handler 与新 handler 双重触发。
 4. 对组合键判断使用 `event.ctrlKey`、`event.metaKey`、`event.altKey`、`event.key` 的规范化结果，不依赖浏览器 `event.code` 在不同键盘布局下的偶然值。
 5. 明确 macOS `Control + V` 和 `Command + V` 不可互相降级为同一意图。
-6. 对快捷键事件调用 `preventDefault`/`stopPropagation` 的范围做最小化，只在确认是内嵌 CLI 且存在可处理内容后阻止默认行为；若设计需要先读剪贴板再决定，则使用一次性异步处理锁，避免默认行为和自定义行为同时执行。
+6. 对快捷键事件调用 `preventDefault`/`stopPropagation` 的范围做最小化，只在确认是内嵌 CLI 且存在可处理内容后阻止默认行为；若设计需要先读剪贴板再决定，则使用一次性异步处理锁，避免默认行为和自定义行为同时执行。尤其是 macOS 图片粘贴，必须阻止原生 Paste 小按钮对应的默认粘贴事件。
 7. 兼容窗口级监听、组件级监听和 PTY webview 事件时，确保只保留一个最终消费者。
 
 完成标准：同一 `Ctrl/Command/Control + V` 不会产生两次写入、图片和文字不会同时执行，普通输入区域不受影响。
 
 ### 阶段 3：图片与文字通道接入
 
-1. 复用当前图片粘贴的 MIME、临时文件、上传或 CLI 参数转换流程，不另造 Agent 专用图片协议。
+1. 复用当前图片粘贴的 MIME、临时文件、上传或 CLI 参数转换流程，不另造 Agent 专用图片协议；允许不同 Agent 继续保留各自原生的路径形式、附件形式或其它图片呈现差异。
 2. 将文字写入统一收敛到当前内嵌 CLI 的输入通道，优先复用已经能被右键粘贴成功的底层写入能力。
 3. 验证 PTY 写入的编码、换行、控制字符转义和长文本分片策略。
 4. 图片处理失败时显示现有失败样式，不能静默变成文字粘贴；文字写入失败时保留剪贴板内容，允许用户重试。
@@ -202,7 +208,7 @@ ClipboardPayload = { kind: Image | Text | Empty, mime?, bytes?, text? }
 - `Alt + V` 不再产生正式粘贴意图。
 - 剪贴板分类：PNG/JPEG/WebP 图片、纯文本、HTML+纯文本、空剪贴板、未知 MIME。
 - 图片优先级：同时含图片和文字时，Windows/Linux `Ctrl + V` 走图片。
-- macOS 意图隔离：`Control + V` 不贴文字，`Command + V` 不把图片转文字。
+- macOS 意图隔离：`Control + V` 不贴文字且不弹原生 Paste 小按钮，`Command + V` 不把图片转文字。
 - 文字保留换行、Unicode、长文本和空字符串边界。
 - 事件去重、异步失败释放锁、tab 销毁后不再写 PTY。
 - 非内嵌 CLI surface 不拦截。
@@ -210,7 +216,7 @@ ClipboardPayload = { kind: Image | Text | Empty, mime?, bytes?, text? }
 #### 组件/集成测试
 
 - 伪造内嵌 CLI 输入上下文，验证事件捕获到图片处理或 PTY 写入的完整链路。
-- 验证右键粘贴通道和统一快捷键最终写入相同输入缓冲。
+- 验证右键粘贴通道和统一快捷键最终写入相同输入缓冲；图片最终呈现形式允许保持 Agent 原生差异，不要求所有 Agent 都显示为附件。
 - 验证图片处理完成后输入框状态、发送按钮和附件展示不重复。
 - 验证 CLI 未启动、退出和重启期间的回退行为。
 - 验证切换 Agent、切换 tab、切换会话后不会把粘贴内容写入旧 tab。
@@ -234,6 +240,7 @@ ClipboardPayload = { kind: Image | Text | Empty, mime?, bytes?, text? }
 - 原生终端可用的文字粘贴快捷键保持可用。
 - Viewer 修复不能改变原生终端行为。
 - 内嵌 CLI 右键粘贴和统一快捷键写入结果一致。
+- macOS 内嵌 CLI 图片快捷键直接完成粘贴，不显示 WebView / xterm 原生 Paste 小按钮。
 
 ### 阶段 5：回归、可观测性与文档
 
@@ -275,3 +282,15 @@ ClipboardPayload = { kind: Image | Text | Empty, mime?, bytes?, text? }
 先完成阶段 0，确认当前共享入口和右键成功所对应的底层写入路径；再按阶段 1–3 实现统一控制器和平台映射。阶段 4 的自动化测试应与实现同步补齐，最后用阶段 5 的三平台矩阵验收。
 
 不建议先按 Agent 逐个修 `Alt + V` 或 `Ctrl + V`，因为表格已证明同一个 Agent 的图片和文字路径也不一致，这样会继续保留重复监听和平台差异。
+
+## 9. 当前实现进度
+
+已完成第一阶段和跨平台统一入口的基础实现：
+
+- 新增共享 `embeddedCliPaste` 控制器，按平台修饰键返回 `image`、`text` 或 `unified` 意图。
+- Windows/Linux 内嵌 session CLI 的 `Ctrl+V`、macOS 的 `Control+V` / `Command+V` 统一走共享控制器；不再按 Agent 名称分支。
+- 图片读取使用结构化 `navigator.clipboard.read()`，继续复用 `save_clipboard_image` 临时文件流程。
+- shell tab 未接入该拦截器，保留原有粘贴行为。
+- 增加平台快捷键、图片优先、文本回退和空剪贴板单元测试。
+
+待完成：剪贴板权限失败提示、跨平台人工矩阵，以及切换 tab/PTY 生命周期的集成测试。异步读取前无法判断剪贴板内容，因此空剪贴板时快捷键仍可能被消费，这是浏览器/WebView 事件模型的已知限制。

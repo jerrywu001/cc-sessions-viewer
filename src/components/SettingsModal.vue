@@ -63,6 +63,7 @@ import {
 import {
   IconClose,
   IconRefresh,
+  IconPencil,
   IconExternalLink,
   IconCheck,
   IconTrash,
@@ -140,6 +141,7 @@ const navItems = [
 ] as const
 
 const isMac = /Mac/i.test(navigator.platform)
+const isWindows = /Win/i.test(navigator.platform)
 const mod = isMac ? '⌘' : 'Ctrl'
 const shift = isMac ? '⇧' : 'Shift'
 const opt = isMac ? '⌥' : 'Alt'
@@ -219,6 +221,63 @@ watch(activeTab, () => {
 })
 
 const version = ref('—')
+const dataDirectory = ref('')
+const dataDirectoryError = ref('')
+const changingDataDirectory = ref(false)
+async function loadDataDirectory() {
+  try { dataDirectory.value = await api.dataDirectory(); dataDirectoryError.value = '' }
+  catch (error) { dataDirectoryError.value = String(error) }
+}
+async function chooseDataDirectory() {
+  const selected = await openDialog({ directory: true, multiple: false })
+  const destination = typeof selected === 'string' ? selected : selected?.[0]
+  if (!destination) return
+  changingDataDirectory.value = true
+  dataDirectoryError.value = ''
+  try {
+    const previousDirectory = dataDirectory.value
+    dataDirectory.value = await api.changeDataDirectory(destination)
+    remapBackgroundPath(previousDirectory, dataDirectory.value)
+    await refreshBackgroundMedia()
+    emit('notify', t('settings.dataDirectory.success'))
+  } catch (error) {
+    dataDirectoryError.value = String(error)
+    emit('notify', t('settings.dataDirectory.fail', { e: String(error) }), true)
+  } finally { changingDataDirectory.value = false }
+}
+async function resetDataDirectory() {
+  changingDataDirectory.value = true
+  dataDirectoryError.value = ''
+  try {
+    const previousDirectory = dataDirectory.value
+    dataDirectory.value = await api.resetDataDirectory()
+    remapBackgroundPath(previousDirectory, dataDirectory.value)
+    await refreshBackgroundMedia()
+    emit('notify', t('settings.dataDirectory.resetSuccess'))
+  } catch (error) {
+    dataDirectoryError.value = String(error)
+    emit('notify', t('settings.dataDirectory.fail', { e: String(error) }), true)
+  } finally { changingDataDirectory.value = false }
+}
+function remapBackgroundPath(previousDirectory: string, nextDirectory: string) {
+  const current = backgroundImagePath.value
+  if (!current || !previousDirectory || !nextDirectory) return
+  const normalize = (value: string) => value.replace(/\\/g, '/').replace(/\/$/, '')
+  const oldRoot = normalize(previousDirectory)
+  const currentPath = normalize(current)
+  const comparableRoot = isWindows ? oldRoot.toLowerCase() : oldRoot
+  const comparablePath = isWindows ? currentPath.toLowerCase() : currentPath
+  if (comparablePath === comparableRoot) {
+    setBackgroundImagePath(nextDirectory)
+  } else if (comparablePath.startsWith(`${comparableRoot}/`)) {
+    setBackgroundImagePath(`${normalize(nextDirectory)}${currentPath.slice(oldRoot.length)}`)
+  }
+}
+async function openDataDirectory() {
+  if (!dataDirectory.value) return
+  try { await api.openPathExternal(dataDirectory.value) }
+  catch (error) { emit('notify', String(error), true) }
+}
 const updateMsg = ref('')
 const checking = ref(false)
 const installingTurnHooks = ref(false)
@@ -442,6 +501,7 @@ onUnmounted(() => {
 })
 
 onMounted(async () => {
+  await loadDataDirectory()
   try {
     version.value = await api.appVersion()
   } catch {
@@ -716,6 +776,24 @@ async function refreshTurnHooks() {
         <template v-if="activeTab === 'general'">
           <!-- 通用：语言及应用级偏好。外观设置独立放到 Appearance 页面。 -->
           <div class="set-group">
+            <div class="set-row">
+              <div class="set-row-text">
+                <div class="set-row-title">{{ t('settings.dataDirectory.title') }}</div>
+                <p class="set-row-desc">{{ dataDirectory || t('settings.dataDirectory.unavailable') }}</p>
+                <p v-if="dataDirectoryError" class="set-row-desc error">{{ dataDirectoryError }}</p>
+              </div>
+              <div class="set-row-control set-data-actions">
+                <button class="btn set-icon-btn" :disabled="!dataDirectory || changingDataDirectory" v-tooltip="t('settings.dataDirectory.open')" :aria-label="t('settings.dataDirectory.open')" @click="openDataDirectory">
+                  <IconFolder />
+                </button>
+                <button class="btn set-icon-btn" :disabled="changingDataDirectory" v-tooltip="t('settings.dataDirectory.change')" :aria-label="t('settings.dataDirectory.change')" @click="chooseDataDirectory">
+                  <IconPencil />
+                </button>
+                <button class="btn set-icon-btn" :disabled="changingDataDirectory" v-tooltip="t('settings.dataDirectory.reset')" :aria-label="t('settings.dataDirectory.reset')" @click="resetDataDirectory">
+                  <IconRefresh />
+                </button>
+              </div>
+            </div>
             <div class="set-row">
               <div class="set-row-text">
                 <div class="set-row-title">{{ t('settings.section.lang') }}</div>

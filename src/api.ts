@@ -62,6 +62,8 @@ export const setTitlebarTheme = (theme: 'dark' | 'light' | null) =>
 export const windowHideToTray = () => invoke<void>('window_hide_to_tray')
 export const windowExitApp = () => invoke<void>('window_exit_app')
 export const cleanupRuntimeChildren = () => invoke<void>('cleanup_runtime_children')
+/** 刷新 webview 时只清理遗留的内嵌终端，不影响可重连的 GUI Chat。 */
+export const cleanupPtyChildren = () => invoke<void>('cleanup_pty_children')
 /** 清除实时模型价格缓存，并在后端后台重新拉取最新价格。 */
 export const resetPricingCache = () => invoke<void>('reset_pricing_cache')
 
@@ -74,6 +76,11 @@ export const importBackgroundMedia = (sourcePath: string) =>
   invoke<BackgroundMedia>('import_background_media', { sourcePath })
 export const deleteBackgroundMedia = (id: string) =>
   invoke<void>('delete_background_media', { id })
+
+export const dataDirectory = () => invoke<string>('data_directory')
+export const changeDataDirectory = (path: string) =>
+  invoke<string>('change_data_directory', { newPath: path })
+export const resetDataDirectory = () => invoke<string>('reset_data_directory')
 
 export const addBookmark = (agent: Agent, path: string) =>
   invoke<void>('add_bookmark', { agent, path })
@@ -504,6 +511,14 @@ export const readFileBase64 = (path: string) =>
 
 export const saveClipboardImage = (data: string, mediaType: string) =>
   invoke<string>('save_clipboard_image', { data, mediaType })
+
+/** Read and normalize a macOS NSPasteboard image (including screenshot TIFFs). */
+export const saveMacosClipboardImage = () =>
+  invoke<string | null>('save_macos_clipboard_image')
+
+/** Read text from the native macOS pasteboard without WebView clipboard permissions. */
+export const readMacosClipboardText = () =>
+  invoke<string | null>('read_macos_clipboard_text')
 
 /** 判断本地路径是否为目录（拖拽到输入框的附件可能是文件或文件夹，据此选图标 + 提示）。 */
 export const pathIsDir = (path: string) => invoke<boolean>('path_is_dir', { path })

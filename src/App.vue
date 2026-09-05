@@ -3482,7 +3482,6 @@ const menuHandlers: MenuHandlers = {
   'edit:redo': () => runEditCommand('redo'),
   'edit:cut': () => runEditCommand('cut'),
   'edit:copy': () => runEditCommand('copy'),
-  'edit:paste': () => runEditCommand('paste'),
   'edit:select-all': () => runEditCommand('selectAll'),
 }
 
@@ -3697,6 +3696,13 @@ watch(
   { immediate: true },
 )
 
+// 关窗 / 隐藏 / 退出时保存 tab 状态。Webview 刷新不会销毁 Rust 进程，
+// 所以同时尽早释放内嵌 PTY；启动阶段还会再等待一次，兜住 IPC 尚未完成的情况。
+const onBeforeUnload = () => {
+  saveTabState()
+  void api.cleanupPtyChildren().catch(() => {})
+}
+
 onMounted(() => {
   if (consumeEnabledAgentsTrimmedNotice()) notify(t('toast.agentsTrimmed'))
   // 恢复上次退出时的侧栏导航状态
@@ -3710,7 +3716,9 @@ onMounted(() => {
     activeTuiByProject.set(viewKey(v.agent, v.dir), { sessionPath: v.sessionPath, ...(v.isShell ? { isShell: true } : {}) })
   }
 
-  loadProjects().then(async () => {
+  // 右键刷新 read 页面只会重载 webview，Rust 后端和旧 PTY 仍可能存活。
+  // 先同步清掉遗留 PTY，再恢复持久化终端 tab，否则同一会话会被租约判定为已占用。
+  api.cleanupPtyChildren().catch(() => {}).then(() => loadProjects()).then(async () => {
     // 退出时停在终端 tab → 先按该 tab 的项目为准定位它（nav.activeDir 可能因竞态不一致），
     // 但**不**马上水合 —— 先把 View tab 恢复成背景，再把终端 tab 顶到前面。
     let hydrateTarget: SavedTab | undefined
@@ -3872,8 +3880,9 @@ onMounted(() => {
   // 检测可用终端，首次启动时自动选默认（有 cmux 就默认 cmux）
   api.detectTerminals().then(applyTerminalDefault).catch(() => {})
 
-  // 关窗 / 隐藏 / 退出时保存 tab 状态
-  window.addEventListener('beforeunload', saveTabState)
+  // 关窗 / 隐藏 / 退出时保存 tab 状态。Webview 刷新不会销毁 Rust 进程，
+  // 所以同时尽早释放内嵌 PTY；启动阶段还会再等待一次，兜住 IPC 尚未完成的情况。
+  window.addEventListener('beforeunload', onBeforeUnload)
 
   // 实时防抖存：状态变化时 500ms 后自动持久化，进程被 kill 也不丢状态。
   // 只 watch 影响恢复的信号（agent / 项目 / 激活的 tab / tab 数量 / 是否开着 View tab /
@@ -4264,6 +4273,7 @@ onUnmounted(() => {
   }
   document.body.classList.remove('is-sidebar-resizing')
   window.removeEventListener('resize', onWindowResize)
+  window.removeEventListener('beforeunload', onBeforeUnload)
   window.removeEventListener('pointermove', onSidebarResizePointerMove)
   window.removeEventListener('pointerup', onSidebarResizePointerUp)
   window.removeEventListener('pointercancel', onSidebarResizePointerUp)

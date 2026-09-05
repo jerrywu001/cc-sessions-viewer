@@ -6,6 +6,46 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ---
 
+## [v0.3.26]
+
+### Features
+
+- **Custom application data location** — Settings can now move Viewer-owned data to a user-selected absolute directory or restore the platform default on macOS, Windows, and Linux. Existing data is migrated with directory merging, cross-volume fallback, duplicate-file handling, and conflict protection.
+- **Updated Claude chat model choices** — added Fable 5.1 to the primary subscription model list and moved Fable 5 into More models.
+- **Expanded live model pricing coverage** — added current GPT, GLM, Kimi, MiniMax, Qwen, DeepSeek, Ling, Mimo, Muse, and other model identifiers, including GPT-6 Astra and GLM-5.3 Flash.
+
+### Improvements
+
+- **Wallpaper-aware popup menus** — model, effort, permission, branch, attachment, command, file, and related popup panels now use translucent surfaces over custom backgrounds while keeping dense command and file lists more readable.
+- **Kimi project deduplication** — equivalent workspace paths with different separators, `./` segments, trailing slashes, or Windows casing now resolve to one project and use the same normalized key for lookups.
+- **Data-directory controls** — added icon-only open, change, and restore-default actions with localized tooltips. Background media paths are remapped after a data-directory migration so the active wallpaper remains visible.
+
+### Bug Fixes
+
+- **Data migration conflicts** — identical metadata files such as `.DS_Store` no longer block migration; files with different contents still fail safely instead of being overwritten.
+- **Session-list image subtitles** — Claude, Codex, Kimi Code, and AGY now keep the user's text and render pasted-image references as `[Image #n]` in list subtitles, including macOS, Linux, and Windows clipboard paths.
+
+### Tests
+
+- Added coverage for cross-directory migration, directory merging, duplicate-file handling, and file-conflict protection.
+
+## [v0.3.25]
+
+### Features
+
+- **Embedded CLI paste shortcuts** — unified image and text paste handling across Codex, Claude Code, AGY, Pi, Kimi Code, OpenCode, and Grok Build on Windows, Linux, and macOS, with platform-specific modifier keys and clipboard-aware routing.
+- **Pi question rendering** — render AskUserQuestion prompts and preserve their selected answers in Pi chat views.
+- **Portable project skills** — consolidated skill locations and made Claude project skills regular files for Windows compatibility.
+
+### Bug Fixes
+
+- **Windows terminal resume** — preserve embedded terminal resume behavior and PTY borders when registering processes in an existing Windows job.
+- **Pi question history** — keep selected answers visible when Pi tool receipts are truncated.
+
+### Tests
+
+- Added regression coverage for embedded CLI paste behavior, Pi question rendering, Windows terminal handling, and portable skills.
+
 ## [v0.3.24]
 
 ### Features

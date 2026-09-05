@@ -76,12 +76,13 @@ describe('chatComposerOptions', () => {
 
   it('Claude 模型用完整标准 id（主列表 + More），且一律不带 [1m]', () => {
     expect(CHAT_MODEL_MENU.claude.primary.map((m) => m.value)).toEqual([
-      'claude-fable-5',
+      'claude-fable-5-1',
       'claude-opus-5',
       'claude-sonnet-5',
       'claude-haiku-4-5-20251001',
     ])
     expect(CHAT_MODEL_MENU.claude.more.map((m) => m.value)).toEqual([
+      'claude-fable-5',
       'claude-opus-4-8',
       'claude-sonnet-4-6',
       'claude-opus-4-7',
@@ -113,10 +114,11 @@ describe('chatComposerOptions', () => {
     ).toBe('Opus (mimo-v2.5-pro)')
   })
 
-  it('autoPickModel：Fable 5 需 credits 不作新会话默认，订阅落到 Opus 5，alias 照常取 opus', () => {
+  it('autoPickModel：Fable 5.1 需 credits 不作新会话默认，订阅落到 Opus 5，alias 照常取 opus', () => {
+    expect(requiresCredits('claude-fable-5-1')).toBe(true)
     expect(requiresCredits('claude-fable-5')).toBe(true)
     expect(requiresCredits('claude-opus-5')).toBe(false)
-    // 订阅：primary[0] 是烧额度的 Fable 5 → 跳过 → 第一个不烧额度的 Opus 5
+    // 订阅：primary[0] 是烧额度的 Fable 5.1 → 跳过 → 第一个不烧额度的 Opus 5
     expect(autoPickModel('claude')).toBe('claude-opus-5')
     // alias 模式：primary[0] 是 opus 别名（不烧额度）→ 照常返回
     expect(autoPickModel('claude', { claudeAliasMode: true })).toBe('opus')
@@ -172,8 +174,9 @@ describe('chatComposerOptions', () => {
     expect(effortLabel('low')).toBe('Low')
   })
 
-  it('effortLevelsFor：Fable 5 / Opus 5 / Opus 4.7 / 4.8 在 max 后多一档 ultracode，其余模型只有基础五档', () => {
+  it('effortLevelsFor：Fable 5.1 / Fable 5 / Opus 5 / Opus 4.7 / 4.8 在 max 后多一档 ultracode，其余模型只有基础五档', () => {
     const base = ['low', 'medium', 'high', 'xhigh', 'max']
+    expect(effortLevelsFor('claude', 'claude-fable-5-1')).toEqual([...base, 'ultracode'])
     expect(effortLevelsFor('claude', 'claude-fable-5')).toEqual([...base, 'ultracode'])
     expect(effortLevelsFor('claude', 'claude-opus-5')).toEqual([...base, 'ultracode'])
     expect(effortLevelsFor('claude', 'claude-opus-4-8')).toEqual([...base, 'ultracode'])
@@ -185,6 +188,7 @@ describe('chatComposerOptions', () => {
     expect(effortLevelsFor('codex', 'gpt-5.6-luna')).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
     expect(effortLevelsFor('codex', 'gpt-5.6-terra')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
     expect(effortLevelsFor('codex', 'gpt-5.6-sol')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+    expect(effortLevelsFor('codex', 'gpt-6-astra')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
   })
 
   it('modelSupportsEffort：Haiku 无 effort；Opus/Sonnet 有', () => {
@@ -243,8 +247,9 @@ describe('chatComposerOptions', () => {
     expect(defaultEffort('codex')).toBe('high')
   })
 
-  it('Codex 模型列表：5.6-sol 为首、旧模型在 More', () => {
+  it('Codex 模型列表：6-astra 为首、旧模型在 More', () => {
     expect(CHAT_MODEL_MENU.codex.primary.map((m) => m.value)).toEqual([
+      'gpt-6-astra',
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna',
@@ -259,6 +264,7 @@ describe('chatComposerOptions', () => {
   })
 
   it('Codex modelLabel 返回展示名', () => {
+    expect(modelLabel('codex', 'gpt-6-astra')).toBe('GPT-6-Astra')
     expect(modelLabel('codex', 'gpt-5.5')).toBe('GPT-5.5')
     expect(modelLabel('codex', 'gpt-5.4-mini')).toBe('GPT-5.4-Mini')
     expect(modelLabel('codex', 'unknown-model')).toBe('unknown-model')
@@ -291,6 +297,7 @@ describe('chatComposerOptions', () => {
     })
 
     it('codex 在菜单内的模型原样保留(primary 与 more 都算)', () => {
+      expect(sanitizeModel('codex', 'gpt-6-astra')).toBe('gpt-6-astra')
       expect(sanitizeModel('codex', 'gpt-5.6-sol')).toBe('gpt-5.6-sol')
       expect(sanitizeModel('codex', 'gpt-5.5')).toBe('gpt-5.5')
       expect(sanitizeModel('codex', 'gpt-5.4-mini')).toBe('gpt-5.4-mini')

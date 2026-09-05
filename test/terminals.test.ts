@@ -8,6 +8,7 @@ import {
   shouldBlinkTerminalCursor,
   shouldCopyWindowsTerminalSelection,
   shouldBufferTerminalImeSwitch,
+  shouldUseBracketedImagePaste,
   shouldUseStableTerminalCursor,
   terminalPtyColumns,
   type TerminalTab,
@@ -46,6 +47,16 @@ function key(over: Partial<KeyboardEvent> = {}) {
 }
 
 describe('terminal keyboard handling', () => {
+  it('keeps native image labels for CLIs that support bracketed paste', () => {
+    expect(shouldUseBracketedImagePaste('claude')).toBe(true)
+    expect(shouldUseBracketedImagePaste('opencode')).toBe(true)
+    expect(shouldUseBracketedImagePaste('grok')).toBe(true)
+    expect(shouldUseBracketedImagePaste('codex')).toBe(true)
+    expect(shouldUseBracketedImagePaste('kimicode')).toBe(false)
+    expect(shouldUseBracketedImagePaste('pi')).toBe(false)
+    expect(shouldUseBracketedImagePaste('agy')).toBe(false)
+  })
+
   it('reserves one Windows PTY column for Kimi and Pi borders only', () => {
     expect(terminalPtyColumns('kimicode', 100, 'Win32')).toBe(99)
     expect(terminalPtyColumns('pi', 100, 'Win32')).toBe(98)

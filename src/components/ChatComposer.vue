@@ -1241,6 +1241,14 @@ function deleteInlineFileMentionAtCaret(key: 'Backspace' | 'Delete'): boolean {
 }
 
 function onKeydown(e: KeyboardEvent) {
+  // WKWebView may expose a macOS screenshot as a native paste button instead
+  // of a File in ClipboardEvent. Handle Command+V here so Chat gets the same
+  // inline attachment behavior as drag/select, while plain text still pastes.
+  if (isMac && e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'v') {
+    e.preventDefault()
+    void pasteMacClipboard()
+    return
+  }
   // 已经提交的行内文件/文件夹 token 不是正在输入的 @ 查询。keydown 先于
   // keyup 的光标检测发生，因此这里也要同步清掉可能尚未来得及关闭的旧浮层，
   // 尤其是文件夹 token 不能被右方向键误判成“继续下钻”。
@@ -1436,10 +1444,59 @@ function onPaste(e: ClipboardEvent) {
   const items = e.clipboardData?.items
   if (!items) return
   const imgs = Array.from(items).filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
-  if (!imgs.length) return
+  if (!imgs.length) {
+    // Some macOS clipboard providers advertise an image type but return no
+    // File object from WebKit. The keydown path normally handles Command+V;
+    // this covers menu Paste and providers that dispatch paste directly.
+    const types = e.clipboardData?.types ?? []
+    if (isMac && Array.from(types).some((type) => type === 'Files' || type.startsWith('image/'))) {
+      e.preventDefault()
+      void pasteMacClipboard()
+    }
+    return
+  }
   e.preventDefault()
   const files = imgs.map((it) => it.getAsFile()).filter((f): f is File => !!f)
   void pasteImagesAtCaret(files)
+}
+
+async function pasteMacClipboard() {
+  try {
+    const path = await api.saveMacosClipboardImage()
+    if (path) {
+      await pasteImagePathAtCaret(path)
+      return
+    }
+  } catch {
+    // Older desktop binaries may not expose the native command. Fall back to
+    // native text access below; the browser paste path remains available for
+    // non-macOS and older sessions.
+  }
+  try {
+    const value = await api.readMacosClipboardText()
+    if (!value) return
+    const el = taEl.value
+    if (!el) return
+    const start = el.selectionStart ?? text.value.length
+    const end = el.selectionEnd ?? start
+    text.value = text.value.slice(0, start) + value + text.value.slice(end)
+    const caret = start + value.length
+    await nextTick()
+    el.focus()
+    el.setSelectionRange(caret, caret)
+    autosize()
+    detectSlash()
+    detectMention()
+  } catch {
+    // Clipboard permissions are optional; leave the composer unchanged.
+  }
+}
+
+async function pasteImagePathAtCaret(path: string) {
+  const { mediaType, data } = await api.readFileBase64(path)
+  const blob = await (await fetch(`data:${mediaType};base64,${data}`)).blob()
+  const file = new File([blob], baseName(path) || 'image.png', { type: mediaType })
+  await pasteImagesAtCaret([file])
 }
 
 async function pasteImagesAtCaret(files: File[]) {

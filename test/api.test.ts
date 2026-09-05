@@ -13,6 +13,11 @@ beforeEach(() => {
 })
 
 describe('api wrappers', () => {
+  it('cleanupPtyChildren -> cleanup_pty_children', () => {
+    api.cleanupPtyChildren()
+    expect(invoke).toHaveBeenCalledWith('cleanup_pty_children')
+  })
+
   it('listProjects → list_projects', () => {
     api.listProjects('claude')
     expect(invoke).toHaveBeenCalledWith('list_projects', {
