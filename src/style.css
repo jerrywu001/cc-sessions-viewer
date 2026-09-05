@@ -484,11 +484,15 @@ button {
 :root.has-custom-background .git-branch-menu,
 :root.has-custom-background .set-dropdown-menu,
 :root.has-custom-background .export-menu,
-:root.has-custom-background .locate-menu,
 :root.has-custom-background .topbar-more-menu,
 :root.has-custom-background .window-menu-panel,
 :root.has-custom-background .window-menu-subpanel {
   background: color-mix(in srgb, var(--surface) 78%, transparent) !important;
+}
+/* Prompt navigation is a dense, scrollable reading list. Retain a little of
+   the wallpaper while keeping prompt titles and timestamps legible. */
+:root.has-custom-background .locate-menu {
+  background: color-mix(in srgb, var(--surface) 95%, transparent) !important;
 }
 /* 命令与文件选择面板内容密度高，稍微提高底色以保证长列表可读性。 */
 :root.has-custom-background .cc-slash,

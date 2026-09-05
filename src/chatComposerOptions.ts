@@ -38,7 +38,7 @@ export function chatSupported(agent: Agent): boolean {
   return agentSupports(agent, 'guiChat')
 }
 
-/** 标准模型菜单（按 agent）。Claude 用官方完整 id；Codex 给一组常见 gpt-5.x。 */
+/** 标准模型菜单（按 agent）。Claude 用官方完整 id；Codex 给一组常见 GPT 模型。 */
 export const CHAT_MODEL_MENU: Record<Agent, ModelMenuConfig> = {
   claude: {
     unavailable: [],
@@ -63,6 +63,7 @@ export const CHAT_MODEL_MENU: Record<Agent, ModelMenuConfig> = {
   codex: {
     unavailable: [],
     primary: [
+      { value: 'gpt-6-astra', label: 'GPT-6-Astra' },
       { value: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' },
       { value: 'gpt-5.6-terra', label: 'GPT-5.6-Terra' },
       { value: 'gpt-5.6-luna', label: 'GPT-5.6-Luna' },
@@ -205,8 +206,8 @@ const ULTRACODE_MODELS = new Set(['claude-fable-5-1', 'claude-fable-5', 'claude-
 /** Codex 5.6-luna: base + max */
 const CODEX_MAX_MODELS = new Set(['gpt-5.6-luna'])
 
-/** Codex 5.6-terra / 5.6-sol: base + max + ultra */
-const CODEX_ULTRA_MODELS = new Set(['gpt-5.6-sol', 'gpt-5.6-terra'])
+/** Codex 6-astra / 5.6-terra / 5.6-sol: base + max + ultra */
+const CODEX_ULTRA_MODELS = new Set(['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra'])
 
 export function effortLevelsFor(agent: Agent, model: string | undefined): string[] {
   const base = CHAT_EFFORT_LEVELS[agent]

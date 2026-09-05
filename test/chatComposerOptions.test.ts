@@ -188,6 +188,7 @@ describe('chatComposerOptions', () => {
     expect(effortLevelsFor('codex', 'gpt-5.6-luna')).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
     expect(effortLevelsFor('codex', 'gpt-5.6-terra')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
     expect(effortLevelsFor('codex', 'gpt-5.6-sol')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+    expect(effortLevelsFor('codex', 'gpt-6-astra')).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
   })
 
   it('modelSupportsEffort：Haiku 无 effort；Opus/Sonnet 有', () => {
@@ -246,8 +247,9 @@ describe('chatComposerOptions', () => {
     expect(defaultEffort('codex')).toBe('high')
   })
 
-  it('Codex 模型列表：5.6-sol 为首、旧模型在 More', () => {
+  it('Codex 模型列表：6-astra 为首、旧模型在 More', () => {
     expect(CHAT_MODEL_MENU.codex.primary.map((m) => m.value)).toEqual([
+      'gpt-6-astra',
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna',
@@ -262,6 +264,7 @@ describe('chatComposerOptions', () => {
   })
 
   it('Codex modelLabel 返回展示名', () => {
+    expect(modelLabel('codex', 'gpt-6-astra')).toBe('GPT-6-Astra')
     expect(modelLabel('codex', 'gpt-5.5')).toBe('GPT-5.5')
     expect(modelLabel('codex', 'gpt-5.4-mini')).toBe('GPT-5.4-Mini')
     expect(modelLabel('codex', 'unknown-model')).toBe('unknown-model')
@@ -294,6 +297,7 @@ describe('chatComposerOptions', () => {
     })
 
     it('codex 在菜单内的模型原样保留(primary 与 more 都算)', () => {
+      expect(sanitizeModel('codex', 'gpt-6-astra')).toBe('gpt-6-astra')
       expect(sanitizeModel('codex', 'gpt-5.6-sol')).toBe('gpt-5.6-sol')
       expect(sanitizeModel('codex', 'gpt-5.5')).toBe('gpt-5.5')
       expect(sanitizeModel('codex', 'gpt-5.4-mini')).toBe('gpt-5.4-mini')
