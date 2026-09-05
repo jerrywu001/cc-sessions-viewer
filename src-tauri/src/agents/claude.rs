@@ -353,15 +353,20 @@ fn last_user_text(fp: &Path) -> Option<String> {
             continue;
         }
         let content = v.get("message").and_then(|m| m.get("content"));
-        let text = content
-            .and_then(Value::as_array)
-            .and_then(|arr| {
-                arr.iter()
-                    .find(|c| c.get("type").and_then(Value::as_str) == Some("text"))
-            })
-            .and_then(|c| c.get("text").and_then(Value::as_str))
-            .or_else(|| content.and_then(Value::as_str));
-        if let Some(t) = text {
+        let text = match content {
+            Some(Value::Array(arr)) => {
+                let parts = arr
+                    .iter()
+                    .filter(|c| c.get("type").and_then(Value::as_str) == Some("text"))
+                    .filter_map(|c| c.get("text").and_then(Value::as_str))
+                    .filter(|text| !text.trim().is_empty())
+                    .collect::<Vec<_>>();
+                (!parts.is_empty()).then(|| parts.join("\n"))
+            }
+            Some(Value::String(s)) => Some(s.clone()),
+            _ => None,
+        };
+        if let Some(t) = text.as_deref() {
             let clean = crate::util::truncate_subtitle(t);
             if !clean.is_empty() {
                 return Some(clean);

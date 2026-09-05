@@ -1527,6 +1527,92 @@ export function activeTab(): TerminalTab | null {
   return findTab(activeUiId.value) ?? null
 }
 
+const embeddedCliPasteInFlight = new Set<number>()
+
+/**
+ * These CLIs recognize xterm's bracketed-paste image path and turn it into
+ * their native image label. Other CLIs should receive a plain terminal input
+ * so their own paste confirmation UI is not opened.
+ */
+export function shouldUseBracketedImagePaste(agent: Agent): boolean {
+  return agent === 'claude'
+    || agent === 'codex'
+    || agent === 'grok'
+    || agent === 'opencode'
+}
+
+function canPasteIntoEmbeddedCli(tab: TerminalTab): boolean {
+  return (
+    !tab.isShell
+    && tab.ptyId !== null
+    && tab.processState === 'alive'
+    && tabs.value.some((candidate) => candidate.uiId === tab.uiId)
+  )
+}
+
+/**
+ * Start exactly one clipboard operation for an embedded CLI tab. Image paths
+ * use the CLI-specific input channel so supported agents retain their native
+ * image labels while the others avoid opening a paste confirmation UI.
+ */
+function startEmbeddedCliPaste(tab: TerminalTab, intent: 'image' | 'text' | 'unified'): boolean {
+  if (!canPasteIntoEmbeddedCli(tab)) return false
+  if (embeddedCliPasteInFlight.has(tab.uiId)) return true
+
+  embeddedCliPasteInFlight.add(tab.uiId)
+  void runEmbeddedCliPaste(
+    intent,
+    {
+      paste: (value) => {
+        if (canPasteIntoEmbeddedCli(tab)) tab.term.paste(value)
+      },
+      pasteImage: (value) => {
+        if (!canPasteIntoEmbeddedCli(tab)) return
+        if (shouldUseBracketedImagePaste(tab.agent)) tab.term.paste(value)
+        else tab.term.input(value)
+      },
+    },
+    {
+      readImages: intent === 'text' || (_isMac && intent === 'image')
+        ? undefined
+        : readClipboardImages,
+      readText: async () => {
+        if (_isMac) {
+          // Native access avoids WKWebView permission failures. If the command
+          // is unavailable (for example while an older dev binary is running),
+          // retain the browser clipboard as a compatibility fallback.
+          try {
+            const nativeText = await api.readMacosClipboardText()
+            if (nativeText !== null && nativeText !== undefined) return nativeText
+          } catch {
+            // Fall through to navigator.clipboard below.
+          }
+        }
+        return (await navigator.clipboard?.readText?.()) ?? ''
+      },
+    },
+    {
+      saveImage: api.saveClipboardImage,
+      saveImagePath: _isMac && (intent === 'image' || intent === 'unified')
+        ? api.saveMacosClipboardImage
+        : undefined,
+    },
+  ).finally(() => {
+    embeddedCliPasteInFlight.delete(tab.uiId)
+  })
+  return true
+}
+
+/**
+ * Handles frontend Edit > Paste actions, including the Windows custom title
+ * bar, when an embedded CLI is active.
+ */
+export function pasteIntoActiveTui(): boolean {
+  const tab = activeTab()
+  if (!tab) return false
+  return startEmbeddedCliPaste(tab, 'unified')
+}
+
 // ============================ 开 / 关 / 切 ============================
 
 export interface OpenTuiOptions {
@@ -1640,7 +1726,25 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
     }
   })
   const imeInputDeduper = createTerminalImeInputDeduper()
-  let embeddedPasteInFlight = false
+  if (_isMac) {
+    // xterm maps Ctrl+V to ^V before the browser paste event. Capture both
+    // macOS shortcuts before xterm so neither path can invoke its native paste.
+    tab.container.addEventListener('keydown', (event) => {
+      const intent = pasteIntentForEvent(event, navigator.platform)
+      if (!intent) return
+      if (!startEmbeddedCliPaste(tab, intent)) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    }, true)
+    // The macOS Edit > Paste command can dispatch a paste event without a
+    // keydown in WebKit. Keep it on the same image-aware path as the keyboard
+    // shortcut instead of letting xterm wrap the file path in bracketed paste.
+    tab.container.addEventListener('paste', (event) => {
+      if (!startEmbeddedCliPaste(tab, 'unified')) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    }, true)
+  }
   term.textarea?.addEventListener('compositionstart', () => {
     tab.container.classList.add('terminal-ime-composing')
   })
@@ -1661,24 +1765,14 @@ export async function openOrFocusTui(opts: OpenTuiOptions): Promise<void> {
     ) {
       return false
     }
+    // xterm turns Ctrl+V into the literal ^V control character before the
+    // browser can dispatch a paste event. Intercept the shared paste shortcut
+    // here as well as the macOS capture listener above; otherwise Windows and
+    // Linux fall back to each CLI's own (inconsistent) Ctrl+V behavior.
     const pasteIntent = pasteIntentForEvent(ev, navigator.platform)
-    if (pasteIntent && tab.ptyId !== null && tab.processState === 'alive') {
+    if (pasteIntent && startEmbeddedCliPaste(tab, pasteIntent)) {
       ev.preventDefault()
       ev.stopImmediatePropagation()
-      if (!embeddedPasteInFlight) {
-        embeddedPasteInFlight = true
-        void runEmbeddedCliPaste(
-          pasteIntent,
-          term,
-          {
-            readImages: readClipboardImages,
-            readText: async () => (await navigator.clipboard?.readText?.()) ?? '',
-          },
-          { saveImage: api.saveClipboardImage },
-        ).finally(() => {
-          embeddedPasteInFlight = false
-        })
-      }
       return false
     }
     if (ev.type !== 'keydown' || ev.altKey) return true

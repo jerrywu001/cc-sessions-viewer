@@ -23,6 +23,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 ### Bug Fixes
 
 - **Data migration conflicts** — identical metadata files such as `.DS_Store` no longer block migration; files with different contents still fail safely instead of being overwritten.
+- **Session-list image subtitles** — Claude, Codex, Kimi Code, and AGY now keep the user's text and render pasted-image references as `[Image #n]` in list subtitles, including macOS, Linux, and Windows clipboard paths.
 
 ### Tests
 

@@ -1769,6 +1769,79 @@ fn save_clipboard_image(data: String, media_type: String) -> Result<String, Stri
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Read the macOS pasteboard image into a temporary file. The WebView often
+/// cannot expose screenshots (especially TIFF-backed ones) through the
+/// browser Clipboard API, so the desktop process reads NSPasteboard directly.
+#[tauri::command]
+fn save_macos_clipboard_image() -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::runtime::AnyObject;
+        use objc2_app_kit::{
+            NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypePNG,
+            NSPasteboardTypeTIFF,
+        };
+        use objc2_foundation::{NSData, NSDictionary};
+
+        let pasteboard = NSPasteboard::generalPasteboard();
+        let (data, is_tiff) = pasteboard
+            .dataForType(unsafe { NSPasteboardTypePNG })
+            .map(|data| (data.to_vec(), false))
+            .or_else(|| unsafe { pasteboard.dataForType(NSPasteboardTypeTIFF) }.map(|data| (data.to_vec(), true)))
+            .ok_or_else(|| "No image on the macOS clipboard".to_string())?;
+        if data.is_empty() {
+            return Ok(None);
+        }
+
+        let data = if is_tiff {
+            let source = NSData::with_bytes(&data);
+            let image_rep = NSBitmapImageRep::imageRepWithData(&source)
+                .ok_or_else(|| "Failed to decode TIFF clipboard image".to_string())?;
+            let properties: objc2::rc::Retained<
+                NSDictionary<objc2_app_kit::NSBitmapImageRepPropertyKey, AnyObject>,
+            > = NSDictionary::from_slices::<objc2_app_kit::NSBitmapImageRepPropertyKey>(&[], &[]);
+            unsafe {
+                image_rep
+                    .representationUsingType_properties(NSBitmapImageFileType::PNG, &properties)
+            }
+            .ok_or_else(|| "Failed to encode clipboard image as PNG".to_string())?
+            .to_vec()
+        } else {
+            data
+        };
+        let timestamp = chrono::Local::now().format("%Y-%m-%d-%H%M%S-%f");
+        let path = std::env::temp_dir().join(format!("clipboard-{timestamp}.png"));
+        fs::write(&path, data).map_err(|e| format!("Failed to write clipboard image: {e}"))?;
+        Ok(Some(path.to_string_lossy().to_string()))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(None)
+    }
+}
+
+/// Read plain text from the macOS pasteboard without requiring WebView
+/// clipboard permission. Non-macOS callers receive `None` and use their
+/// platform's normal browser clipboard path.
+#[tauri::command]
+fn read_macos_clipboard_text() -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+
+        let pasteboard = NSPasteboard::generalPasteboard();
+        Ok(pasteboard
+            .stringForType(unsafe { NSPasteboardTypeString })
+            .map(|value| value.to_string()))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(None)
+    }
+}
+
 /// 在系统文件管理器中显示该文件。
 #[tauri::command]
 fn reveal_in_finder(path: String) -> Result<(), String> {
@@ -2564,6 +2637,8 @@ pub fn run() {
             read_file_base64,
             save_temp_image,
             save_clipboard_image,
+            save_macos_clipboard_image,
+            read_macos_clipboard_text,
             path_is_dir,
             git_current_branch,
             git_repository_state,

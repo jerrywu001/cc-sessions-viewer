@@ -610,6 +610,48 @@ fn is_codex_internal_user_text(text: &str) -> bool {
         || trimmed.starts_with("<turn_aborted>")
 }
 
+/// Strip the wrapper Codex app-server adds around file/image attachments.
+/// The referenced temp image may already have been cleaned up when an old
+/// session is opened, so this deliberately does not depend on the path
+/// existing on the current machine.
+fn codex_subtitle_body(text: &str) -> String {
+    const HEADER: &str = "# Files mentioned by the user:";
+    const REQUEST: &str = "## My request for Codex:";
+    let Some(header_start) = text.find(HEADER) else {
+        return text.to_string();
+    };
+    let Some(request_offset) = text[header_start..].find(REQUEST) else {
+        return text.to_string();
+    };
+    let request_start = header_start + request_offset;
+    let mut image_count = 0usize;
+    for line in text[header_start + HEADER.len()..request_start].lines() {
+        let Some((name, path)) = line
+            .trim()
+            .strip_prefix("## ")
+            .and_then(|v| v.split_once(": "))
+        else {
+            continue;
+        };
+        let lower = format!("{name} {path}").to_ascii_lowercase();
+        if [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".ico"]
+            .iter()
+            .any(|ext| lower.ends_with(ext))
+        {
+            image_count += 1;
+        }
+    }
+    let body = text[request_start + REQUEST.len()..].trim();
+    if body.is_empty() || image_count == 0 || body.contains("[Image #") {
+        return body.to_string();
+    }
+    let tokens = (1..=image_count)
+        .map(|n| format!("[Image #{n}]"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{tokens} {body}")
+}
+
 fn clean_codex_title(text: &str) -> String {
     if is_codex_internal_user_text(text) {
         return String::new();
@@ -2470,34 +2512,11 @@ fn last_user_text(fp: &Path) -> Option<String> {
         let Ok(v) = serde_json::from_slice::<Value>(line) else {
             continue;
         };
-        // Codex user messages: event_msg wrapper or response_item.payload
-        let em = v
-            .get("event_msg")
-            .or_else(|| v.get("payload"))
-            .or_else(|| v.get("response_item").and_then(|r| r.get("message")));
-        let Some(em) = em else { continue };
-        if em.get("role").and_then(Value::as_str) != Some("user") {
-            continue;
-        }
-        let text = em
-            .get("content")
-            .and_then(Value::as_array)
-            .and_then(|arr| {
-                arr.iter().find(|c| {
-                    let t = c.get("type").and_then(Value::as_str).unwrap_or("");
-                    t == "input_text" || t == "text"
-                })
-            })
-            .and_then(|c| c.get("text").and_then(Value::as_str));
-        if let Some(t) = text {
-            let trimmed = t.trim_start();
-            if trimmed.starts_with("<skill>")
-                || trimmed.starts_with("<context>")
-                || trimmed.starts_with("<environment_context>")
-            {
+        if let Some(t) = codex_user_text(&v) {
+            if is_codex_internal_user_text(&t) {
                 continue;
             }
-            let clean = crate::util::truncate_subtitle(t);
+            let clean = crate::util::truncate_subtitle(&codex_subtitle_body(&t));
             if !clean.is_empty() {
                 return Some(clean);
             }
@@ -2867,6 +2886,12 @@ mod tests {
         let (files, body) = extract_codex_files("just a normal question\n");
         assert!(files.is_empty());
         assert_eq!(body, "just a normal question\n");
+    }
+
+    #[test]
+    fn codex_subtitle_strips_file_wrapper_and_keeps_image_and_text() {
+        let text = "# Files mentioned by the user:\n\n## clipboard.png: /tmp/clipboard.png\n\n## My request for Codex:\n请分析这张图";
+        assert_eq!(codex_subtitle_body(text), "[Image #1] 请分析这张图");
     }
 
     #[test]

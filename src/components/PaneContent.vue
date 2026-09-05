@@ -198,6 +198,7 @@ const liveChatMeta = computed<SessionMeta>(() => {
           @switch-to-read="actions.switchLiveChatToRead"
           @open-session-stats="actions.openLiveChatStats"
           @reveal="actions.reveal(liveChatSourceSession?.path || liveChat.cwd || '')"
+          @copy-id="actions.copyText(liveChatMeta.id)"
           @export-md="actions.exportLiveChat('md')"
           @export-html="actions.exportLiveChat('html')"
           @export-json="actions.exportLiveChat('json')"

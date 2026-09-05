@@ -296,11 +296,36 @@ pub fn truncate_subtitle(raw: &str) -> String {
     static RE_STRIP: Lazy<regex_lite::Regex> = Lazy::new(|| {
         regex_lite::Regex::new(r"@\[?[A-Za-z0-9_./-]+\]?|\!\[[^\]]*\]").unwrap()
     });
-    let line = raw
+    static RE_IMAGE_ONLY: Lazy<regex_lite::Regex> =
+        Lazy::new(|| regex_lite::Regex::new(r"^\[Image #\d+\]$").unwrap());
+    // Claude Code writes a second, metadata-only user record for pasted images.
+    // It is useful to the transcript parser, but must not become a list subtitle.
+    let body = raw
+        .lines()
+        .map(str::trim)
+        .filter_map(|l| {
+            let lower = l.to_ascii_lowercase();
+            if lower.starts_with("[image: source:") || lower.starts_with("[image: original") {
+                // Keep any user text that follows the closing metadata bracket.
+                return Some(l.split_once(']').map_or("", |(_, rest)| rest.trim()));
+            }
+            (!l.is_empty() && !l.starts_with('<') && !l.starts_with("Caveat:")).then_some(l)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (_, normalized) = lift_paths_from_text_with_options(&body, true, false);
+    let mut image_number = 1usize;
+    let mut normalized = normalized;
+    while normalized.contains(CLIPBOARD_IMAGE_TAG) {
+        let replacement = format!("[Image #{image_number}]");
+        normalized = normalized.replacen(CLIPBOARD_IMAGE_TAG, &replacement, 1);
+        image_number += 1;
+    }
+    let candidates: Vec<String> = normalized
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('<') && !l.starts_with("Caveat:"))
-        .find_map(|l| {
+        .filter_map(|l| {
             let stripped = RE_STRIP.replace_all(l, "");
             let trimmed = stripped.trim().to_string();
             if trimmed.is_empty() {
@@ -309,7 +334,17 @@ pub fn truncate_subtitle(raw: &str) -> String {
                 Some(trimmed)
             }
         })
-        .unwrap_or_default();
+        .collect();
+    // Image content can be serialized as its own text block, followed by the
+    // user's text in another block. Keep both in the list subtitle instead of
+    // reducing the message to the standalone image token.
+    let line = if candidates.len() >= 2
+        && RE_IMAGE_ONLY.is_match(&candidates[0])
+    {
+        candidates.join(" ")
+    } else {
+        candidates.into_iter().next().unwrap_or_default()
+    };
     let cleaned = std::borrow::Cow::Borrowed(line.as_str());
     let collapsed: String = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.chars().count() <= 120 {
@@ -728,6 +763,36 @@ mod tests {
         assert_eq!(
             truncate_subtitle("hello [Image #1] then [#image 2]"),
             "hello [Image #1] then [#image 2]"
+        );
+    }
+
+    #[test]
+    fn truncate_subtitle_skips_claude_image_metadata_and_keeps_text() {
+        assert_eq!(
+            truncate_subtitle(
+                "[Image: source: /var/folders/clipboard-2026.png]\n[Image #1] 请分析这张图"
+            ),
+            "[Image #1] 请分析这张图"
+        );
+        assert_eq!(
+            truncate_subtitle("[Image: original 1024x768] 请分析这张图"),
+            "请分析这张图"
+        );
+    }
+
+    #[test]
+    fn truncate_subtitle_normalizes_clipboard_paths_on_unix_and_windows() {
+        assert_eq!(
+            truncate_subtitle(
+                "/var/folders/8h/T/clipboard-2026-08-24.png 请总结图片内容"
+            ),
+            "[Image #1] 请总结图片内容"
+        );
+        assert_eq!(
+            truncate_subtitle(
+                r#"C:\Users\Jane Doe\AppData\Local\Temp\pi-clipboard-2026.png 请总结图片内容"#
+            ),
+            "[Image #1] 请总结图片内容"
         );
     }
 
