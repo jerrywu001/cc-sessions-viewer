@@ -6,12 +6,13 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/jerrywu001/cc-sessions-viewer/releases)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![Downloads](https://img.shields.io/github/downloads/jerrywu001/cc-sessions-viewer/total)](https://github.com/jerrywu001/cc-sessions-viewer/releases/latest)
+[![Star on GitHub](https://img.shields.io/github/stars/jerrywu001/cc-sessions-viewer?style=flat&logo=github&label=Star%20on%20GitHub)](https://github.com/jerrywu001/cc-sessions-viewer)
 [![Vue 3](https://img.shields.io/badge/Vue-3-42b883?logo=vue.js&logoColor=fff)](https://vuejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [English](README.md) · **中文** · [日本語](README.ja.md) · [CHANGELOG](CHANGELOG.md)
 
-<p align="center">一个专为 <strong>Claude Code</strong>、<strong>Codex</strong>、<strong>Grok Build</strong>、<strong>Kimi Code</strong>、<strong>Antigravity CLI</strong> 和 <strong>opencode</strong> 打造的原生桌面浏览器。<br/>在一处读取、搜索并管理六个 CLI 的本地会话记录。</p>
+<p align="center">一个专为 <strong>Claude Code</strong>、<strong>Codex</strong>、<strong>Grok Build</strong>、<strong>Kimi Code</strong>、<strong>Pi</strong>、<strong>Antigravity CLI</strong> 和 <strong>opencode</strong> 打造的原生桌面浏览器。<br/>在一处读取、搜索并管理七个 CLI 的本地会话记录。</p>
 
 </div>
 
@@ -19,29 +20,45 @@ https://github.com/user-attachments/assets/9bcb92a8-e5b8-40e5-b492-af252162309b
 
 ---
 
-## 核心特性
+## 项目定位
 
-- **忠实还原** — 完整呈现思考链路、工具调用配对、结构化 Diff 与内嵌截图
-- **全局搜索** — 跨项目秒搜（⌘⇧F）直达具体消息
-- **应用内对话** — 在内置聊天里新开或续聊 Claude Code、Codex 会话，实时切换模型、推理强度（含 Opus **Ultracode**）与权限模式，无需打开终端
-- **Grok Build 历史与 TUI** — 浏览、搜索、导出、统计、重命名、回收站恢复和续跑本地 Grok 会话；明确不提供 Grok GUI Chat
-- **Kimi Code 历史与 TUI** — 浏览、搜索、导出、统计主/子 agent 用量、重命名、回收站恢复和续跑本地 Kimi 会话；明确不提供 Kimi GUI Chat
-- **一键恢复** — 在窗口内嵌终端或外部终端中直接恢复/新建会话——支持 **Terminal.app**、**cmux**、**iTerm2**、**Ghostty** 和 **Warp**
-- **Shell 终端标签** — 在 agent 会话旁开启纯 shell 标签页，直接在项目目录执行任意命令；标签状态跨重启保留
-- **分屏** — 把任意项目拆成左右并排或上下堆叠的多个分屏，每个分屏有独立的标签栏；标签可在分屏内重新排序，也可拖到其他分屏，每个操作都有快捷键（见 设置 → 快捷键）。每个项目的分屏布局跨重启保留
-- **cmux 深度集成** — 按 cwd 自动复用已有 workspace，定位正在运行的会话并蓝色闪烁提示，智能选择拆分方向，新标签页自动以目录名命名
-- **启动参数** — 为每个 agent 单独配置 CLI 参数（如 `--dangerously-skip-permissions`），恢复/新建会话时自动追加
-- **定位提问** — 聊天标题栏的定位按钮列出所有用户提问，点击即滚动到目标消息并闪烁高亮
-- **视图历史** — 每个项目独立、可搜索的「打开过的视图」历史，支持收藏；一键回到任意历史的只读或对话视图
-- **深度统计** — 基于 LiteLLM 实时价目聚合 Token 消耗与成本，按项目/模型/工具多维分析
-- **菜单栏统计** — macOS 托盘图标一览各 agent 的 Today / 7d / 30d 花费与 Token 量
-- **实时模型价格** — 可浏览的 Claude、Codex 与 Grok / xAI 价格表，数据源自动更新
-- **灵活导出** — 单会话或批量导出为离线可读的 Markdown / HTML / 无损 JSON
-- **书签** — 将任意文件夹固定到侧栏快速访问，按 agent 独立管理
-- **重命名与删除** — 会话重命名同步回 CLI，软删除移入共享回收站并支持还原
-- **只读安全** — 原始 JSONL 全程只读，绝不物理抹除
+Sessions Viewer 将本地 agent 会话记录整理成可搜索的工作区。打开项目，准确回看发生了什么，再从同一位置继续工作，无需手动翻找 JSONL 文件。
+
+### 阅读与定位
+
+- **忠实还原** — 完整呈现思考链路、工具调用配对、结构化 Diff 与内嵌截图。
+- **全局搜索** — 跨项目搜索并直达具体消息，快捷键为 `⌘⇧F`。
+- **定位提问** — 在紧凑列表中浏览所有用户提问，点击后滚动到目标消息并闪烁高亮。
+- **视图历史** — 按项目保存可搜索的阅读和聊天视图，支持收藏和一键返回。
+
+### 继续工作
+
+- **应用内对话** — 在内置聊天里新开或续聊 Claude Code、Codex 会话，实时切换模型、推理强度（含 Opus **Ultracode**）与权限模式。
+- **一键恢复** — 在窗口内嵌终端或 **Terminal.app**、**cmux**、**iTerm2**、**Ghostty**、**Warp** 中恢复或新建会话。
+- **Shell 标签** — 在 agent 会话旁运行普通 shell 命令，标签状态跨重启保留。
+- **启动参数** — 为每个 agent 配置 CLI 参数（如 `--dangerously-skip-permissions`），新建或恢复时自动追加。
+
+### 管理项目
+
+- **分屏** — 左右并排或上下堆叠多个分屏，拖动标签在分屏间移动；每个项目的布局跨重启保留。
+- **cmux 集成** — 按工作目录复用 workspace、定位运行中的会话、智能选择拆分方向，并按目录名命名标签。
+- **书签** — 将常用文件夹固定到侧栏，按 agent 独立管理。
+- **重命名与回收站** — 会话重命名同步回 CLI，软删除后可从共享回收站恢复。
+
+### 统计与导出
+
+- **统计与实时价格** — 基于 LiteLLM 实时价目按项目、模型或工具分析 Token 与成本；macOS 菜单栏显示各 agent 的 Today / 7d / 30d 汇总。
+- **灵活导出** — 单会话或批量导出为离线可读的 Markdown、HTML 或无损 JSON。
+- **只读安全** — 原始 JSONL 始终只读，不会被修改或删除。
+
+### 支持的会话来源
+
+Claude Code、Codex、Grok Build、Kimi Code、Pi、Antigravity CLI 和 opencode。Grok Build、Kimi Code 与 Pi 支持历史记录、终端、导出、统计和续跑流程；它们的 GUI Chat 暂不包含在内。
 
 ## 截图
+
+<details>
+  <summary>展开查看产品截图</summary>
 
 <table>
   <tr>
@@ -106,6 +123,8 @@ https://github.com/user-attachments/assets/9bcb92a8-e5b8-40e5-b492-af252162309b
   </tr>
 </table>
 
+</details>
+
 ## 安装
 
 到 [Releases](https://github.com/jerrywu001/cc-sessions-viewer/releases) 下载对应平台的安装包：
@@ -156,13 +175,15 @@ npm run tauri build    # 打包
 </a>
 
 ## 赞助支持
-维护一个开源项目需要投入大量时间与精力。你的赞助将直接用于：
+这个项目依靠业余时间维护。赞助会用于日常开发、问题修复和文档维护。
 
 - 🛠️ 持续开发与更新
 
 - 🐛 快速修复 Bug、解决问题
 
 - 📚 完善文档、补充更多示例
+
+如需定制功能或其他特殊支持，请通过下方赞助渠道联系我，50 美元起；是否承接以当前时间安排为准。
 
 ### 赞助方式：
 

@@ -6,12 +6,13 @@
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/jerrywu001/cc-sessions-viewer/releases)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![Downloads](https://img.shields.io/github/downloads/jerrywu001/cc-sessions-viewer/total)](https://github.com/jerrywu001/cc-sessions-viewer/releases/latest)
+[![Star on GitHub](https://img.shields.io/github/stars/jerrywu001/cc-sessions-viewer?style=flat&logo=github&label=Star%20on%20GitHub)](https://github.com/jerrywu001/cc-sessions-viewer)
 [![Vue 3](https://img.shields.io/badge/Vue-3-42b883?logo=vue.js&logoColor=fff)](https://vuejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [English](README.md) · [中文](README.zh-CN.md) · **日本語** · [CHANGELOG](CHANGELOG.md)
 
-<p align="center"><strong>Claude Code</strong>、<strong>Codex</strong>、<strong>Grok Build</strong>、<strong>Kimi Code</strong>、<strong>Antigravity CLI</strong>、<strong>opencode</strong> 専用のネイティブデスクトップブラウザ。<br/>6 つの CLI のローカルセッション履歴を一元的に読み取り、検索し、管理します。</p>
+<p align="center"><strong>Claude Code</strong>、<strong>Codex</strong>、<strong>Grok Build</strong>、<strong>Kimi Code</strong>、<strong>Pi</strong>、<strong>Antigravity CLI</strong>、<strong>opencode</strong> 専用のネイティブデスクトップブラウザ。<br/>7 つの CLI のローカルセッション履歴を一元的に読み取り、検索し、管理します。</p>
 
 </div>
 
@@ -19,29 +20,45 @@ https://github.com/user-attachments/assets/9bcb92a8-e5b8-40e5-b492-af252162309b
 
 ---
 
-## 主な機能
+## 概要
 
-- **忠実な再現** — 思考プロセス、ツール呼び出しのペアリング、構造化 Diff、インライン画像を完全に表示
-- **グローバル検索** — プロジェクトを横断する即時検索（⌘⇧F）で特定のメッセージへ直行
-- **アプリ内チャット** — Claude Code と Codex のセッションを内蔵チャットで新規作成・再開。モデル / 推論強度（Opus **Ultracode** 対応）/ 権限モードをその場で切り替え（ターミナル不要）
-- **Grok Build の履歴と TUI** — ローカル Grok セッションの閲覧、検索、エクスポート、統計、リネーム、ゴミ箱からの復元、再開に対応。Grok GUI Chat は意図的に含めません
-- **Kimi Code の履歴と TUI** — ローカル Kimi セッションの閲覧、検索、エクスポート、メイン/サブエージェント利用量の統計、リネーム、ゴミ箱からの復元、再開に対応。Kimi GUI Chat は意図的に含めません
-- **ワンクリック再開** — 埋め込みターミナルまたは外部アプリでセッションを再開・新規作成 — **Terminal.app**、**cmux**、**iTerm2**、**Ghostty**、**Warp** に対応
-- **Shell ターミナルタブ** — エージェントセッションの横に純粋なシェルタブを開き、プロジェクトディレクトリで任意のコマンドを実行可能。タブは再起動後も保持
-- **画面分割** — 任意のプロジェクトを左右または上下に分割し、各ペインが独自のタブ列を持つ。タブはペイン内で並べ替えたり、別のペインへドラッグして移動でき、すべての操作にキーボードショートカットあり（設定 → ショートカット）。ペインのレイアウトはプロジェクトごとに再起動後も保持
-- **cmux 深い統合** — cwd で既存ワークスペースを自動再利用、実行中のセッションを青フラッシュで特定、スマート分割方向、ディレクトリ名でタブ命名
-- **起動引数** — エージェントごとに CLI フラグ（例：`--dangerously-skip-permissions`）を設定、再開・新規作成時に自動追加
-- **プロンプトへジャンプ** — ロケートボタンで全ユーザープロンプトを一覧表示、クリックで対象メッセージへスクロール＆ハイライト
-- **ビュー履歴** — プロジェクトごとに独立した、検索可能な「開いたビュー」の履歴。お気に入り対応で、過去の閲覧／チャットビューにワンクリックで復帰
-- **詳細な統計** — LiteLLM のリアルタイム料金でトークン消費とコストを集計、プロジェクト/モデル/ツール別に分析
-- **メニューバー統計** — macOS トレイアイコンで各エージェントの Today / 7d / 30d コストとトークン量を一覧表示
-- **リアルタイム料金表** — Claude、Codex、Grok / xAI の料金テーブルを上流から自動更新
-- **柔軟なエクスポート** — 単一または複数セッションをオフラインで読める Markdown / HTML / 可逆 JSON としてエクスポート
-- **ブックマーク** — 任意のフォルダをサイドバーにピン留め、エージェントごとに管理
-- **リネームと削除** — セッション名の変更は CLI に同期、ソフト削除は共有ゴミ箱へ移動（復元可能）
-- **読み取り専用の安全性** — オリジナルの JSONL は一切変更・削除しません
+Sessions Viewer は、ローカルのエージェントセッション履歴を検索可能なワークスペースにまとめます。プロジェクトを開いて内容を正確に振り返り、JSONL ファイルを手作業で探すことなく同じ場所から作業を続けられます。
+
+### 読む・探す
+
+- **忠実な再現** — 思考プロセス、ツール呼び出しのペアリング、構造化 Diff、インライン画像を完全に表示。
+- **グローバル検索** — プロジェクトを横断して検索し、`⌘⇧F` で該当メッセージへ直行。
+- **プロンプトへジャンプ** — すべてのユーザープロンプトを一覧から選び、対象メッセージへスクロールしてハイライト。
+- **ビュー履歴** — プロジェクトごとに閲覧・チャットビューの履歴を保存し、検索やお気に入り、一発復帰に対応。
+
+### 作業を続ける
+
+- **アプリ内チャット** — Claude Code と Codex のセッションを内蔵チャットで新規作成・再開。モデル、推論強度（Opus **Ultracode** 対応）、権限モードを切り替え可能。
+- **ワンクリック再開** — 埋め込みターミナルまたは **Terminal.app**、**cmux**、**iTerm2**、**Ghostty**、**Warp** でセッションを再開・新規作成。
+- **Shell タブ** — エージェントセッションの横で通常のシェルコマンドを実行でき、タブは再起動後も保持。
+- **起動引数** — エージェントごとに CLI フラグ（例：`--dangerously-skip-permissions`）を設定し、再開・新規作成時に自動追加。
+
+### プロジェクトを整理する
+
+- **画面分割** — 左右または上下のペインに分割し、タブをペイン間でドラッグ。プロジェクトごとのレイアウトは再起動後も保持。
+- **cmux 統合** — 作業ディレクトリでワークスペースを再利用し、実行中のセッションを見つけ、分割方向を自動選択。タブ名にはディレクトリ名を使用。
+- **ブックマーク** — よく使うフォルダをサイドバーにピン留めし、エージェントごとに管理。
+- **リネームとゴミ箱** — セッション名の変更を CLI に同期し、ソフト削除したセッションは共有ゴミ箱から復元可能。
+
+### 利用状況を把握・共有する
+
+- **統計と料金** — LiteLLM のリアルタイム料金で、プロジェクト・モデル・ツール別にトークン消費とコストを分析。macOS のメニューバーには各エージェントの Today / 7d / 30d 集計を表示。
+- **柔軟なエクスポート** — 単一または複数セッションをオフラインで読める Markdown、HTML、可逆 JSON として保存。
+- **読み取り専用の安全性** — オリジナルの JSONL は変更・削除しません。
+
+### 対応するセッションソース
+
+Claude Code、Codex、Grok Build、Kimi Code、Pi、Antigravity CLI、opencode に対応しています。Grok Build、Kimi Code、Pi では履歴、ターミナル、エクスポート、分析、再開のワークフローを利用できますが、GUI Chat は意図的に含めていません。
 
 ## スクリーンショット
+
+<details>
+  <summary>ビジュアルツアーを開く</summary>
 
 <table>
   <tr>
@@ -106,6 +123,8 @@ https://github.com/user-attachments/assets/9bcb92a8-e5b8-40e5-b492-af252162309b
   </tr>
 </table>
 
+</details>
+
 ## インストール
 
 [Releases](https://github.com/jerrywu001/cc-sessions-viewer/releases) からプラットフォームに合ったインストーラをダウンロード：
@@ -156,13 +175,15 @@ PR 歓迎。[Conventional Commits](https://www.conventionalcommits.org/)（`feat
 </a>
 
 ## スポンサー支援
-オープンソースプロジェクトの維持には多くの時間とリソースが必要です。あなたのスポンサーシップは以下に直接役立てられます：
+このプロジェクトは限られた個人の時間で維持しています。スポンサー支援は継続的な開発、バグ修正、ドキュメント整備に充てます。
 
 - 🛠️ 継続的な開発とアップデート
 
 - 🐛 迅速なバグ修正と問題解決
 
 - 📚 ドキュメントの改善とサンプルの拡充
+
+カスタム対応や特別な要件は、下記のスポンサー支援窓口からご相談ください。50 米ドルから承りますが、対応可否はその時点の状況によります。
 
 ### 支援方法：
 

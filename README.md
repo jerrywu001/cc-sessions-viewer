@@ -3,6 +3,7 @@
 # Sessions Viewer
 
 [![Version](https://img.shields.io/github/v/release/jerrywu001/cc-sessions-viewer?color=blue&label=version)](https://github.com/jerrywu001/cc-sessions-viewer/releases)
+[![Star on GitHub](https://img.shields.io/github/stars/jerrywu001/cc-sessions-viewer?style=flat&logo=github&label=Star%20on%20GitHub)](https://github.com/jerrywu001/cc-sessions-viewer)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/jerrywu001/cc-sessions-viewer/releases)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![Downloads](https://img.shields.io/github/downloads/jerrywu001/cc-sessions-viewer/total)](https://github.com/jerrywu001/cc-sessions-viewer/releases/latest)
@@ -11,7 +12,7 @@
 
 **English** · [中文](README.zh-CN.md) · [日本語](README.ja.md) · [CHANGELOG](CHANGELOG.md)
 
-<p align="center">A native desktop browser for <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Grok Build</strong>, <strong>Kimi Code</strong>, <strong>Antigravity CLI</strong>, and <strong>opencode</strong>.<br/>Read, search, and manage local session transcripts from all six in one place.</p>
+<p align="center">A native desktop browser for <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Grok Build</strong>, <strong>Kimi Code</strong>, <strong>Pi</strong>, <strong>Antigravity CLI</strong>, and <strong>opencode</strong>.<br/>Read, search, and manage local session transcripts from all seven in one place.</p>
 
 </div>
 
@@ -19,29 +20,45 @@ https://github.com/user-attachments/assets/9bcb92a8-e5b8-40e5-b492-af252162309b
 
 ---
 
-## Key Features
+## What it does
 
-- **Faithful replay** — thinking chains, tool-call pairings, structured diffs, and inline screenshots
-- **Global search** — cross-project instant search (⌘⇧F) jumps to the exact message
-- **In-app chat** — start or resume Claude Code or Codex sessions in a built-in chat with live model, reasoning-effort (incl. Opus **Ultracode**), and permission-mode pickers — no terminal required
-- **Grok Build history + TUI** — browse, search, export, analyze, rename, trash/restore, and resume local Grok sessions; Grok GUI Chat is intentionally not included
-- **Kimi Code history + TUI** — browse, search, export, analyze main and subagent usage, rename, trash/restore, and resume local Kimi sessions; Kimi GUI Chat is intentionally not included
-- **One-click resume** — resume or start a session in an embedded terminal or external app — supports **Terminal.app**, **cmux**, **iTerm2**, **Ghostty**, and **Warp**
-- **Shell terminal tabs** — open pure shell tabs alongside agent sessions for running arbitrary commands in the project directory; tabs persist across restarts
-- **Split panes** — split any project into side-by-side or stacked panes, each with its own tab strip; drag tabs to reorder within a pane or move them between panes, with keyboard shortcuts for every action (see Settings → Shortcuts). Every project remembers its own layout across restarts
-- **cmux deep integration** — auto-reuses existing workspace by cwd, locates running sessions with blue flash, smart split direction, and directory-named tabs
-- **Launch arguments** — per-agent CLI flags (e.g. `--dangerously-skip-permissions`) appended on resume / new session
-- **Jump to prompt** — locate button lists all user prompts; click to scroll and flash the target message
-- **Views history** — per-project, searchable history of every view you've opened, with favorites; jump back to any past read or chat view in one click
-- **Deep stats** — aggregate token spend and cost with live model pricing from LiteLLM; slice by project, model, or tool
-- **Menu bar stats** — macOS tray icon shows at-a-glance Today / 7d / 30d cost and tokens per agent
-- **Live model pricing** — browseable pricing table including Claude, Codex, and Grok / xAI, auto-updated from upstream
-- **Flexible export** — single session or batches to offline-readable Markdown, HTML, or lossless JSON
-- **Bookmarks** — pin any folder to the sidebar for quick access, per agent
-- **Rename & delete** — session renames sync back to the CLI; soft-delete moves to shared trash with restore support
-- **Read-only safety** — original JSONL is never touched, never `rm`
+Sessions Viewer turns local agent transcripts into a searchable workspace. Open a project, inspect exactly what happened, then continue the work from the same place without manually hunting through JSONL files.
+
+### Read and find context
+
+- **Faithful replay** — preserve thinking chains, tool-call pairings, structured diffs, and inline screenshots.
+- **Global search** — search across projects and jump to the exact matching message with `⌘⇧F`.
+- **Jump to prompt** — scan every user prompt in a compact list, then scroll and flash the selected message.
+- **Views history** — revisit recent read and chat views, with per-project search and favorites.
+
+### Continue the work
+
+- **Built-in chat** — start or resume Claude Code and Codex sessions with model, reasoning-effort (including Opus **Ultracode**), and permission-mode controls.
+- **One-click resume** — open a session in an embedded terminal or in **Terminal.app**, **cmux**, **iTerm2**, **Ghostty**, or **Warp**.
+- **Shell tabs** — run regular shell commands beside agent sessions; tabs persist across restarts.
+- **Launch arguments** — configure per-agent CLI flags such as `--dangerously-skip-permissions` for new and resumed sessions.
+
+### Keep projects organized
+
+- **Split panes** — arrange side-by-side or stacked panes, drag tabs between panes, and keep each project's layout across restarts.
+- **cmux integration** — reuse workspaces by working directory, find running sessions, choose smart split directions, and name tabs after directories.
+- **Bookmarks** — pin frequently used folders to the sidebar for quick access.
+- **Rename and trash** — sync session renames back to the CLI and soft-delete sessions with restore support.
+
+### Understand usage and share results
+
+- **Stats and pricing** — inspect token spend and cost by project, model, or tool using live LiteLLM pricing; macOS menu bar stats show Today / 7d / 30d totals per agent.
+- **Flexible export** — export one session or a batch as offline-readable Markdown, HTML, or lossless JSON.
+- **Read-only safety** — source JSONL files are never modified or removed.
+
+### Supported session sources
+
+Claude Code, Codex, Grok Build, Kimi Code, Pi, Antigravity CLI, and opencode. Grok Build, Kimi Code, and Pi provide history, terminal, export, analysis, and resume workflows; their GUI chat is intentionally not included.
 
 ## Screenshots
+
+<details>
+  <summary>Open the visual tour</summary>
 
 <table>
   <tr>
@@ -106,6 +123,8 @@ https://github.com/user-attachments/assets/9bcb92a8-e5b8-40e5-b492-af252162309b
   </tr>
 </table>
 
+</details>
+
 ## Install
 
 Grab the latest installer from [Releases](https://github.com/jerrywu001/cc-sessions-viewer/releases):
@@ -156,13 +175,15 @@ PRs welcome. Please use [Conventional Commits](https://www.conventionalcommits.o
 </a>
 
 ## Sponsorship Support
-Maintaining an open-source project requires significant time and resources. Your sponsorship will directly support:
+This project is maintained in my spare time. Sponsorship helps cover ongoing development, bug fixes, and documentation.
 
 - 🛠️ Continuous development and updates
 
 - 🐛 Swift bug fixes and issue resolution
 
 - 📚 Documentation improvements and expanded examples
+
+For custom work or other special requests, contact me through one of the sponsorship options below. Requests start at US$50 and depend on current availability.
 
 ### Ways to contribute:
 
