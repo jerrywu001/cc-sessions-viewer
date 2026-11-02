@@ -5,7 +5,13 @@ import {
   sessionSearch,
   sessionSort,
   sessionsFilterActive,
+  sessionStarredOnly,
+  sessionSelectMode,
+  selectedSessions,
+  toggleStarredOnly,
+  createSessionFilterLoadQueue,
 } from '../src/sessionsToolbar'
+import { setSessionStarred } from '../src/sessionStars'
 import type { SessionMeta } from '../src/types'
 
 const session = (over: Partial<SessionMeta> & { path: string }): SessionMeta => ({
@@ -135,9 +141,83 @@ describe('sessionsFilterActive', () => {
     expect(sessionsFilterActive.value).toBe(true)
   })
 
+  it('activates full-project loading when starred-only is enabled', () => {
+    sessionStarredOnly.value = true
+    expect(sessionsFilterActive.value).toBe(true)
+  })
+
+  it('clears hidden bulk selections when toggling the star filter', () => {
+    sessionSelectMode.value = true
+    selectedSessions.value = new Set(['a', 'b'])
+    toggleStarredOnly()
+    expect(sessionStarredOnly.value).toBe(true)
+    expect(sessionSelectMode.value).toBe(false)
+    expect(selectedSessions.value.size).toBe(0)
+  })
+
+  it('filters stars independently of sort order and agent scope', () => {
+    const a = session({ path: 'star-a', id: 'toolbar-star-a', modified: 2 })
+    const b = session({ path: 'star-b', id: 'toolbar-star-b', modified: 1 })
+    try {
+      setSessionStarred('claude', b, true)
+      sessionStarredOnly.value = true
+      sessionSort.value = 'oldest'
+      expect(filterSessions([a, b], 'claude')).toEqual([b])
+      expect(filterSessions([a, b], 'codex')).toEqual([])
+    } finally { setSessionStarred('claude', b, false) }
+  })
+
   it('is true for creation-time sorting', () => {
     sessionSort.value = 'createdRecent'
     expect(sessionsFilterActive.value).toBe(true)
+  })
+})
+
+describe('full-project filter loading queue', () => {
+  it('loads once when filtering starts, not on its own busy transitions', () => {
+    const queue = createSessionFilterLoadQueue()
+    expect(queue(false, false, false, 300)).toBe(false)
+    expect(queue(true, false, false, 300)).toBe(true)
+    expect(queue(true, false, true, 300)).toBe(false)
+    expect(queue(true, false, false, 300)).toBe(false)
+  })
+
+  it('waits for the initial page before fetching old starred sessions', () => {
+    const queue = createSessionFilterLoadQueue()
+    expect(queue(true, true, false, 0)).toBe(false)
+    expect(queue(true, true, false, 300)).toBe(false)
+    expect(queue(true, false, false, 300)).toBe(true)
+    expect(queue(true, false, false, 300)).toBe(false)
+  })
+
+  it('waits for in-flight scrolling and then loads the remaining pages', () => {
+    const queue = createSessionFilterLoadQueue()
+    expect(queue(false, false, true, 300)).toBe(false)
+    expect(queue(true, false, true, 300)).toBe(false)
+    expect(queue(true, false, false, 300)).toBe(true)
+  })
+
+  it('cancels the queued load when the filter is cleared', () => {
+    const queue = createSessionFilterLoadQueue()
+    queue(true, true, false, 300)
+    expect(queue(false, true, false, 300)).toBe(false)
+    expect(queue(false, false, false, 300)).toBe(false)
+  })
+
+  it('does not retry a failure forever, but allows a manual refresh', () => {
+    const queue = createSessionFilterLoadQueue()
+    expect(queue(true, false, false, 300)).toBe(true)
+    queue(true, false, true, 300)
+    expect(queue(true, false, false, 300)).toBe(false)
+    expect(queue(true, true, false, 300)).toBe(false)
+    expect(queue(true, false, false, 300)).toBe(true)
+  })
+
+  it('includes new totals rather than dropping older marked sessions on refresh', () => {
+    const queue = createSessionFilterLoadQueue()
+    expect(queue(true, false, false, 300)).toBe(true)
+    expect(queue(true, false, false, 301)).toBe(true)
+    expect(queue(true, false, false, 301)).toBe(false)
   })
 })
 
@@ -145,11 +225,13 @@ describe('resetSessionsToolbar', () => {
   it('restores every field to its default', () => {
     sessionSearch.value = 'q'
     sessionSort.value = 'messages'
+    sessionStarredOnly.value = true
 
     resetSessionsToolbar()
 
     expect(sessionSearch.value).toBe('')
     expect(sessionSort.value).toBe('recent')
+    expect(sessionStarredOnly.value).toBe(false)
     expect(sessionsFilterActive.value).toBe(false)
   })
 })

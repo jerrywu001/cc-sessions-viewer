@@ -8,7 +8,9 @@ import {
   filterSessions,
   sessionSearch,
   sessionSort,
+  sessionStarredOnly,
   sessionsFilterActive,
+  toggleStarredOnly,
   sessionSelectMode,
   selectedSessions,
   toggleSessionSelected,
@@ -41,6 +43,7 @@ import {
   IconGitBranch,
   IconExternalLink,
   IconScopeProject,
+  IconStar,
 } from '../components/icons'
 import CreationSortIcon from '../components/CreationSortIcon.vue'
 import NewMenu from '../components/NewMenu.vue'
@@ -48,6 +51,8 @@ import GitBranchControl from '../components/GitBranchControl.vue'
 import { PaneActionsKey } from '../paneActions'
 import { chatSupported } from '../chatComposerOptions'
 import { agentSupports, sessionCanDelete, sessionCanManageFile, sessionHistoryOnly } from '../agentMeta'
+
+import { isSessionStarred, setSessionStarred } from '../sessionStars'
 
 const pa = inject(PaneActionsKey)!
 
@@ -87,6 +92,20 @@ const emit = defineEmits<{
 }>()
 
 const scrollEl = ref<HTMLElement>()
+const starError = ref('')
+watch([() => props.agent, () => props.project.dirName], () => { starError.value = '' })
+function toggleStar(s: SessionMeta) {
+  starError.value = ''
+  const starred = !isSessionStarred(props.agent, s)
+  try {
+    setSessionStarred(props.agent, s, starred)
+    if (!starred && sessionStarredOnly.value && selectedSessions.value.has(s.path)) {
+      toggleSessionSelected(s.path)
+    }
+  } catch {
+    starError.value = t('list.star.saveFailed')
+  }
+}
 
 // git 探测：hasGit 控制「Git Changes」菜单项，对所有项目（含 worktree）生效；
 // isGitRepo 仅限一级项目，控制「创建 Worktree」入口。
@@ -162,7 +181,7 @@ async function runProjectSearch(query: string) {
       'keyword',
     )
     if (mySeq !== searchReqSeq) return
-    // 后端返回 SearchHit[]；这里只关心 session 元数据，sort/withIdOnly 在 computed 里加。
+    // 后端返回 SearchHit[]；这里只关心元数据，排序和星标过滤在 computed 里加。
     searchHits.value = hits.map((h) => h.session)
   } catch {
     if (mySeq !== searchReqSeq) return
@@ -215,9 +234,9 @@ watch(
   },
 )
 
-// 工具栏（搜索 / 排序 / 仅带 ID）作用后的可见列表 —— 状态来自 sessionsToolbar 模块。
+// 工具栏（搜索 / 排序 / 星标）作用后的可见列表 —— 状态来自 sessionsToolbar 模块。
 // 关键词非空时走后端搜索结果；空时走 props.sessions（分页 / 完整数组）。
-// 两条路径都过 filterSessions，因为 sort + withIdOnly 是纯本地的策略。
+// 两条路径都过 filterSessions，因为排序与星标是纯本地的策略。
 // ============================ 单会话置顶 / 沉底（持久化,镜像项目那套 projPrefs）============================
 // 重要会话置顶、不重要的沉底。key = `${agent}::${path}`（path 全局唯一）。stable sort 保组内 mtime 序。
 // 注意：列表按 mtime 分页加载,这里只在**已加载**的会话内排序 —— 置顶一个很老、还没翻到的会话时,
@@ -252,7 +271,7 @@ function setSessState(s: SessionMeta, state: SessState) {
 const visibleSessions = computed(() => {
   const base =
     sessionSearch.value.trim().length >= SEARCH_MIN_LEN ? searchHits.value : props.sessions
-  const filtered = filterSessions(base)
+  const filtered = filterSessions(base, props.agent)
   // 置顶(0) → 普通(1) → 沉底(2)；Array.sort 稳定,组内保持原有（mtime / 搜索相关性）顺序。
   const rank = (s: SessionMeta) => {
     const st = sessStateOf(s)
@@ -858,6 +877,7 @@ onUnmounted(() => document.removeEventListener('click', onNewMenuDocClick))
       </template>
     </div>
   </div>
+  <div v-if="starError" class="session-star-error" role="alert">{{ starError }}</div>
   <!-- 只在"手上什么都没有"时才用 loading 占位顶掉列表：占位一出现，
        .scroll-area 就被销毁重建，滚动位置随之清零。刷新（点回 List / 手动刷新 /
        全局 refreshAll）时列表里本来就有数据，原地换内容即可，不该闪一下再回到顶部。
@@ -867,9 +887,16 @@ onUnmounted(() => document.removeEventListener('click', onNewMenuDocClick))
     <div class="big"><IconInbox /></div>
     <div>{{ t('list.empty') }}</div>
   </div>
+  <div
+    v-else-if="!visibleSessions.length && (loadingMore || searching)"
+    class="loading"
+    role="status"
+    aria-live="polite"
+  >{{ t('common.loading') }}</div>
   <div v-else-if="!visibleSessions.length" class="empty" @contextmenu.prevent="openContextMenu">
-    <div class="big"><IconSearch /></div>
-    <div>{{ t('list.noMatch') }}</div>
+    <div class="big"><IconStar v-if="sessionStarredOnly" aria-hidden="true" /><IconSearch v-else /></div>
+    <div>{{ sessionStarredOnly && !sessionSearch.trim() ? t('list.star.empty') : t('list.noMatch') }}</div>
+    <button v-if="sessionStarredOnly" type="button" class="btn" @click="toggleStarredOnly">{{ t('list.star.showAll') }}</button>
   </div>
   <div
     v-else
@@ -908,6 +935,17 @@ onUnmounted(() => document.removeEventListener('click', onNewMenuDocClick))
       </span>
       <div class="session-main">
         <div class="session-title">
+          <button
+            type="button"
+            class="icon-btn session-star-btn"
+            :class="{ active: isSessionStarred(agent, s) }"
+            :aria-label="t('list.star.label', { title: s.title })"
+            :aria-pressed="isSessionStarred(agent, s)"
+            v-tooltip="isSessionStarred(agent, s) ? t('list.action.unstar') : t('list.action.star')"
+            @click.stop="toggleStar(s)"
+          >
+            <IconStar aria-hidden="true" />
+          </button>
           <span class="session-title-text"><span
             v-for="(seg, i) in titleSegs(s.title)"
             :key="i"

@@ -35,6 +35,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { resetTrashToolbar, exitSelectMode, selectedTrash } from './trashToolbar'
 import {
   resetSessionsToolbar,
+  createSessionFilterLoadQueue,
   sessionsFilterActive,
   selectedSessions,
   exitSessionSelectMode,
@@ -1827,9 +1828,11 @@ async function loadAllSessions() {
   }
 }
 
-// 工具栏从默认态切到「有筛选」时补齐全量会话；清空筛选后已加载的全量列表保留即可。
-watch(sessionsFilterActive, (active) => {
-  if (active) loadAllSessions()
+// Busy initial/paged loads must not swallow a filter's full-project request.
+// The queue consumes each request once, so failures do not create a retry loop.
+const needsFullSessionLoad = createSessionFilterLoadQueue()
+watch([sessionsFilterActive, loadingList, loadingMore, sessionTotal], ([active, loading, more, total]) => {
+  if (needsFullSessionLoad(active, loading, more, total)) void loadAllSessions()
 })
 
 function syncTuiTabsFromCurrentSessions() {

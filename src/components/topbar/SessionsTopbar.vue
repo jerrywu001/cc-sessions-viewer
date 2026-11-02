@@ -5,6 +5,8 @@ import type { SessionMeta } from '../../types'
 import {
   sessionSearch,
   sessionSort,
+  sessionStarredOnly,
+  toggleStarredOnly,
   type SessionSort,
 } from '../../sessionsToolbar'
 import { useDebouncedSearch } from '../../useDebouncedSearch'
@@ -13,6 +15,7 @@ import {
   IconClose,
   IconChevronDown,
   IconCheck,
+  IconStar,
 } from '../icons'
 
 // `.ct-actions` 原本住在这里（仅 ID / 批量选择 / 批量导出 / 批量删除），现已挪到
@@ -143,5 +146,17 @@ onUnmounted(() => {
         <IconClose />
       </button>
     </div>
+    <button
+      type="button"
+      class="ct-btn session-star-filter"
+      :class="{ active: sessionStarredOnly }"
+      :aria-label="t('list.tb.starredOnly')"
+      :aria-pressed="sessionStarredOnly"
+      v-tooltip="t('list.tb.starredOnly')"
+      @click="toggleStarredOnly"
+    >
+      <IconStar aria-hidden="true" />
+      <span>{{ t('list.tb.starredOnly') }}</span>
+    </button>
   </div>
 </template>

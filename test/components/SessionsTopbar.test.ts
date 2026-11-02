@@ -79,6 +79,18 @@ describe('SessionsTopbar', () => {
     wrapper.unmount()
   })
 
+  it('filters to starred sessions with one accessible toggle', async () => {
+    const wrapper = factory()
+    const toggle = wrapper.find('.session-star-filter')
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.attributes('aria-pressed')).toBe('false')
+    expect(toggle.attributes('aria-label')).toBe('Starred only')
+    await toggle.trigger('click')
+    expect(toggle.attributes('aria-pressed')).toBe('true')
+    await toggle.trigger('click')
+    expect(toggle.attributes('aria-pressed')).toBe('false')
+  })
+
   it('does not render the action bar — those controls live in SessionsView now', () => {
     const wrapper = factory()
     expect(wrapper.find('.ct-actions').exists()).toBe(false)

@@ -5,7 +5,7 @@ description: Check supported session formats, chat and resume capabilities, evid
 
 # Which coding-agent formats are supported?
 
-Sessions Viewer supports the seven layouts below. **Adapter review and synthetic command tests are not CLI end-to-end certification.** This matrix describes the 0.6.0 implementation reviewed on 2026-10-05; it does not promise compatibility with every release.
+Sessions Viewer supports the seven layouts below. **Adapter review and synthetic command tests are not CLI end-to-end certification.** Most rows describe the 0.6.0 implementation reviewed on 2026-10-05; the OpenCode row also includes the v2 storage update linked below. This does not promise compatibility with every release.
 
 ## Capability and evidence matrix {#support-matrix}
 
@@ -19,7 +19,7 @@ All seven have history browsing/search, export and terminal resume. Only Claude 
 | [Kimi Code](/agents/kimi-code) | Main wire primary events; adapter has legacy fallback | No | Synthetic primary events only | Not validated in this docs pass |
 | [Pi](/agents/pi) | Session header and message/tree entries | No | Synthetic text from all stored branches | Not validated in this docs pass |
 | [Antigravity CLI](/agents/antigravity-cli) | Step-based `transcript*.jsonl` | No | Synthetic multiline XML extraction | Not validated in this docs pass |
-| [opencode](/agents/opencode) | SQLite `session`, `message`, `part` | No | Synthetic read-only SQL queries | Not validated in this docs pass |
+| [opencode](/agents/opencode) | Legacy SQLite and v2 `session_v2` / `session_message` / optional `session_part` | No | Synthetic read-only SQL + Rust parser regression | Not validated in this docs pass |
 
 OS installers are provided for macOS, Windows and Linux; the shell examples use macOS/Linux syntax. This is not a per-OS GUI certification. Antigravity's supported format has no usage fields. Older layouts, custom roots, images, tools, branches and provider behavior need the relevant reference page and [troubleshooting](/guide/troubleshooting).
 
@@ -37,7 +37,8 @@ Download a sample, then replace the filename in its agent reference's text-extra
 | Kimi Code | <a href="/examples/kimi-code.jsonl" download>kimi-code.jsonl</a> | `Question`, `Answer`, `Legacy string` |
 | Pi | <a href="/examples/pi.jsonl" download>pi.jsonl</a> | `Question`, `Answer`, `Other branch` (not active-branch-only) |
 | Antigravity CLI | <a href="/examples/antigravity-cli.jsonl" download>antigravity-cli.jsonl</a> | `Question`, `on two lines` (one multiline prompt) |
-| opencode | <a href="/examples/opencode.sql" download>opencode.sql</a> | `user` and `Question` from the text query |
+| opencode (legacy) | <a href="/examples/opencode.sql" download>opencode.sql</a> | `user` and `Question` from the text query |
+| opencode (v2) | <a href="/examples/opencode-v2.sql" download>opencode-v2.sql</a> | Raw rows: `user`, then `assistant`; the parser displays `Question`, then split-part `Answer` |
 
 For example, after downloading `claude-code.jsonl`:
 
@@ -65,6 +66,8 @@ sqlite3 "file:$temp_dir/synthetic.db?mode=ro" \
 
 Expected output is `Question`. The regression suite also verifies that parent-only session listing excludes the sub-agent, cost aggregation includes it, and read queries leave the synthetic database unchanged. It does not validate provider billing or a real opencode migration.
 
+The v2 sample uses an upstream session-table subset, not a complete native database. Load it only into a new temporary database. The [v2 reference](/agents/opencode) documents the query and the read-only limitation for rename, trash and restore.
+
 ## What do the offline parser tests prove? {#offline-parser-tests}
 
 Keep three verification scopes separate:
@@ -87,7 +90,9 @@ npm run docs:test
 npm run docs:test:adapters
 ```
 
-The adapter command uses `cargo test --manifest-path src-tauri/Cargo.toml --lib --locked --offline docs_public_fixture`. It runs only these two tests and fails rather than fetching uncached crates. The existing Rust CI job includes them; the Node documentation job does not require Rust. This is reproducible local evidence, not proof of production deployment or indexing.
+An additional isolated OpenCode v2 parser test reads the public SQL fixture above. It checks nullable titles, Windows-style stored paths, message order, split parts, recorded cost and tokens; it does not run OpenCode or a GUI.
+
+The adapter command uses `cargo test --manifest-path src-tauri/Cargo.toml --lib --locked --offline docs_public_fixture`. It runs these three tests and fails rather than fetching uncached crates. The existing Rust CI job includes them; the Node documentation job does not require Rust. This is reproducible local evidence, not proof of production deployment or indexing.
 
 ## How to report a compatibility change {#report-change}
 

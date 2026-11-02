@@ -93,10 +93,10 @@ function sqlPrograms(text) {
 }
 test('opencode: translated SQL is identical', () => {
   const english = sqlPrograms(markdown('', 'opencode'))
-  assert.equal(english.length, 3)
+  assert.equal(english.length, 4)
   for (const locale of locales.slice(1)) assert.deepEqual(sqlPrograms(markdown(locale, 'opencode')), english)
 })
-test('opencode: SQL reads a synthetic DB, including sub-agent cost, without writes', () => {
+test('opencode: legacy and v2 SQL read synthetic DBs without writes', () => {
   const dir = mkdtempSync(join(tmpdir(), 'sessions-viewer-docs-'))
   const path = join(dir, 'synthetic.db')
   function sqlite(database, sql) {
@@ -109,8 +109,16 @@ test('opencode: SQL reads a synthetic DB, including sub-agent cost, without writ
     sqlite(path, readFileSync(join(sampleDir, 'opencode.sql'), 'utf8'))
     const before = readFileSync(path)
     const readonly = `file:${path}?mode=ro`
+    const v2path = join(dir, 'synthetic-v2.db')
+    sqlite(v2path, readFileSync(join(sampleDir, 'opencode-v2.sql'), 'utf8'))
+    const v2before = readFileSync(v2path)
     for (const locale of locales) {
-      const filters = sqlPrograms(markdown(locale, 'opencode'))
+      const [v2query, ...filters] = sqlPrograms(markdown(locale, 'opencode'))
+      assert.match(v2query, /FROM session_message/)
+      const rows = sqlite(`file:${v2path}?mode=ro`, v2query).trim().split('\n').map((line) => line.split('|'))
+      assert.deepEqual(rows.map((row) => row.slice(0, 3)), [['msg_z', 'user', '1'], ['msg_a', 'assistant', '2']])
+      assert.equal(JSON.parse(rows[0][3]).text, 'Question')
+      assert.equal(JSON.parse(rows[1][3]).model.id, 'synthetic-model')
       assert.equal(sqlite(readonly, filters[0]), 'ses_...|/synthetic/project|Synthetic session|1.0|1970-01-01 00:00:00\n')
       assert.equal(sqlite(readonly, filters[1]), expected.opencode)
       assert.equal(sqlite(readonly, filters[2]), '/synthetic/project|3.0|2\n')
@@ -120,5 +128,6 @@ test('opencode: SQL reads a synthetic DB, including sub-agent cost, without writ
       assert.equal(sqlite(readonly, exampleQuery[1]), 'Question\n')
     }
     assert.deepEqual(readFileSync(path), before)
+    assert.deepEqual(readFileSync(v2path), v2before)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })

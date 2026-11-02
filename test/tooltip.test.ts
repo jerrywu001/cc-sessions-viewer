@@ -49,6 +49,15 @@ describe('vTooltip.mounted', () => {
     expect(el.getAttribute('aria-label')).toBe('Save file')
   })
 
+  it('preserves an explicit accessible name for a toggle button', () => {
+    const el = makeEl()
+    el.setAttribute('aria-label', 'Star session: Task')
+    dir.mounted(el, binding('Remove star'), noVnode, noVnode)
+    expect(el.getAttribute('aria-label')).toBe('Star session: Task')
+    el.dispatchEvent(new FocusEvent('focusin'))
+    expect(tip()!.textContent).toBe('Remove star')
+  })
+
   it('binds nothing for an empty value', () => {
     const el = makeEl()
     dir.mounted(el, binding(''), noVnode, noVnode)
@@ -114,6 +123,26 @@ describe('vTooltip.updated', () => {
 
     el.dispatchEvent(new FocusEvent('focusin'))
     expect(tip()!.textContent).toBe('New')
+  })
+
+  it('updates or clears only its own label, not an explicit component label', () => {
+    const el = makeEl()
+    el.setAttribute('aria-label', 'Star session: Task')
+    dir.mounted(el, binding('Star'), noVnode, noVnode)
+    dir.updated(el, binding('Unstar'), noVnode, noVnode)
+    expect(el.getAttribute('aria-label')).toBe('Star session: Task')
+    dir.updated(el, binding(''), noVnode, noVnode)
+    expect(el.getAttribute('aria-label')).toBe('Star session: Task')
+  })
+
+  it('relinquishes label ownership when a component supplies a new name', () => {
+    const el = makeEl()
+    dir.mounted(el, binding('Old tooltip'), noVnode, noVnode)
+    el.setAttribute('aria-label', 'Explicit accessible name')
+    dir.updated(el, binding('New tooltip'), noVnode, noVnode)
+    expect(el.getAttribute('aria-label')).toBe('Explicit accessible name')
+    dir.updated(el, binding(''), noVnode, noVnode)
+    expect(el.getAttribute('aria-label')).toBe('Explicit accessible name')
   })
 
   it('unbinds when the value becomes empty', () => {

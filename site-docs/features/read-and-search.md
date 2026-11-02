@@ -32,6 +32,12 @@ Some agents store pasted screenshots as base64 and others as separate media file
 
 Anything the agent emitted as Markdown is rendered as Markdown.
 
+## Star sessions for ongoing tasks {#starred-sessions}
+
+Hover over a session in the project list to reveal the star beside its title, then click to mark or unmark it. Keyboard focus within the row also reveals the button. Select **Starred only** in the list toolbar to hide unmarked sessions; select it again to restore the list. This is separate from pinning: stars do not change the normal sort order.
+
+The filter covers the current agent and project, loading the remaining session metadata rather than checking only the first page. Search and sort can still be combined with it; search limits still apply. Star marks are shared across split panes and saved locally by Sessions Viewer, not written into agent transcripts or databases. Stable session IDs retain marks after rename or a storage-path change. Marks do not sync to another installation and are not included in transcript exports. Switching projects resets the filter, not the marks.
+
 ## Finding a message {#finding-a-message}
 
 ![Global search in Sessions Viewer listing matches from several projects](/screenshots/search.png)
@@ -52,7 +58,7 @@ Long sessions are mostly agent output. The prompt list strips all of it away and
 
 ### Views history
 
-Sessions you have read recently stay in a history list, per project, with search and favourites. Reopening yesterday's session does not mean finding it again. Session previews refresh when their source file changes; Pi previews use the latest user message.
+Sessions you have read recently stay in a history list, per project, with title search. Reopening yesterday's session does not mean finding it again. Session previews refresh when their source file changes; Pi previews use the latest user message.
 
 ### Large Pi sessions
 

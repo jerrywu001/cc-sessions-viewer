@@ -15,7 +15,7 @@ XDG Base Directory 仕様に従うため、`$XDG_DATA_HOME` が設定されて�
 
 この対応形式ではセッションは個別の JSONL ではなくデータベースの行です。再帰的なテキスト検索に頼らず SQLite で照会してください。古いファイル形式はこのアダプターの対象外です。
 
-## 主要な 4 テーブル
+## 旧 SQLite 形式の 4 テーブル
 
 ```sql
 project  -- id (sha1)、worktree（プロジェクトディレクトリ）、vcs、time_*
@@ -30,6 +30,29 @@ part     -- id（"prt_…"）、message_id、session_id、time_created、data（
 
 `message.data` は JSON エンベロープで、`role`、`modelID`、`providerID`、`tokens{input,output,reasoning,cache{read,write}}`、`cost`、`time{created,completed}` を持ちます。`part.data` が本文で、`type` は `text`、`reasoning`、`tool`、`file`、`step-start`、`step-finish` などです。
 
+## v2 セッション保存形式
+
+CLI のバージョン文字列ではなくテーブル構造で形式を判別します。追加対応する v2 は `project`、`session_v2`、`session_message` を使い、新しい移行では `session_part` も作成します。単なるテーブル名の変更ではありません。
+
+- メッセージの種類は `session_message.type`、順序は `seq` です。`data` に `role` や `id` がない場合もあります。
+- ユーザー本文は `data.text` / `data.files`、回答は `data.content`、モデル名は `data.model.id` です。
+- 回答に `session_part` があれば `ordinal` 順で読み、なければ内包された `content` を維持します。
+- ツールは `name` / `id` / `state.content` を使います。画像はインラインデータと同じ DB 内の `media:` blob 参照に対応し、欠落画像はファイル項目として残します。
+- 新旧が共存する場合、同じセッション ID は v2 を優先し、旧形式だけの記録も表示します。`XDG_DATA_HOME` の解決規則は変わりません。
+
+新形式のメッセージ行を確認する SQL：
+
+```sql
+SELECT id, type, seq, data
+FROM session_message
+WHERE session_id = 'ses_...'
+ORDER BY seq;
+```
+
+閲覧、ユーザープロンプト検索、解析済みエクスポートと統計に対応します。v2 はイベントソーシングを使うため、投影テーブルの直接変更は再生時に上書きされる可能性があります。**今回の更新では v2 のリネーム・ゴミ箱移動・復元には対応せず、明示的にエラーを返します**。これらは OpenCode 側で操作してください。旧形式の既存書き込み機能は維持します。解析済みエクスポートは全イベント・設定・バックグラウンドジョブのネイティブバックアップではありません。
+
+根拠は固定コミットの[テーブル定義](https://github.com/anomalyco/opencode/blob/dbcd5ce9485f3338375d1fe9d92864c91e263030/packages/core/src/session/sql.ts)と[メッセージ定義](https://github.com/anomalyco/opencode/blob/dbcd5ce9485f3338375d1fe9d92864c91e263030/packages/schema/src/session-message.ts)、合成データベースの回帰テストです。#96 報告者の DB や Windows 実機では検証していません。
+
 ## サブエージェントのセッション
 
 `parent_id` が非 NULL のセッションは、別のセッションから派生したサブエージェントの実行です。通常の履歴一覧では非表示ですが、統計には記録済みの作業を含めます。使用量とコストを持つ場合がある一方、ローカルモデル、料金設定、欠落フィールドで記録コストがゼロになることもあります。別途課金された API 呼び出しの証拠ではありません。
@@ -42,7 +65,7 @@ part     -- id（"prt_…"）、message_id、session_id、time_created、data（
 sqlite3 "file:${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db?mode=ro" ".tables"
 ```
 
-## opencode の記録を SQL で読む
+## 旧形式の opencode 記録を SQL で読む
 
 プロジェクトとコスト付きで、新しい順にセッションを一覧：
 
@@ -98,7 +121,7 @@ opencode をインストールし、プロジェクトのディレクトリで `
 
 <!--@include: ../../.vitepress/snippets/reference-ja.md-->
 
-SQL 例は上記スキーマを対象にし、旧ファイル形式は扱いません。読み取り専用の照会と、明示的なリネーム・ゴミ箱移動・復元による書き込みは別です。[確認手順](/ja/guide/troubleshooting)を参照してください。
+`session` / `message` / `part` の SQL 例は旧 SQLite 形式向けです。新形式は v2 節を参照してください。旧ファイル形式は対象外です。旧 SQLite 形式の明示的なリネーム・ゴミ箱移動・復元は DB に書き込みますが、v2 ではこれらをブロックします。[確認手順](/ja/guide/troubleshooting)を参照してください。
 
 ## アプリで開く
 

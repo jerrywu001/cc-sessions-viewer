@@ -42,7 +42,10 @@ import {
   sessionSearch,
   sessionSelectMode,
   sessionSort,
+  sessionStarredOnly,
+  toggleStarredOnly,
 } from '../../src/sessionsToolbar'
+import { isSessionStarred, setSessionStarred } from '../../src/sessionStars'
 import type { ProjectInfo, SearchHit, SessionMeta } from '../../src/types'
 import { PaneActionsKey, type PaneActions } from '../../src/paneActions'
 
@@ -217,6 +220,138 @@ describe('SessionsView', () => {
     expect(exported).toHaveLength(1)
     expect(exported![0][1]).toBe('md')
     expect(wrapper.emitted('open')).toBeUndefined()
+  })
+
+  describe('session stars', () => {
+    const a = session({ id: 'view-star-a', path: '/star/a.jsonl', title: 'Marked task', modified: 2 })
+    const b = session({ id: 'view-star-b', path: '/star/b.jsonl', title: 'Other task', modified: 1 })
+    afterEach(() => {
+      vi.restoreAllMocks()
+      for (const agent of ['claude', 'codex', 'opencode'] as const) {
+        setSessionStarred(agent, a, false)
+        setSessionStarred(agent, b, false)
+      }
+    })
+
+    it('stars without opening the card, shares across panes and survives remounts', async () => {
+      const first = factory([a, b])
+      const second = factory([a, b])
+      const button = first.find('.session-star-btn')
+      expect(button.attributes('aria-label')).toBe('Star session: Marked task')
+      expect(button.attributes('aria-pressed')).toBe('false')
+      await button.trigger('click')
+      expect(first.emitted('open')).toBeUndefined()
+      expect(button.attributes('aria-pressed')).toBe('true')
+      expect(second.find('.session-star-btn').attributes('aria-pressed')).toBe('true')
+      first.unmount()
+      const remounted = factory([a, b])
+      expect(remounted.find('.session-star-btn').attributes('aria-pressed')).toBe('true')
+      await second.find('.session-star-btn').trigger('click')
+      expect(remounted.find('.session-star-btn').attributes('aria-pressed')).toBe('false')
+    })
+
+    it('reveals controls only for the hovered row and clears them on leave', async () => {
+      const wrapper = factory([a, b])
+      const cards = wrapper.findAll('.session-card')
+      expect(cards.every(card => !card.classes().includes('is-hover'))).toBe(true)
+      await cards[0].trigger('mouseover')
+      expect(cards[0].classes()).toContain('is-hover')
+      expect(cards[1].classes()).not.toContain('is-hover')
+      await cards[1].trigger('mouseover')
+      expect(cards[0].classes()).not.toContain('is-hover')
+      expect(cards[1].classes()).toContain('is-hover')
+      await wrapper.find('.scroll-area').trigger('mouseleave')
+      expect(cards.every(card => !card.classes().includes('is-hover'))).toBe(true)
+    })
+
+    it('shows only marked sessions and restores all with one toggle', async () => {
+      setSessionStarred('claude', a, true)
+      const wrapper = factory([a, b])
+      toggleStarredOnly()
+      await flushPromises()
+      expect(wrapper.findAll('.session-card')).toHaveLength(1)
+      expect(wrapper.find('.session-card').attributes('data-path')).toBe(a.path)
+      toggleStarredOnly()
+      await flushPromises()
+      expect(wrapper.findAll('.session-card')).toHaveLength(2)
+      expect(isSessionStarred('claude', a)).toBe(true)
+    })
+
+    it('intersects backend search hits with stars instead of searching only titles', async () => {
+      setSessionStarred('claude', b, true)
+      searchMock.mockResolvedValueOnce(toHits([a, b]))
+      const wrapper = factory([a, b])
+      sessionSearch.value = 'body-only-match'
+      sessionStarredOnly.value = true
+      await waitForSearchSettle()
+      expect(wrapper.findAll('.session-card')).toHaveLength(1)
+      expect(wrapper.find('.session-card').attributes('data-path')).toBe(b.path)
+    })
+
+    it('shows loading, then includes an old marked record outside the initial page', async () => {
+      setSessionStarred('claude', b, true)
+      const wrapper = factory([a], { sessionTotal: 300, loadingMore: true })
+      sessionStarredOnly.value = true
+      await flushPromises()
+      expect(wrapper.find('[role="status"]').exists()).toBe(true)
+      expect(wrapper.text()).not.toContain('No starred sessions')
+      await wrapper.setProps({ sessions: [a, b], loadingMore: false })
+      expect(wrapper.findAll('.session-card')).toHaveLength(1)
+      expect(wrapper.find('.session-card').attributes('data-path')).toBe(b.path)
+    })
+
+    it('shows a specific empty state and lets the user return to all sessions', async () => {
+      const wrapper = factory([a, b])
+      sessionStarredOnly.value = true
+      await flushPromises()
+      expect(wrapper.text()).toContain('No starred sessions in this project')
+      await wrapper.find('.empty button').trigger('click')
+      expect(sessionStarredOnly.value).toBe(false)
+      expect(wrapper.findAll('.session-card')).toHaveLength(2)
+    })
+
+    it('removes an unstarred row immediately without leaving a hidden batch selection', async () => {
+      setSessionStarred('claude', a, true)
+      const wrapper = factory([a, b])
+      sessionStarredOnly.value = true
+      sessionSelectMode.value = true
+      selectedSessions.value = new Set([a.path])
+      await flushPromises()
+      await wrapper.find('.session-star-btn').trigger('click')
+      expect(selectedSessions.value.has(a.path)).toBe(false)
+      expect(wrapper.findAll('.session-card')).toHaveLength(0)
+      expect(wrapper.text()).toContain('No starred sessions')
+      expect(wrapper.emitted('open')).toBeUndefined()
+    })
+
+    it('keeps marks when metadata or physical paths change', async () => {
+      setSessionStarred('claude', a, true)
+      const wrapper = factory([a])
+      await wrapper.setProps({ sessions: [{ ...a, title: 'Renamed task', path: '/archive/a.jsonl.zst' }] })
+      expect(wrapper.find('.session-star-btn').attributes('aria-pressed')).toBe('true')
+      expect(wrapper.find('.session-star-btn').attributes('aria-label')).toBe('Star session: Renamed task')
+    })
+
+    it('supports stars on read-only database history and isolates agents', async () => {
+      const target = { ...a, path: 'opencode://view-star-a' }
+      const wrapper = factory([target], { agent: 'opencode' })
+      await wrapper.find('.session-star-btn').trigger('click')
+      expect(isSessionStarred('opencode', target)).toBe(true)
+      await wrapper.setProps({ agent: 'codex' })
+      expect(wrapper.find('.session-star-btn').attributes('aria-pressed')).toBe('false')
+    })
+
+    it('keeps the old state and announces storage failures instead of claiming success', async () => {
+      const wrapper = factory([a])
+      const save = vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => { throw Error('quota') })
+      await wrapper.find('.session-star-btn').trigger('click')
+      expect(wrapper.find('.session-star-btn').attributes('aria-pressed')).toBe('false')
+      expect(wrapper.find('[role="alert"]').text()).toContain('Could not save the star')
+      save.mockRestore()
+      await wrapper.find('.session-star-btn').trigger('click')
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+      expect(wrapper.find('.session-star-btn').attributes('aria-pressed')).toBe('true')
+    })
   })
 
   describe('toolbar filters', () => {

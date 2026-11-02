@@ -1,7 +1,7 @@
 // opencode 会话源：~/.local/share/opencode/opencode.db —— 单个 SQLite 库，
 // **不是** per-session JSONL 文件。这是与其它 agent 的本质差异。
 //
-// 库结构（opencode 1.17.x）：
+// 旧库结构（opencode 1.17.x）：
 //   project  : id(sha1) / worktree(项目目录) / vcs / time_*
 //   session  : id("ses_…"，含下划线) / project_id / parent_id(子 agent 会话) / slug /
 //              title / directory / model(JSON) / tokens_* 5 列 / cost(美元) /
@@ -23,8 +23,11 @@
 //   - session.time_archived 映射到现有「显示归档」开关（include_codex_archived）。
 //   - opencode 可挂任意 provider / 模型（deepseek、openrouter…），价目表推不出成本，
 //     所以统计（read_turns）逐条 assistant message 取库里记录的真实 modelID + cost。
-//   - 上游正在做消息存储迁移（空的 session_message 新表）——查询保持防御性，
-//     解析失败跳过该行而不是拖垮整个列表。
+//   - 新布局：session_v2 → session_message(type/seq/data)，user.text/files 和
+//     assistant.content 内嵌；较新布局用 session_part(ordinal/data) 覆盖助手内嵌正文。
+//     storage 模块用连接级 TEMP 视图兼容新旧记录，同 ID 优先 v2，不改用户数据库。
+//   - v2 是事件溯源存储；仅支持读取/搜索/导出/统计，拒绝直接改投影的写操作。
+//     解析失败跳过该行而不是伪造用户消息或拖垮整个列表。
 
 use std::collections::HashMap;
 use std::fs;
@@ -45,6 +48,9 @@ use crate::util::{
     format_iso8601_utc, home, mtime_millis, now_millis, parse_unified_diff, text_block,
     validate_rename_name,
 };
+
+mod storage;
+use storage::{ensure_legacy_write, normalize_envelope, normalize_part, prepare_read_views};
 
 pub struct OpencodeSource;
 
@@ -95,10 +101,11 @@ fn open_db() -> Result<Connection, String> {
     )
     .map_err(|e| format!("Cannot open opencode database: {e}"))?;
     let _ = conn.busy_timeout(Duration::from_millis(2000));
+    prepare_read_views(&conn)?;
     Ok(conn)
 }
 
-/// 读写连接 —— **仅 rename_session 使用**。不带 CREATE：库不存在直接报错。
+/// 读写连接 —— 仅显式 v1 rename/trash/restore 使用。不带 CREATE。
 fn open_db_rw() -> Result<Connection, String> {
     let p = db_path();
     if !p.is_file() {
@@ -110,6 +117,7 @@ fn open_db_rw() -> Result<Connection, String> {
     )
     .map_err(|e| format!("Cannot open opencode database: {e}"))?;
     let _ = conn.busy_timeout(Duration::from_millis(2000));
+    prepare_read_views(&conn)?;
     Ok(conn)
 }
 
@@ -118,9 +126,10 @@ fn open_db_rw() -> Result<Connection, String> {
 /// 会话行 → SessionMeta 用的统一列清单（表别名固定为 s）。
 /// message_count 只数用户消息（与 agy 的 USER_INPUT 口径一致）；
 /// size 用 part 数据长度近似（没有文件可 stat）。
-const SESSION_COLS: &str = "s.id, s.slug, s.title, s.directory, s.time_created, s.time_updated, s.time_archived, \
-     (SELECT COUNT(*) FROM message m WHERE m.session_id = s.id AND json_extract(m.data, '$.role') = 'user'), \
-     (SELECT COALESCE(SUM(LENGTH(p2.data)), 0) FROM part p2 WHERE p2.session_id = s.id)";
+const SESSION_COLS: &str =
+    "s.id, s.slug, s.title, s.directory, s.time_created, s.time_updated, s.time_archived, \
+     (SELECT COUNT(*) FROM sv_message m WHERE m.session_id = s.id AND m.role = 'user'), \
+     (SELECT COALESCE(SUM(LENGTH(p2.data)), 0) FROM sv_part p2 WHERE p2.session_id = s.id)";
 
 fn row_to_meta(r: &rusqlite::Row<'_>) -> rusqlite::Result<SessionMeta> {
     let id: String = r.get(0)?;
@@ -363,6 +372,7 @@ fn delete_session_rows(conn: &Connection, sid: &str) -> Result<(), String> {
 }
 
 fn soft_delete_impl(conn: &mut Connection, sid: &str, dest: &Path) -> Result<(), String> {
+    storage::ensure_legacy_tree_write(conn, sid)?;
     let tx = conn.transaction().map_err(db_err)?;
     dump_session(&tx, sid, dest)?;
     if let Err(e) = delete_session_rows(&tx, sid) {
@@ -444,6 +454,14 @@ fn restore_impl(conn: &mut Connection, dump: &Path) -> Result<(), String> {
         return Err("Corrupted opencode trash dump: missing session rows".to_string());
     }
 
+    // Refuse legacy dumps whose IDs have since migrated to v2, before any writes.
+    for v in &sessions {
+        let sid = row_object(v)?
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Corrupted opencode trash dump: missing session ID".to_string())?;
+        ensure_legacy_write(conn, sid)?;
+    }
     let tx = conn.transaction().map_err(db_err)?;
     for v in projects {
         insert_json_row(&tx, "project", row_object(&v)?, true)?;
@@ -624,28 +642,8 @@ fn truncate_tool_output(text: &str) -> String {
 fn load_parts(conn: &Connection, sid: &str) -> Result<HashMap<String, Vec<Value>>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT message_id, data FROM part WHERE session_id = ?1 ORDER BY time_created, id",
+            "SELECT message_id, data, storage FROM sv_part WHERE session_id = ?1 ORDER BY sort_order, sort_id",
         )
-        .map_err(db_err)?;
-    let rows = stmt
-        .query_map(params![sid], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })
-        .map_err(db_err)?;
-    let mut map: HashMap<String, Vec<Value>> = HashMap::new();
-    for row in rows {
-        let (mid, data) = row.map_err(db_err)?;
-        if let Ok(v) = serde_json::from_str::<Value>(&data) {
-            map.entry(mid).or_default().push(v);
-        }
-    }
-    Ok(map)
-}
-
-/// (message_id, 信封 JSON, time_created 列) 按时间序。
-fn load_messages(conn: &Connection, sid: &str) -> Result<Vec<(String, Value, i64)>, String> {
-    let mut stmt = conn
-        .prepare("SELECT id, data, time_created FROM message WHERE session_id = ?1 ORDER BY time_created, id")
         .map_err(db_err)?;
     let rows = stmt
         .query_map(params![sid], |r| {
@@ -656,11 +654,41 @@ fn load_messages(conn: &Connection, sid: &str) -> Result<Vec<(String, Value, i64
             ))
         })
         .map_err(db_err)?;
+    let mut map: HashMap<String, Vec<Value>> = HashMap::new();
+    for row in rows {
+        let (mid, data, storage) = row.map_err(db_err)?;
+        if let Ok(v) = serde_json::from_str::<Value>(&data) {
+            map.entry(mid)
+                .or_default()
+                .extend(normalize_part(conn, v, storage));
+        }
+    }
+    Ok(map)
+}
+
+/// (message_id, 信封 JSON, time_created 列) 按时间序。
+fn load_messages(conn: &Connection, sid: &str) -> Result<Vec<(String, Value, i64)>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, data, time_created, role, storage FROM sv_message WHERE session_id = ?1 ORDER BY sort_order, id")
+        .map_err(db_err)?;
+    let rows = stmt
+        .query_map(params![sid], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                r.get::<_, i64>(4)?,
+            ))
+        })
+        .map_err(db_err)?;
     let mut out = Vec::new();
     for row in rows {
-        let (mid, data, t) = row.map_err(db_err)?;
+        let (mid, data, t, role, storage) = row.map_err(db_err)?;
         let env = serde_json::from_str::<Value>(&data).unwrap_or(Value::Null);
-        out.push((mid, env, t));
+        if let Some(env) = normalize_envelope(env, &role, storage) {
+            out.push((mid, env, t));
+        }
     }
     Ok(out)
 }
@@ -909,7 +937,9 @@ fn read(conn: &Connection, sid: &str) -> Result<Vec<Msg>, String> {
         }
         // opencode 会把 skill/context 文件整段注入到 user message 里（只有一个长
         // markdown text part，以 `# ` 开头）——标记为 context，前端按系统块渲染。
-        let meta_kind = if role == "user" && is_injected_context(&blocks) {
+        let meta_kind = if role == "system" {
+            Some("system".into())
+        } else if role == "user" && is_injected_context(&blocks) {
             Some("context".into())
         } else {
             None
@@ -930,12 +960,11 @@ fn read(conn: &Connection, sid: &str) -> Result<Vec<Msg>, String> {
 fn last_user_text_sql(conn: &Connection, sid: &str) -> Option<String> {
     let mut stmt = conn
         .prepare(
-            "SELECT p.data FROM part p \
-         JOIN message m ON p.message_id = m.id \
-         WHERE m.session_id = ?1 \
-         AND json_extract(m.data, '$.role') = 'user' \
-         AND json_extract(p.data, '$.type') = 'text' \
-         ORDER BY m.time_created DESC \
+            "SELECT p.data FROM sv_part p \
+         JOIN sv_message m ON p.message_id = m.id AND p.session_id = m.session_id \
+         WHERE m.session_id = ?1 AND m.role = 'user' \
+         AND json_extract(CASE WHEN json_valid(p.data) THEN p.data ELSE '{}' END, '$.type') = 'text' \
+         ORDER BY m.sort_order DESC, m.id DESC, p.sort_order DESC \
          LIMIT 10",
         )
         .ok()?;
@@ -1061,7 +1090,7 @@ fn list_projects_impl(
         .prepare(
             "SELECT p.id, p.worktree, COUNT(s.id), COALESCE(MAX(s.time_updated), p.time_updated) \
              FROM project p \
-             LEFT JOIN session s \
+             LEFT JOIN sv_session s \
                ON s.project_id = p.id \
               AND s.parent_id IS NULL \
               AND (?1 OR s.time_archived IS NULL) \
@@ -1109,7 +1138,7 @@ fn list_sessions_impl(
 ) -> Result<SessionPage, String> {
     let total: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM session s \
+            "SELECT COUNT(*) FROM sv_session s \
              WHERE s.project_id = ?1 AND s.parent_id IS NULL AND (?2 OR s.time_archived IS NULL)",
             params![project_key, include_archived],
             |r| r.get(0),
@@ -1119,7 +1148,7 @@ fn list_sessions_impl(
     let offset_i = i64::try_from(offset).unwrap_or(i64::MAX);
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT {SESSION_COLS} FROM session s \
+            "SELECT {SESSION_COLS} FROM sv_session s \
              WHERE s.project_id = ?1 AND s.parent_id IS NULL AND (?2 OR s.time_archived IS NULL) \
              ORDER BY s.time_updated DESC LIMIT ?3 OFFSET ?4"
         ))
@@ -1145,7 +1174,7 @@ fn list_sessions_impl(
 fn stats_sessions_impl(conn: &Connection, project_key: &str) -> Result<Vec<SessionMeta>, String> {
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT {SESSION_COLS} FROM session s WHERE s.project_id = ?1 ORDER BY s.time_updated DESC"
+            "SELECT {SESSION_COLS} FROM sv_session s WHERE s.project_id = ?1 ORDER BY s.time_updated DESC"
         ))
         .map_err(db_err)?;
     let rows = stmt
@@ -1162,7 +1191,7 @@ fn stats_sessions_impl(conn: &Connection, project_key: &str) -> Result<Vec<Sessi
 fn companion_sessions_impl(conn: &Connection, sid: &str) -> Result<Vec<SessionMeta>, String> {
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT {SESSION_COLS} FROM session s WHERE s.parent_id = ?1 ORDER BY s.time_created"
+            "SELECT {SESSION_COLS} FROM sv_session s WHERE s.parent_id = ?1 ORDER BY s.time_created"
         ))
         .map_err(db_err)?;
     let rows = stmt.query_map(params![sid], row_to_meta).map_err(db_err)?;
@@ -1171,6 +1200,74 @@ fn companion_sessions_impl(conn: &Connection, sid: &str) -> Result<Vec<SessionMe
         out.push(row.map_err(db_err)?);
     }
     Ok(out)
+}
+
+fn rename_impl(conn: &Connection, sid: &str, name: &str) -> Result<(), String> {
+    ensure_legacy_write(conn, sid)?;
+    let n = conn
+        .execute(
+            "UPDATE session SET title = ?1, time_updated = ?2 WHERE id = ?3",
+            params![name, now_millis() as i64, sid],
+        )
+        .map_err(db_err)?;
+    if n == 0 {
+        return Err("Session not found in opencode database".into());
+    }
+    Ok(())
+}
+
+fn contains_text_impl(conn: &Connection, sid: &str, q_lower: &str) -> bool {
+    // Broad prefilter only; shared search subsequently matches user text blocks.
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sv_part WHERE session_id = ?1 AND instr(lower(data), ?2) > 0)",
+        params![sid, q_lower],
+        |r| r.get::<_, bool>(0),
+    )
+    .unwrap_or(false)
+}
+
+fn usage_summary_impl(conn: &Connection, sid: &str) -> Result<UsageSummary, String> {
+    let u = conn.query_row(
+        "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write \
+         FROM sv_session WHERE id = ?1", params![sid], |r| {
+            Ok(UsageSummary {
+                input_tokens: r.get::<_, i64>(0)?.max(0) as u64,
+                output_tokens: r.get::<_, i64>(1)?.max(0) as u64,
+                reasoning_output_tokens: r.get::<_, i64>(2)?.max(0) as u64,
+                cache_read_input_tokens: r.get::<_, i64>(3)?.max(0) as u64,
+                cache_creation_input_tokens: r.get::<_, i64>(4)?.max(0) as u64,
+                cache_creation_1h_input_tokens: 0,
+                total: 0,
+            })
+        },
+    ).map_err(db_err)?;
+    Ok(u.finalize())
+}
+
+fn context_usage_impl(conn: &Connection, sid: &str) -> Result<UsageSummary, String> {
+    // Compaction request tokens are costs, not the size of the resulting context.
+    let mut stmt = conn
+        .prepare(
+            "SELECT data FROM sv_message WHERE session_id = ?1 AND kind = 'assistant' \
+         ORDER BY sort_order DESC, id DESC LIMIT 50",
+        )
+        .map_err(db_err)?;
+    let rows = stmt
+        .query_map(params![sid], |r| r.get::<_, String>(0))
+        .map_err(db_err)?;
+    for row in rows {
+        let Ok(data) = row else { continue };
+        let Ok(env) = serde_json::from_str::<Value>(&data) else {
+            continue;
+        };
+        if let Some(t) = env.get("tokens") {
+            let u = usage_from_tokens(t);
+            if u.total > 0 {
+                return Ok(u);
+            }
+        }
+    }
+    Ok(UsageSummary::default())
 }
 
 // ── SessionSource 实现 ──
@@ -1220,18 +1317,8 @@ impl SessionSource for OpencodeSource {
     fn rename_session(&self, path: &Path, name: &str) -> Result<(), String> {
         let trimmed = validate_rename_name(name)?;
         let sid = session_id_of(&path.to_string_lossy())?.to_string();
-        // 唯一直接写 opencode 库的操作：单列 UPDATE，WAL + busy_timeout 下与 TUI 并发安全。
         let conn = open_db_rw()?;
-        let n = conn
-            .execute(
-                "UPDATE session SET title = ?1, time_updated = ?2 WHERE id = ?3",
-                params![trimmed, now_millis() as i64, sid],
-            )
-            .map_err(db_err)?;
-        if n == 0 {
-            return Err("Session not found in opencode database".to_string());
-        }
-        Ok(())
+        rename_impl(&conn, &sid, trimmed)
     }
 
     fn validate_session_path(&self, path: &Path) -> Result<(), String> {
@@ -1278,55 +1365,13 @@ impl SessionSource for OpencodeSource {
     fn usage_summary(&self, path: &str) -> Result<UsageSummary, String> {
         let sid = session_id_of(path)?;
         let conn = open_db()?;
-        let u = conn
-            .query_row(
-                "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write \
-                 FROM session WHERE id = ?1",
-                params![sid],
-                |r| {
-                    Ok(UsageSummary {
-                        input_tokens: r.get::<_, i64>(0)?.max(0) as u64,
-                        output_tokens: r.get::<_, i64>(1)?.max(0) as u64,
-                        reasoning_output_tokens: r.get::<_, i64>(2)?.max(0) as u64,
-                        cache_read_input_tokens: r.get::<_, i64>(3)?.max(0) as u64,
-                        cache_creation_input_tokens: r.get::<_, i64>(4)?.max(0) as u64,
-                        cache_creation_1h_input_tokens: 0,
-                        total: 0,
-                    })
-                },
-            )
-            .map_err(db_err)?;
-        Ok(u.finalize())
+        usage_summary_impl(&conn, sid)
     }
 
     fn context_usage(&self, path: &str) -> Result<UsageSummary, String> {
         let sid = session_id_of(path)?;
         let conn = open_db()?;
-        // 末尾第一条带非零 usage 的 assistant message ≈ 当前上下文规模
-        let mut stmt = conn
-            .prepare(
-                "SELECT data FROM message WHERE session_id = ?1 ORDER BY time_created DESC, id DESC LIMIT 50",
-            )
-            .map_err(db_err)?;
-        let rows = stmt
-            .query_map(params![sid], |r| r.get::<_, String>(0))
-            .map_err(db_err)?;
-        for row in rows {
-            let Ok(data) = row else { continue };
-            let Ok(env) = serde_json::from_str::<Value>(&data) else {
-                continue;
-            };
-            if env.get("role").and_then(Value::as_str) != Some("assistant") {
-                continue;
-            }
-            if let Some(t) = env.get("tokens") {
-                let u = usage_from_tokens(t);
-                if u.total > 0 {
-                    return Ok(u);
-                }
-            }
-        }
-        Ok(UsageSummary::default())
+        context_usage_impl(&conn, sid)
     }
 
     fn last_prompt(&self, path: &str) -> Result<Option<String>, String> {
@@ -1374,14 +1419,7 @@ impl SessionSource for OpencodeSource {
         let Ok(conn) = open_db() else {
             return false;
         };
-        // instr(lower(x), q)：ASCII 大小写折叠与 file_contains_ci 对齐；CJK 无大小写直接匹配。
-        // 只是预筛 —— 命中后仍由 find_text_hit 在「用户消息 text 块」里做精确匹配。
-        conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM part WHERE session_id = ?1 AND instr(lower(data), ?2) > 0)",
-            params![sid, q_lower],
-            |r| r.get::<_, bool>(0),
-        )
-        .unwrap_or(false)
+        contains_text_impl(&conn, sid, q_lower)
     }
 
     fn watch_target(&self, _path: &str) -> Option<PathBuf> {
@@ -1394,6 +1432,10 @@ impl SessionSource for OpencodeSource {
 }
 
 // ── 测试 ──
+
+#[cfg(test)]
+#[path = "opencode/v2_tests.rs"]
+mod v2_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1426,6 +1468,7 @@ mod tests {
              );",
         )
         .unwrap();
+        prepare_read_views(&conn).unwrap();
         conn
     }
 

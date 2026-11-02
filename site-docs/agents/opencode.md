@@ -15,7 +15,7 @@ It follows the XDG base directory spec, so `$XDG_DATA_HOME/opencode/opencode.db`
 
 In this supported layout, sessions are database rows rather than individual JSONL files. Query SQLite to inspect them instead of assuming a recursive text search can extract a conversation. Older file-based layouts are outside this adapter's scope.
 
-## The four tables that matter
+## The four tables in the legacy SQLite layout
 
 ```sql
 project  -- id (sha1), worktree (the project directory), vcs, time_*
@@ -30,6 +30,29 @@ The database has more tables (`workspace`, `todo`, `permission`, `event`, `crede
 
 `message.data` is a JSON envelope: `role`, `modelID`, `providerID`, `tokens{input,output,reasoning,cache{read,write}}`, `cost`, `time{created,completed}`. `part.data` is the body, with a `type` of `text`, `reasoning`, `tool`, `file`, `step-start`, `step-finish` and others.
 
+## The v2 session storage layout
+
+The adapter detects database tables rather than relying on a CLI version string. The added v2 compatibility reads `project`, `session_v2` and `session_message`; newer migrations also create `session_part`. This is not just a table rename:
+
+- The `session_message.type` column identifies message kinds and `seq` orders them; `data` need not contain `role` or `id`.
+- User messages store `data.text` and `data.files`; assistant messages store `data.content` and `data.model.id`.
+- Assistant `session_part` rows override inline content in `ordinal` order. Messages without parts retain inline content, including records written before that migration.
+- Tools use `name`, `id` and `state.content`. Images can use inline bytes or `media:` references to blobs in the same database. Missing images remain file entries instead of aborting the transcript.
+- Both layouts can coexist: v2 wins for duplicate session IDs while legacy-only sessions remain visible. Custom `XDG_DATA_HOME` resolution is unchanged.
+
+Inspect new message rows with:
+
+```sql
+SELECT id, type, seq, data
+FROM session_message
+WHERE session_id = 'ses_...'
+ORDER BY seq;
+```
+
+Reading, saved-user-prompt search, parsed-message export and statistics share the normalized adapter. V2 is event-sourced: editing projection tables directly can be undone by replay. **V2 rename, trash and restore are not supported in Sessions Viewer in this update** and return an explicit error; manage these actions in OpenCode. Existing legacy write operations remain available. Parsed exports are not native backups of every event, setting or background job.
+
+This compatibility is based on OpenCode's pinned [table definitions](https://github.com/anomalyco/opencode/blob/dbcd5ce9485f3338375d1fe9d92864c91e263030/packages/core/src/session/sql.ts) and [message schema](https://github.com/anomalyco/opencode/blob/dbcd5ce9485f3338375d1fe9d92864c91e263030/packages/schema/src/session-message.ts), with synthetic database regression tests. It has not been verified against the database from issue #96 or certified on a Windows machine.
+
 ## Sub-agent sessions
 
 A session with a non-null `parent_id` is a sub-agent run spawned by another session. The viewer hides these from the ordinary history list but includes their recorded work in statistics. They can contain usage and costs; a local model, provider pricing or missing fields can yield zero recorded cost. A sub-agent run is not proof of a separately billed API call.
@@ -42,7 +65,7 @@ opencode's TUI may be writing while you inspect the database. Use a read-only co
 sqlite3 "file:${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db?mode=ro" ".tables"
 ```
 
-## Reading an opencode transcript with SQL
+## Reading a legacy opencode transcript with SQL
 
 List sessions with their project and cost, newest first:
 
@@ -98,7 +121,7 @@ Path, recorded-cost and viewer-operation wording reviewed on 2026-10-06 against 
 
 <!--@include: ../.vitepress/snippets/reference-en.md-->
 
-SQL examples target the database schema described above; they do not cover older file-based layouts. Read-only queries are distinct from explicit rename/trash/restore actions that write to the database. See [missing-session troubleshooting](/guide/troubleshooting).
+The `session` / `message` / `part` SQL examples target the legacy SQLite layout; see the v2 section for its query. Older file-based layouts remain out of scope. Explicit legacy rename/trash/restore actions write to the database; their v2 equivalents are currently blocked. See [missing-session troubleshooting](/guide/troubleshooting).
 
 ## Or open it in an app
 

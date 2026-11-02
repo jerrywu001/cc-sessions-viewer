@@ -9,6 +9,8 @@ type Placement = 'top' | 'bottom' | 'right' | 'auto'
 interface BindData {
   text: string
   placement: Placement
+  /** Only labels created by this directive may be replaced or removed. */
+  autoLabel: string | null
   enter: () => void
   leave: () => void
   focusin: () => void
@@ -124,6 +126,7 @@ function bind(el: HTMLElement, text: string, placement: Placement) {
   const data: BindData = {
     text,
     placement,
+    autoLabel: el.hasAttribute('aria-label') ? null : text,
     enter() {
       if (!data.text) return
       activeEl = el
@@ -145,6 +148,7 @@ function bind(el: HTMLElement, text: string, placement: Placement) {
       if (activeEl === el) hide()
     },
   }
+  if (data.autoLabel !== null) el.setAttribute('aria-label', data.autoLabel)
   el.addEventListener('mouseenter', data.enter)
   el.addEventListener('mouseleave', data.leave)
   el.addEventListener('focusin', data.focusin)
@@ -172,7 +176,6 @@ export const vTooltip: Directive<HTMLElement, string | undefined | null> = {
     const text = typeof binding.value === 'string' ? binding.value : ''
     if (!text) return
     bind(el, text, readPlacement(binding.arg))
-    el.setAttribute('aria-label', text)
   },
   updated(el, binding) {
     const next = typeof binding.value === 'string' ? binding.value : ''
@@ -183,14 +186,20 @@ export const vTooltip: Directive<HTMLElement, string | undefined | null> = {
       if (next) {
         prev.text = next
         prev.placement = placement
-        el.setAttribute('aria-label', next)
+        if (prev.autoLabel !== null && el.getAttribute('aria-label') === prev.autoLabel) {
+          el.setAttribute('aria-label', next)
+          prev.autoLabel = next
+        } else {
+          prev.autoLabel = null
+        }
       } else {
+        if (prev.autoLabel !== null && el.getAttribute('aria-label') === prev.autoLabel) {
+          el.removeAttribute('aria-label')
+        }
         unbind(el)
-        el.removeAttribute('aria-label')
       }
     } else if (next) {
       bind(el, next, placement)
-      el.setAttribute('aria-label', next)
     }
   },
   unmounted(el) {

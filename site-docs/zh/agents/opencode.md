@@ -15,7 +15,7 @@ description: 查找 opencode 受支持的 SQLite 历史和 XDG 路径，用 SQL 
 
 在此处支持的布局中，会话是数据库行，不是逐会话 JSONL 文件。应查询 SQLite，不要把递归文本搜索当成对话提取方法。旧的文件存储布局不在此适配器范围内。
 
-## 关键的四张表
+## 旧版 SQLite 布局的四张表
 
 ```sql
 project  -- id (sha1)、worktree（项目目录）、vcs、time_*
@@ -30,6 +30,29 @@ part     -- id（"prt_…"）、message_id、session_id、time_created、data（
 
 `message.data` 是 JSON 信封：`role`、`modelID`、`providerID`、`tokens{input,output,reasoning,cache{read,write}}`、`cost`、`time{created,completed}`。`part.data` 是正文，`type` 可能是 `text`、`reasoning`、`tool`、`file`、`step-start`、`step-finish` 等等。
 
+## v2 会话存储布局
+
+适配器按数据库表结构识别布局，不按 CLI 版本字符串判断。新增兼容的 v2 布局使用 `project`、`session_v2`、`session_message`；较新的迁移还会创建 `session_part`。它不是把旧表换个名字：
+
+- `session_message.type` 列保存消息种类，`seq` 决定消息顺序；`data` 不必包含 `role` 或 `id`。
+- 用户正文是 `data.text` 和 `data.files`；助手正文是 `data.content`，模型为 `data.model.id`。
+- 有 `session_part` 记录时，按 `ordinal` 读取助手正文；没有时仍读内嵌 `content`，避免丢掉迁移前记录。
+- 工具调用使用 `name`、`id` 和 `state.content`；图片支持内嵌数据和本库中的 `media:` blob 引用。丢失的图片保留文件条目，不会因此中断整段对话。
+- 新旧布局可以共存；相同会话 ID 优先读 v2，旧版独有会话仍保留。自定义 `XDG_DATA_HOME` 规则不变。
+
+查看新消息行可用：
+
+```sql
+SELECT id, type, seq, data
+FROM session_message
+WHERE session_id = 'ses_...'
+ORDER BY seq;
+```
+
+读取、用户提问搜索、解析后导出及统计均走统一适配。v2 使用事件溯源，直接改投影表可能被后续回放覆盖；**本次不支持在 Sessions Viewer 中重命名、回收或还原 v2 会话**，这些操作会明确报错，应交给 OpenCode 处理。旧版数据库的已有写操作保留。解析后导出不是包含所有事件、设置及后台任务的原生备份。
+
+依据为 [OpenCode 固定提交的表定义](https://github.com/anomalyco/opencode/blob/dbcd5ce9485f3338375d1fe9d92864c91e263030/packages/core/src/session/sql.ts)及[消息定义](https://github.com/anomalyco/opencode/blob/dbcd5ce9485f3338375d1fe9d92864c91e263030/packages/schema/src/session-message.ts)，并用合成数据库回归。未使用 #96 报告者的实际数据库验证，也不代表 Windows 真机认证。
+
 ## 子 agent 会话
 
 `parent_id` 非空的会话是别的会话派生出来的子 agent 运行。应用在普通历史列表中隐藏它们，但统计包括它们已记录的工作。子会话可能包含用量与成本；本地模型、服务商计价或缺失字段都可能产生零记录成本，不能据此断定它是单独计费的 API 调用。
@@ -42,7 +65,7 @@ part     -- id（"prt_…"）、message_id、session_id、time_created、data（
 sqlite3 "file:${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db?mode=ro" ".tables"
 ```
 
-## 用 SQL 读 opencode 记录
+## 用 SQL 读旧版 opencode 记录
 
 按时间倒序列出会话，带项目和花费：
 
@@ -98,7 +121,7 @@ opencode 可使用不同服务商或本地模型，仅按模型名查价目表�
 
 <!--@include: ../../.vitepress/snippets/reference-zh.md-->
 
-SQL 示例针对上述数据库结构，不覆盖旧的文件存储布局。只读查询不同于用户明确执行的重命名、回收、还原等数据库写入。见[找不到会话的排障指南](/zh/guide/troubleshooting)。
+本页 `session` / `message` / `part` SQL 示例仅针对旧版 SQLite 布局；v2 的查询见上节。旧文件存储布局不在范围内。旧版的显式重命名、回收、还原会写数据库，v2 的这些写操作暂不支持。见[找不到会话的排障指南](/zh/guide/troubleshooting)。
 
 ## 或者用应用打开
 

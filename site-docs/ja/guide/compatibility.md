@@ -5,7 +5,7 @@ description: 7つの記録形式と再開・内蔵チャットの対応、実装
 
 # 対応する記録形式は何ですか
 
-下表の形式に対応します。**実装の照合と合成コマンドのテストは、CLI のエンドツーエンド認証ではありません。** 2026-10-05 に確認した 0.6.0 の実装であり、すべてのリリースへの保証ではありません。
+下表の形式に対応します。**実装の照合と合成コマンドのテストは、CLI のエンドツーエンド認証ではありません。** opencode 行には今回の v2 保存形式への対応を追加しています。他の行は 2026-10-05 に確認した 0.6.0 の実装です。すべてのリリースへの保証ではありません。
 
 ## 能力と検証表 {#support-matrix}
 
@@ -19,7 +19,7 @@ description: 7つの記録形式と再開・内蔵チャットの対応、実装
 | [Kimi Code](/ja/agents/kimi-code) | 主 wire イベント、実装には旧形式の代替処理もある | 非対応 | 主イベントの合成例のみ | 未検証 |
 | [Pi](/ja/agents/pi) | ヘッダーとメッセージ／ツリー | 非対応 | 保存された全分岐の合成テキスト | 未検証 |
 | [Antigravity CLI](/ja/agents/antigravity-cli) | `transcript*.jsonl` の step | 非対応 | 合成の複数行 XML | 未検証 |
-| [opencode](/ja/agents/opencode) | SQLite `session`、`message`、`part` | 非対応 | 合成 DB の読み取り専用 SQL | 未検証 |
+| [opencode](/ja/agents/opencode) | 旧 SQLite と v2 `session_v2` / `session_message` / 任意の `session_part` | 非対応 | 合成 DB の読み取り専用 SQL ＋ Rust 解析回帰 | 未検証 |
 
 macOS、Windows、Linux のインストーラを提供しますが、シェル例は macOS/Linux 構文で、各 OS の GUI 認証ではありません。対応する Antigravity には使用量フィールドがありません。旧形式、別保存先、画像、ツール、分岐、プロバイダの挙動は各リファレンスと[確認手順](/ja/guide/troubleshooting)を参照してください。
 
@@ -37,7 +37,8 @@ macOS、Windows、Linux のインストーラを提供しますが、シェル�
 | Kimi Code | <a href="/examples/kimi-code.jsonl" download>kimi-code.jsonl</a> | `Question`、`Answer`、`Legacy string` |
 | Pi | <a href="/examples/pi.jsonl" download>pi.jsonl</a> | `Question`、`Answer`、`Other branch`。現在の分岐のみではない |
 | Antigravity CLI | <a href="/examples/antigravity-cli.jsonl" download>antigravity-cli.jsonl</a> | `Question`、`on two lines`。1 つの複数行入力 |
-| opencode | <a href="/examples/opencode.sql" download>opencode.sql</a> | 照会から `user` と `Question` |
+| opencode（旧形式） | <a href="/examples/opencode.sql" download>opencode.sql</a> | 照会から `user` と `Question` |
+| opencode（v2） | <a href="/examples/opencode-v2.sql" download>opencode-v2.sql</a> | 行は `user`、`assistant` 順。解析結果は `Question`、分割パートの `Answer` |
 
 `claude-code.jsonl` を取得した例：
 
@@ -65,6 +66,8 @@ sqlite3 "file:$temp_dir/synthetic.db?mode=ro" \
 
 出力は `Question` です。テストでは親一覧が子を除外し、コスト合計に子を含め、読み取り後に DB が不変であることも確認します。実際の請求や opencode 移行の検証ではありません。
 
+v2 サンプルは上流のセッション関連テーブルの一部で、完全なネイティブ DB ではありません。新しい一時 DB のみに読み込んでください。[v2 リファレンス](/ja/agents/opencode)に照会とリネーム・ゴミ箱移動・復元の制限を記載しています。
+
 ## オフライン解析テストが示す範囲 {#offline-parser-tests}
 
 3 つの検証範囲を区別します。
@@ -87,7 +90,9 @@ npm run docs:test
 npm run docs:test:adapters
 ```
 
-実際のコマンドは `cargo test --manifest-path src-tauri/Cargo.toml --lib --locked --offline docs_public_fixture`。この 2 テストのみ実行し、crate のキャッシュがなければ取得せず失敗します。既存の Rust CI に含まれ、Node 文書 CI は Rust に依存しません。ローカルの再現可能な根拠であり、公開やインデックスの証明ではありません。
+追加した OpenCode v2 の隔離解析テストは、上記の公開 SQL 例を使い、NULL のタイトル、Windows 形式のパス、メッセージ順、分割パート、コストと token を確認します。OpenCode や GUI は実行しません。
+
+実際のコマンドは `cargo test --manifest-path src-tauri/Cargo.toml --lib --locked --offline docs_public_fixture`。この 3 テストを実行し、crate のキャッシュがなければ取得せず失敗します。既存の Rust CI に含まれ、Node 文書 CI は Rust に依存しません。ローカルの再現可能な根拠であり、公開やインデックスの証明ではありません。
 
 ## 形式の変更を報告するには {#report-change}
 

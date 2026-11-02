@@ -5,7 +5,7 @@ description: 核查七种会话格式、恢复及内置对话能力，区分源�
 
 # 支持哪些 coding agent 格式
 
-Sessions Viewer 支持下表布局。**源码核对和合成命令测试，不等于真实 CLI 端到端认证。** 此表描述 2026-10-05 核对的 0.6.0 实现，不承诺每个 CLI 版本都兼容。
+Sessions Viewer 支持下表布局。**源码核对和合成命令测试，不等于真实 CLI 端到端认证。** 除 opencode 行已补充本次 v2 存储适配外，此表描述 2026-10-05 核对的 0.6.0 实现；不承诺每个 CLI 版本都兼容。
 
 ## 能力与验证矩阵 {#support-matrix}
 
@@ -19,7 +19,7 @@ Sessions Viewer 支持下表布局。**源码核对和合成命令测试，不�
 | [Kimi Code](/zh/agents/kimi-code) | 主 wire 事件；适配器另有旧格式回退 | 不支持 | 仅合成主事件 | 未验证 |
 | [Pi](/zh/agents/pi) | 会话头及消息／树条目 | 不支持 | 合成全部存储分支的文本 | 未验证 |
 | [Antigravity CLI](/zh/agents/antigravity-cli) | `transcript*.jsonl` step 记录 | 不支持 | 合成多行 XML 提取 | 未验证 |
-| [opencode](/zh/agents/opencode) | SQLite `session`、`message`、`part` | 不支持 | 合成只读 SQL 查询 | 未验证 |
+| [opencode](/zh/agents/opencode) | 旧版 SQLite 及 v2 `session_v2` / `session_message` / 可选 `session_part` | 不支持 | 合成只读 SQL + Rust 解析回归 | 未验证 |
 
 提供 macOS、Windows、Linux 安装包；Shell 示例使用 macOS/Linux 语法，不代表逐系统 GUI 认证。支持的 Antigravity 格式没有用量字段。旧布局、自定义目录、图片、工具、分支和服务商行为需结合对应参考页及[排障指南](/zh/guide/troubleshooting)判断。
 
@@ -37,7 +37,8 @@ Sessions Viewer 支持下表布局。**源码核对和合成命令测试，不�
 | Kimi Code | <a href="/examples/kimi-code.jsonl" download>kimi-code.jsonl</a> | `Question`、`Answer`、`Legacy string` |
 | Pi | <a href="/examples/pi.jsonl" download>pi.jsonl</a> | `Question`、`Answer`、`Other branch`，不限当前分支 |
 | Antigravity CLI | <a href="/examples/antigravity-cli.jsonl" download>antigravity-cli.jsonl</a> | `Question`、`on two lines`，是一条多行提问 |
-| opencode | <a href="/examples/opencode.sql" download>opencode.sql</a> | 文本查询返回 `user` 与 `Question` |
+| opencode（旧版） | <a href="/examples/opencode.sql" download>opencode.sql</a> | 文本查询返回 `user` 与 `Question` |
+| opencode（v2） | <a href="/examples/opencode-v2.sql" download>opencode-v2.sql</a> | 原始行按 `user`、`assistant` 排序；解析器显示 `Question`、分表中的 `Answer` |
 
 例如下载 `claude-code.jsonl` 后：
 
@@ -65,6 +66,8 @@ sqlite3 "file:$temp_dir/synthetic.db?mode=ro" \
 
 预期输出 `Question`。回归还检查父会话列表不包含子 agent、成本聚合计入子 agent、只读查询后样本数据库未变化；不验证服务商账单或真实 opencode 迁移。
 
+v2 样例保留上游会话相关表的子集，并非完整原生数据库，也只能载入新建临时库。[v2 参考页](/zh/agents/opencode)说明查询方法，以及重命名、回收和还原暂不支持的边界。
+
 ## 离线解析测试证明了什么 {#offline-parser-tests}
 
 区分三个验证范围：
@@ -87,7 +90,9 @@ npm run docs:test
 npm run docs:test:adapters
 ```
 
-适配器命令为 `cargo test --manifest-path src-tauri/Cargo.toml --lib --locked --offline docs_public_fixture`，只运行这两个测试；缺少 crate 缓存时直接失败，不联网下载。已有 Rust CI 包含它们，Node 文档任务不依赖 Rust。这是可复现的本地证据，不证明生产发布或收录。
+另新增一项隔离的 OpenCode v2 解析测试，读取上方公开 SQL 样本，检查 NULL 标题、Windows 格式路径、消息顺序、分表正文、记录成本与 token；不执行 OpenCode 或 GUI。
+
+适配器命令为 `cargo test --manifest-path src-tauri/Cargo.toml --lib --locked --offline docs_public_fixture`，运行这三项测试；缺少 crate 缓存时直接失败，不联网下载。已有 Rust CI 包含它们，Node 文档任务不依赖 Rust。这是可复现的本地证据，不证明生产发布或收录。
 
 ## 格式变化怎么反馈 {#report-change}
 

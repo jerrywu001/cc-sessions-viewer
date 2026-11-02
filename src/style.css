@@ -1027,6 +1027,48 @@ button {
   color: var(--text);
 }
 
+/* Star controls reuse the desktop toolbar's compact hit targets and neutral tokens. */
+.session-star-filter {
+  width: auto;
+  height: 28px;
+  gap: 6px;
+  padding: 0 8px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.session-star-filter svg {
+  width: 14px;
+  height: 14px;
+}
+.session-card .session-star-btn {
+  display: none;
+  /* Title actions must not inherit the 28px height of full-size row actions. */
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  margin-right: 6px;
+}
+/* Hidden stars must not reserve title space. Reveal only on row hover/focus. */
+.session-card.is-hover .session-star-btn,
+.session-card:focus-within .session-star-btn {
+  display: inline-flex;
+}
+.session-star-filter.active svg path,
+.session-star-btn.active svg path {
+  fill: currentColor;
+}
+.session-star-filter:focus-visible,
+.session-star-btn:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+.session-star-error {
+  padding: 8px 16px;
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: 12px;
+}
+
 /* ---------- List: batch-select ---------- */
 /* selectMode 下整张卡片可点即勾选；选中行用 hover 底色 + 实边框区分。
    会话列表 / 回收站共用这套类（`.list-selectable` / `.list-selected` / `.list-check`）。 */
@@ -1991,6 +2033,8 @@ body.is-project-reordering * {
   min-width: 0;
 }
 .session-title {
+  height: 20px;
+  line-height: 20px;
   font-size: 13.5px;
   font-weight: 500;
   color: var(--text);
