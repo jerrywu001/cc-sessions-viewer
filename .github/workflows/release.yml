@@ -157,6 +157,10 @@ jobs:
           # Extract, remove the conflicting lib, repack
           "$APPIMAGE" --appimage-extract
           rm -f squashfs-root/usr/lib/libwayland-client.so*
+          # Extraction can leave 0700 directories; the AppDir must be usable by
+          # users other than the packager. Keep data files non-executable.
+          chmod -R a+rX squashfs-root
+          chmod a+rx squashfs-root/AppRun
           # Download appimagetool if not present
           curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool
